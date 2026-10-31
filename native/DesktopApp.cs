@@ -58,6 +58,7 @@ internal sealed class DesktopWindow : Form
     private readonly ToolStripButton stop=new ToolStripButton("Detener lectura");
     private readonly System.Windows.Forms.Timer poll=new System.Windows.Forms.Timer {Interval=30000};
     private System.Windows.Forms.Timer showTimer;
+    private System.Windows.Forms.Timer updateCloseTimer;
     private EventWaitHandle showRequest;
     private Form authForm;
     private WebView2 authView;
@@ -71,6 +72,7 @@ internal sealed class DesktopWindow : Form
     private Task importTask;
     private readonly RewardBridge rewards;
     private ForegroundAlertMonitor foregroundAlerts;
+    private DesktopEntryFocus entryFocus;
     private bool authNavigating;
     private string state="disconnected",detail="Conecta Steam para actualizar tu cuenta.";
 
@@ -89,15 +91,32 @@ internal sealed class DesktopWindow : Form
         if(!selfTest)foregroundAlerts=new ForegroundAlertMonitor(this,root,message=>{
             if(!view.IsDisposed&&view.CoreWebView2!=null&&DesktopProtocol.IsLocal(view.CoreWebView2.Source))view.CoreWebView2.PostWebMessageAsJson(DesktopProtocol.Json.Serialize(message));
         });
+        if(!selfTest)entryFocus=new DesktopEntryFocus(this,root,()=>!exiting&&view.CoreWebView2!=null&&DesktopProtocol.IsLocal(view.CoreWebView2.Source),message=>{if(!view.IsDisposed&&view.CoreWebView2!=null&&DesktopProtocol.IsLocal(view.CoreWebView2.Source))view.CoreWebView2.PostWebMessageAsJson(DesktopProtocol.Json.Serialize(message));});
         if(!selfTest){showRequest=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\WardogsDesktopAppOpen");showTimer=new System.Windows.Forms.Timer {Interval=400};showTimer.Tick+=(s,e)=>{if(showRequest.WaitOne(0)){Show();WindowState=FormWindowState.Normal;Activate();}};showTimer.Start();}
+        if(!selfTest){updateCloseTimer=new System.Windows.Forms.Timer{Interval=200};updateCloseTimer.Tick+=(s,e)=>{if(!exiting&&AppShutdown.Requested(root,Path.Combine(root,"data"),DateTime.UtcNow))Close();};updateCloseTimer.Start();}
         if(!selfTest)Shown+=async(s,e)=>{try{await InitializeView();}catch(Exception error){SetStatus("error",error.Message);}};
         FormClosing+=async(s,e)=>{
             if(closeAllowed)return;e.Cancel=true;if(exiting)return;exiting=true;
+            await Task.Yield(); // Return the initial cancelled FormClosing before any final Close/Dispose.
+            reading=false;poll.Stop();pendingId=null;vipPart=null;seedPart=null;view.Enabled=false;
+            if(updateCloseTimer!=null){updateCloseTimer.Stop();updateCloseTimer.Dispose();updateCloseTimer=null;}
+            if(showTimer!=null)showTimer.Stop();
             if(foregroundAlerts!=null){foregroundAlerts.Dispose();foregroundAlerts=null;}
-            await rewards.CancelAsync();
-            try{await DesktopProtocol.PostLocal(http,"/api/team-clicker/stop",new {});}catch{}
-            try{await DesktopProtocol.PostLocal(http,"/api/seeding/stop",new {});}catch{}
-            await StopReading();if(authForm!=null)authForm.Dispose();closeAllowed=true;Close();
+            if(entryFocus!=null){entryFocus.Dispose();entryFocus=null;}
+            string rewardCommand=rewards.BeginClose();
+            // Dispose the old client now: an old import/reward continuation may
+            // never post to a new service after this host has closed.
+            try{http.CancelPendingRequests();}catch{}http.Dispose();
+            var closeHttp=new HttpClient(new HttpClientHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(7),MaxResponseContentBufferSize=524288};
+            string version=null;try{version=DesktopProtocol.Text(DesktopProtocol.Object(DesktopProtocol.Json.DeserializeObject(File.ReadAllText(Path.Combine(root,"package.json")))),"version");}catch{}
+            try{await DesktopClose.RunAsync(async cancellation=>{
+                var service=DesktopClose.StopOwnServiceAsync(closeHttp,root,version,readerId,rewardCommand,cancellation);
+                var browser=rewards.AbortForCloseAsync();
+                await Task.WhenAll(service,browser,importTask??Task.FromResult(0));
+            },()=>{closeHttp.CancelPendingRequests();closeHttp.Dispose();},()=>{
+                try{if(authForm!=null)authForm.Dispose();}finally{closeAllowed=true;try{Close();}finally{Dispose();}}
+            });}
+            finally{closeHttp.Dispose();}
         };
     }
     public async Task InitializeView()
@@ -106,12 +125,19 @@ internal sealed class DesktopWindow : Form
         environment=await CoreWebView2Environment.CreateAsync(null,profile);
         await view.EnsureCoreWebView2Async(environment);
         Configure(view.CoreWebView2);
-        view.CoreWebView2.NavigationStarting+=(s,e)=>{if(!DesktopProtocol.IsLocal(e.Uri))e.Cancel=true;};
+        // WinForms WebView2 forwards its controller's accelerator keys through
+        // KeyDown. Queue work because its browser is blocked during this event.
+        if(!selfTest)view.KeyDown+=(s,e)=>{if(e.KeyCode==Keys.F8)QueueEntryStop();};
+        view.CoreWebView2.NavigationStarting+=(s,e)=>{if(entryFocus!=null)entryFocus.Cancel(null);if(!DesktopProtocol.IsLocal(e.Uri))e.Cancel=true;};
         view.CoreWebView2.NewWindowRequested+=(s,e)=>{e.Handled=true;};
         view.CoreWebView2.WebMessageReceived+=async(s,e)=>{
             if(!DesktopProtocol.IsLocal(e.Source)||!DesktopProtocol.IsLocal(view.CoreWebView2.Source)||e.WebMessageAsJson.Length>2048)return;
             var msg=DesktopProtocol.Object(DesktopProtocol.Json.DeserializeObject(e.WebMessageAsJson));var kind=DesktopProtocol.Text(msg,"kind");
-            if(kind=="host_ready"){handshakes++;Publish();if(foregroundAlerts!=null)foregroundAlerts.Ready();}
+            if(kind=="host_ready"){handshakes++;Publish();if(foregroundAlerts!=null)foregroundAlerts.Ready();if(entryFocus!=null)entryFocus.Ready();}
+            else if(kind=="host_entry_focus_arm"&&!selfTest&&entryFocus!=null){object raw;int server=msg.TryGetValue("server",out raw)&&raw is int?(int)raw:0;entryFocus.Arm(DesktopProtocol.Text(msg,"id"),server,DesktopProtocol.Text(msg,"joinId"));}
+            else if(kind=="host_entry_focus_bind"&&!selfTest&&entryFocus!=null)await entryFocus.Bind(DesktopProtocol.Text(msg,"id"),DesktopProtocol.Text(msg,"sessionId"));
+            else if(kind=="host_entry_focus_stop"&&!selfTest&&entryFocus!=null)await entryFocus.StopFromKey(DesktopProtocol.Text(msg,"id"));
+            else if(kind=="host_entry_focus_cancel"&&!selfTest&&entryFocus!=null)entryFocus.Cancel(DesktopProtocol.Text(msg,"id"));
             else if(kind=="host_focus_ready"&&!selfTest&&foregroundAlerts!=null)foregroundAlerts.Ready();
             else if(kind=="host_focus_preferences"&&!selfTest&&foregroundAlerts!=null){object enabled;if(msg!=null&&msg.TryGetValue("soundEnabled",out enabled)&&enabled is bool)foregroundAlerts.SetSound((bool)enabled);}
             else if(kind=="host_focus_preview"&&!selfTest&&foregroundAlerts!=null)foregroundAlerts.Preview();
@@ -128,6 +154,7 @@ internal sealed class DesktopWindow : Form
     }
     private void SetStatus(string next,string message)
     {
+        if(exiting||IsDisposed)return;
         state=next;detail=message.Length>240?message.Substring(0,240):message;status.Text=detail;stop.Enabled=reading;Publish();
     }
     private void Publish()
@@ -242,6 +269,16 @@ internal sealed class DesktopWindow : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if(disposing){if(foregroundAlerts!=null)foregroundAlerts.Dispose();if(showTimer!=null)showTimer.Dispose();if(showRequest!=null)showRequest.Dispose();poll.Dispose();http.Dispose();if(authForm!=null)authForm.Dispose();view.Dispose();}base.Dispose(disposing);
+        if(disposing){if(entryFocus!=null)entryFocus.Dispose();if(foregroundAlerts!=null)foregroundAlerts.Dispose();if(showTimer!=null)showTimer.Dispose();if(showRequest!=null)showRequest.Dispose();poll.Dispose();http.Dispose();if(authForm!=null)authForm.Dispose();view.Dispose();}base.Dispose(disposing);
+    }
+    protected override bool ProcessCmdKey(ref Message message,Keys keyData)
+    {
+        if((keyData&Keys.KeyCode)==Keys.F8)QueueEntryStop();
+        return base.ProcessCmdKey(ref message,keyData);
+    }
+    private void QueueEntryStop()
+    {
+        var owned=entryFocus;if(owned==null||IsDisposed||!IsHandleCreated)return;
+        BeginInvoke(new Action(async delegate{if(!exiting&&entryFocus==owned)await owned.StopFromKey();}));
     }
 }

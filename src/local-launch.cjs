@@ -10,14 +10,16 @@ const STEAM_URI='steam://run/1867240';
 function connectionTarget(servers,number,expectedJoinId){
  if(!Number.isInteger(number)||number<1||number>5)throw Error('Elige un servidor del 1 al 5.');
  const server=servers.find(s=>s.number===number);
- if(!server?.trusted||!UUID.test(server.joinId||'')||!/(?:^|[\s\]])wardogsspain\.com(?=$|[\s|])/i.test(server.name||''))throw Error('Hace falta una lectura reciente del servidor y su ID de entrada.');
+ // Callers pass the app's official public catalogue, never HTTP-supplied rows.
+ // A mode/title rename does not change the authoritative number/UUID pair.
+ if(server?.trusted!==true||!UUID.test(server.joinId||''))throw Error('Hace falta una lectura reciente del servidor y su ID de entrada.');
  if(expectedJoinId!==server.joinId)throw Error('El ID del servidor ha cambiado. Actualiza la lectura antes de abrir el juego.');
  return {server:number,joinId:server.joinId,sourceAt:server.sourceAt,status:'prepared_not_connected'};
 }
 
 function createLocalLauncher({root,platform=process.platform,run=promisify(execFile),spawnProcess=spawn,exists=fs.existsSync}={}){
  const controller=path.join(root,'bin','WardogsMovement.exe');
- function availability(){let automaticMovement=false;try{const cap=JSON.parse(fs.readFileSync(path.join(root,'bin','movement-capabilities.json'),'utf8'));automaticMovement=cap.automaticMovement===true&&cap.sha256===crypto.createHash('sha256').update(fs.readFileSync(controller)).digest('hex')&&exists(path.join(root,'bin','WardogsImageText.exe'));}catch{}return {game:platform==='win32',movement:platform==='win32'&&exists(controller),automaticMovement:platform==='win32'&&automaticMovement};}
+ function availability(){let automaticMovement=false,automaticEntry=false;try{const cap=JSON.parse(fs.readFileSync(path.join(root,'bin','movement-capabilities.json'),'utf8'));automaticMovement=cap.automaticMovement===true&&cap.sha256===crypto.createHash('sha256').update(fs.readFileSync(controller)).digest('hex')&&exists(path.join(root,'bin','WardogsImageText.exe'));}catch{}try{const cap=JSON.parse(fs.readFileSync(path.join(root,'bin','entry-capabilities.json'),'utf8'));automaticEntry=cap.automaticEntry===true&&cap.stopWatcher===true&&cap.sha256===crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'bin','WardogsEntry.exe'))).digest('hex')&&exists(path.join(root,'bin','WardogsImageText.exe'));}catch{}return {game:platform==='win32',movement:platform==='win32'&&exists(controller),automaticMovement:platform==='win32'&&automaticMovement,automaticEntry:platform==='win32'&&automaticEntry};}
  async function openGame(){
   if(platform!=='win32')throw Error('La apertura del juego requiere Windows.');
   // Fixed application URI; no server ID or browser-supplied command reaches a shell.

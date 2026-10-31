@@ -37,6 +37,13 @@ async function writeReport(file,{captured=now}={}){
  const report=sample();report.source.frameId=randomUUID();report.source.path=path.join(path.dirname(file),'game-frame-'+report.source.frameId+'.png');report.source.capturedAt=new Date(captured).toISOString();report.source.captureFinishedAt=new Date(captured+1).toISOString();
  await fs.writeFile(report.source.path,'frame');await fs.writeFile(file,JSON.stringify(report));return report;
 }
+
+test('lector: conserva el motivo reciente del bloqueo sin renovar una captura ni ocultarlo como espera genérica',async t=>{
+ const {root,cache}=await temporaryReader(t);let clock=now;
+ const reader=createScreenReader({root,dataDir:root,directory:cache,now:()=>clock,run:async(_exe,args)=>fs.writeFile(args[1],JSON.stringify({format:'wardogs-game-screen-unavailable-v1',reason:'unsupported_game_bounds'}))});
+ await reader.refresh();assert.equal(reader.view().status,'unknown');assert.match(reader.view().reason,/fuera de la pantalla/);assert.equal(reader.view().capturedAt,undefined);assert.equal(reader.view().gameForeground,false);
+ clock+=5001;assert.match(reader.view().reason,/Esperando/);reader.stop();
+});
 test('lector: al reanudar poda el inventario previo y protege los dos archivos actuales aunque tengan fecha antigua',async t=>{
  const {root,cache}=await temporaryReader(t),old=[];
  for(let i=1;i<=12;i++)old.push(await artifact(cache,i,{image:i%2===0}));

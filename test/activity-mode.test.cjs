@@ -25,14 +25,36 @@ test('actividad: exige dos muestras distintas y congela el destino antes de prep
  assert.equal(f.prepares[0].session.sessionEndAt,'2026-10-30T11:00:00.000Z');assert.equal(f.prepares[0].session.remainingMinutes,60);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:20,intervalSeconds:60,holdMs:500});
  f.rows([row(1,18,initial+30000)]);await f.mode.tick();assert.equal(f.prepares.length,1);
 });
+
+test('actividad: entrega el equipo aleatorio o fijo elegido a la entrada sin reemplazarlo por la preferencia del clan',async()=>{
+ for(const team of ['any','blue','red','green']){const f=fixture();f.mode.start({...input,team});assert.equal(f.mode.view().team,team);await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].session.settings.team,team);}
+ const f=fixture();assert.throws(()=>f.mode.start({...input,team:'orange'}));assert.equal(f.mode.view(),null);
+});
 test('actividad: repetir el mismo timestamp no confirma actividad ni arregla una muestra contradictoria',async()=>{
  const f=fixture();f.mode.start(input);await f.mode.tick();await f.mode.tick();assert.equal(f.prepares.length,0);
  f.rows([row(2,5)]);await f.mode.tick();assert.equal(f.mode.view().samples[0].consecutiveSamples,0);
  f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares.length,0);
  f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares.length,1);
 });
+
+test('actividad: cambiar el título no reinicia ni crea las dos muestras del mismo ID',async()=>{
+ const f=fixture();f.mode.start(input);await f.mode.tick();
+ f.rows([{...row(2,4),name:'Título completamente nuevo | Modo distinto'}]);await f.mode.tick();
+ assert.equal(f.prepares.length,0);assert.equal(f.mode.view().samples[0].consecutiveSamples,1);
+ f.advance(30000);f.rows([{...row(2,4,initial+30000),name:'Otro título y otro modo'}]);await f.mode.tick();
+ assert.equal(f.prepares.length,1);assert.equal(f.mode.view().samples[0].consecutiveSamples,2);assert.equal(f.prepares[0].target.joinId,id);
+});
+
+test('actividad: cambiar UUID, umbral o capacidad sí requiere dos muestras de la nueva identidad',async()=>{
+ for(const change of [r=>r.joinId='9c430e28-f454-4751-bad1-07d5199f8288',r=>r.publicRule={tope:25},r=>r.capacity=90]){
+  const f=fixture();f.mode.start(input);await f.mode.tick();f.advance(30000);
+  const changed=row(2,4,initial+30000);change(changed);f.rows([changed]);await f.mode.tick();
+  assert.equal(f.prepares.length,0);assert.equal(f.mode.view().samples[0].consecutiveSamples,1);
+  f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares.length,1);assert.equal(f.mode.view().samples[0].consecutiveSamples,2);
+ }
+});
 test('actividad: no acepta fuente antigua, servidor ajeno/inactivo/lleno, umbral alcanzado ni identidad ausente',async()=>{
- const bad=[r=>r.trusted=false,r=>r.online=false,r=>r.seedingActive=false,r=>r.players=0,r=>r.players=20,r=>{r.players=5;r.capacity=5;},r=>r.joinId='bad',r=>r.name='otra comunidad',r=>r.sourceAt=new Date(initial-90001).toISOString(),r=>r.publicRule.tope=4,r=>delete r.capacity];
+ const bad=[r=>r.trusted=false,r=>r.online=false,r=>r.seedingActive=false,r=>r.players=0,r=>r.players=20,r=>{r.players=5;r.capacity=5;},r=>r.joinId='bad',r=>{r.name='otra comunidad';r.trusted=false;},r=>r.sourceAt=new Date(initial-90001).toISOString(),r=>r.publicRule.tope=4,r=>delete r.capacity];
  for(const alter of bad){const f=fixture(),r=row(2,4);alter(r);f.rows([r]);f.mode.start(input);await f.mode.tick();f.advance(30000);const next=row(2,4,initial+30000);alter(next);f.rows([next]);await f.mode.tick();assert.equal(f.prepares.length,0);assert.equal(f.mode.view().samples.length,0);}
  const duplicate=fixture();duplicate.rows([row(2,4),row(2,8)]);duplicate.mode.start(input);await duplicate.mode.tick();assert.equal(duplicate.mode.view().samples.length,0);
 });

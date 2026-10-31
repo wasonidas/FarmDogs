@@ -38,6 +38,12 @@ test('pantalla: identifica otro servidor y no confunde nombre de dominio parecid
  assert.equal(classifyGameScreen(lookup,{expectedServer:2}).server,2);
  const wrong=structuredClone(lookup);for(const line of wrong.lines)line.text=line.text.replace(/Wardogsspain\.com/i,'Wardogsspain.com.ejemplo');assert.equal(classifyGameScreen(wrong).phase,'unknown');
 });
+test('pantalla: el modo añadido al nombre conserva número y dominio exactos del servidor observado',()=>{
+ const infantry=require('./fixtures/ocr-join-infantry.json');assert.equal(classifyGameScreen(infantry,{expectedServer:3}).phase,'join_confirmation');assert.equal(classifyGameScreen(infantry,{expectedServer:2}).phase,'join_wrong_server');
+ for(const suffix of ['.ejemplo | INFANTRY','malicioso | INFANTRY']){const wrong=structuredClone(infantry);for(const line of wrong.lines)line.text=line.text.replace(/Wardogsspain\.com/i,'Wardogsspain.com'+suffix);assert.equal(classifyGameScreen(wrong,{expectedServer:3}).phase,'unknown');}
+ const duplicate=structuredClone(infantry),identity=duplicate.lines.find(line=>/^#03/.test(line.text));duplicate.lines.push({...structuredClone(identity),text:identity.text.replace(' I INFAI',' | INFANTRY')});assert.equal(classifyGameScreen(duplicate,{expectedServer:3}).phase,'join_confirmation');
+ const conflicting=structuredClone(infantry);conflicting.lines.push({...structuredClone(identity),text:identity.text.replace('#03','#04')});assert.equal(classifyGameScreen(conflicting,{expectedServer:3}).phase,'unknown');
+});
 test('pantalla: chat, geometría inválida y botones duplicados no forman una confirmación',()=>{
  const chat=structuredClone(lookup);for(const line of chat.lines)for(const word of line.words)word.y=10;assert.equal(classifyGameScreen(chat).phase,'unknown');
  const invalid=structuredClone(lookup);for(const line of invalid.lines)for(const word of line.words)word.x=NaN;assert.equal(classifyGameScreen(invalid).phase,'unknown');

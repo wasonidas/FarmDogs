@@ -17,19 +17,97 @@ class Element{
  reportValidity(){return true;}
  focus(){}
 }
-function sample(){return {token:'test-token',now:'2026-10-31T10:00:00Z',capabilities:{standaloneMovement:true},config:{selectedServer:1},source:{lastSuccessAt:'2026-10-31T10:00:00Z',error:null},servers:Array.from({length:5},(_,i)=>({number:i+1,trusted:true,joinId,players:25,capacity:100,map:'Prueba',seedingActive:true,status:'above_entry_threshold'})),seedingContinuity:{},account:{vipFresh:false,seedingFresh:false},movement:{available:false},localTools:{game:true,movement:true,automaticMovement:true},autoSeeding:null,activity:null,opening:null,watch:null,rewards:null,teamClicker:{available:true,automaticSelectionAvailable:true,enabled:false,startMode:'automatic',team:'blue',intervalMs:20,targets:{}},diagnostics:{}};}
-async function app({initial=sample(),clipboardFails=false,onPost}={}){
+function sample(){return {token:'test-token',now:'2026-10-31T10:00:00Z',capabilities:{standaloneMovement:true},config:{selectedServer:1},source:{lastSuccessAt:'2026-10-31T10:00:00Z',error:null},servers:Array.from({length:5},(_,i)=>({number:i+1,trusted:true,joinId,players:25,capacity:100,map:'Prueba',seedingActive:true,status:'above_entry_threshold'})),seedingContinuity:{},account:{vipFresh:false,seedingFresh:false},movement:{available:false},localTools:{game:true,movement:true,automaticMovement:true},autoSeeding:null,activity:null,opening:null,watch:null,rewards:null,teamClicker:{available:true,automaticSelectionAvailable:true,automaticAnyTeamAvailable:true,enabled:false,startMode:'automatic',team:'blue',intervalMs:20,targets:{}},diagnostics:{}};}
+async function app({initial=sample(),clipboardFails=false,onPost,host=false}={}){
  const elements=new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(match=>[match[1],new Element()]));
  for(const [id,node]of elements){const tag=[...html.matchAll(/<[^>]+>/g)].find(match=>match[0].includes(`id="${id}"`))?.[0]||'';node.value=tag.match(/\bvalue="([^"]*)"/)?.[1]||'';node.checked=/\schecked(?:\s|>)/.test(tag);}
  const radios=['blue','red','green'].map(team=>Object.assign(new Element(),{value:team,checked:team==='blue'}));
  for(const radio of radios){radio._checked=radio.checked;Object.defineProperty(radio,'checked',{get(){return this._checked;},set(value){if(value)for(const peer of radios)peer._checked=false;this._checked=!!value;}});}
  const node=id=>{assert.ok(elements.has(id),`ID real del HTML: ${id}`);return elements.get(id);};
  const document={getElementById:node,querySelectorAll(selector){if(selector==='input[name="clicker-team"]')return radios;if(selector==='input[name="clicker-team"],#clicker-interval')return [...radios,node('clicker-interval')];assert.ok(['[data-go-tab]','[data-seed-mode]'].includes(selector));return [];},querySelector(selector){if(selector==='input[name="clicker-team"]:checked')return radios.find(r=>r.checked);const team=selector.match(/\[value="(blue|red|green)"\]/)?.[1];assert.ok(team);return radios.find(r=>r.value===team);}};
- let current=initial,copies=0;const requests=[];
- const context=vm.createContext({document,window:{},navigator:{clipboard:{writeText:async()=>{copies++;if(clipboardFails)throw Error('Portapapeles remoto ocupado');}}},console,Intl,Date,Number,Object,Set,fetch:async(route,options={})=>{const request={route,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,headers:options.headers};requests.push(request);if(request.method==='POST'&&onPost)current=await onPost(route,request.body,current)||current;return {ok:true,json:async()=>current};},setInterval:()=>0});
+ let current=initial,copies=0;const requests=[],hostMessages=[],hostListeners=[],hostWindowListeners=new Map();
+ const mockWindow=host?{addEventListener:(name,handler)=>hostWindowListeners.set(name,handler),crypto:{randomUUID:()=> '44444444-4444-4444-8444-444444444444'},chrome:{webview:{postMessage:msg=>hostMessages.push(msg),addEventListener:(kind,handler)=>hostListeners.push(handler)}}}:{};
+ const context=vm.createContext({document,window:mockWindow,navigator:{clipboard:{writeText:async()=>{copies++;if(clipboardFails)throw Error('Portapapeles remoto ocupado');}}},console,Intl,Date,Number,Object,Set,fetch:async(route,options={})=>{const request={route,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,headers:options.headers};requests.push(request);if(request.method==='POST'&&onPost)current=await onPost(route,request.body,current)||current;return {ok:true,json:async()=>current};},setInterval:()=>0});
  vm.runInContext(script,context,{filename:'public/mini.js'});await new Promise(setImmediate);
- return {node,requests,get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler();},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},posts:()=>requests.filter(request=>request.method==='POST')};
+ if(host)for(const handler of hostListeners)handler({data:{kind:'host_entry_focus_support',supported:true}});
+ return {node,requests,hostMessages,hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},posts:()=>requests.filter(request=>request.method==='POST')};
 }
+
+test('interfaz entrada: elige servidor y equipo sin portapapeles, muestra progreso y cancela por UUID',async()=>{
+ const initial=sample();initial.capabilities.automaticEntry=true;initial.teamClicker.team='red';
+ const id='99999999-9999-4999-8999-999999999999';
+ const a=await app({initial,clipboardFails:true,onPost(route,body,s){
+  if(route==='/api/entry/start')return {...s,entry:{id,server:body.server,team:body.team,durationMinutes:body.durationMinutes,status:'waiting_game',reason:'Esperando Wardogs.',endAt:'2026-10-31T12:00:00Z'}};
+  assert.equal(route,'/api/entry/stop');assert.equal(body.expectedSessionId,id);return {...s,entry:{...s.entry,status:'cancelled',reason:'Entrada detenida.'}};
+ }});
+ assert.equal(a.node('play').textContent,'Entrar automáticamente');assert.equal(a.node('entry-team').value,'red');a.node('entry-team').value='green';await a.change('entry-team',true);await a.click('play');
+ assert.equal(a.copies,0);assert.deepEqual(a.posts().map(p=>[p.route,p.body]),[['/api/entry/start',{server:1,expectedJoinId:joinId,team:'green',seeding:false,durationMinutes:120}]]);
+ assert.equal(a.node('entry-progress').hidden,false);assert.equal(a.node('entry-progress-state').textContent,'Esperando Wardogs');assert.equal(a.node('entry-stage-game').dataset.state,'current');
+ assert.equal(a.node('entry-guidance').hidden,false);
+ for(const control of ['play','auto-start','clicker-save','break-start','entry-team','server-2'])assert.equal(a.node(control).disabled,true,control);
+ await a.click('entry-stop');assert.equal(a.node('entry-progress-state').textContent,'Detenido');assert.equal(a.node('play').disabled,false);assert.equal(a.posts().length,2);
+ assert.equal(a.node('entry-guidance').hidden,true);
+});
+
+test('interfaz entrada: seeding completo usa equipo elegido y no pide Steam ni entrada manual',async()=>{
+ const initial=sample();initial.capabilities.automaticEntry=true;
+ const a=await app({initial,onPost(route,body,s){assert.equal(route,'/api/seeding/start');return {...s,entry:{id:'99999999-9999-4999-8999-999999999999',server:1,team:body.team,status:'navigating',reason:'Abriendo entrada por ID.',...body,endAt:'2026-10-31T12:00:00Z'}};}});
+ assert.equal(a.node('auto-start').textContent,'Entrar y seedear');assert.match(a.node('auto-start-help').textContent,/No requiere conectar Steam/);await a.click('auto-start');assert.equal(a.copies,0);assert.equal(a.posts()[0].body.team,'any');assert.match(a.node('notice-text').textContent,/Entrará al #1/);assert.equal(a.node('auto-status').textContent,'Entrada automática');
+});
+
+test('interfaz seeding: equipo visible y aleatorio predeterminado se conserva en inicio, programación y actividad sin cambiar el clan',async()=>{
+ for(const team of ['any','blue','red','green'])for(const mode of ['now','schedule','activity']){
+  const initial=sample();initial.capabilities.automaticEntry=true;initial.teamClicker.team='red';const a=await app({initial});assert.equal(a.node('seed-team').value,'any');assert.equal(a.selectedTeam(),'red');a.node('entry-team').value='green';a.node('seed-team').value=team;await a.change('seed-team',false);
+  if(mode==='now')await a.click('auto-start');
+  if(mode==='activity')await a.click('activity-start');
+  if(mode==='schedule'){a.node('opening-at').value='2026-10-31T12:00';for(const handler of a.node('schedule-form').listeners.get('submit')||[])await handler({preventDefault(){}});}
+  assert.equal(a.posts().length,1);assert.equal(a.posts()[0].body.team,team,mode+' conserva '+team);assert.equal(a.selectedTeam(),'red');assert.equal(a.node('entry-team').value,'green');
+ }
+});
+
+test('interfaz seeding: un helper anterior pide elegir color y no promete la selección aleatoria',async()=>{
+ const initial=sample();initial.capabilities.automaticEntry=true;initial.teamClicker.automaticAnyTeamAvailable=false;const a=await app({initial});assert.equal(a.node('seed-team').value,'any');for(const id of ['auto-start','schedule','activity-start'])assert.equal(a.node(id).disabled,true,id);assert.match(a.node('seed-team-help').textContent,/Actualiza/);
+ a.node('seed-team').value='blue';await a.change('seed-team',false);assert.equal(a.node('auto-start').disabled,false);a.node('entry-team').value='any';await a.change('entry-team',false);assert.equal(a.node('play').disabled,true);assert.equal(a.selectedTeam(),'blue');
+});
+
+test('interfaz entrada: el propietario backend no recibe heartbeats UI ni inicia de nuevo al completar',async()=>{
+ const initial=sample(),id='99999999-9999-4999-8999-999999999999';initial.capabilities.automaticEntry=true;initial.entry={id,server:1,team:'red',status:'choosing_team',reason:'Eligiendo equipo.',endAt:'2026-10-31T12:00:00Z'};initial.teamClicker={...initial.teamClicker,enabled:true,ownerId:id,sessionId:id};
+ const a=await app({initial});assert.equal(a.posts().length,0);assert.equal(a.node('entry-stage-team').dataset.state,'current');assert.match(a.node('clicker-detail').textContent,/entrada automática/);
+ a.update({...a.current,entry:{...a.current.entry,status:'completed',connected:true,reason:'Entrada completada.'},teamClicker:{...a.current.teamClicker,enabled:false}});
+ assert.equal(a.node('entry-stage-hud').dataset.state,'done');assert.equal(a.node('entry-stop').disabled,true);assert.equal(a.posts().length,0);
+ assert.equal(a.node('entry-guidance').hidden,true);
+});
+
+test('interfaz entrada: solo un clic real en host compatible arma foco único y lo une a la sesión devuelta',async()=>{
+ for(const route of ['/api/entry/start','/api/seeding/start']){
+  const initial=sample();initial.capabilities.automaticEntry=true;
+  const a=await app({initial,host:true,onPost(actual,body,s){if(actual.endsWith('/stop'))return {...s,entry:{...s.entry,status:'cancelled'}};assert.equal(actual,route);return {...s,entry:{id:'99999999-9999-4999-8999-999999999999',server:1,joinId,team:body.team,status:'waiting_game',reason:'Esperando.',endAt:'2026-10-31T12:00:00Z'}};}});
+  await a.click(route==='/api/entry/start'?'play':'auto-start',{isTrusted:true});assert.equal(a.posts()[0].body.initialFocus,'desktop');
+  const messages=a.hostMessages.filter(m=>m.kind.startsWith('host_entry_focus_'));
+  assert.equal(messages.length,2);assert.equal(messages[0].kind,'host_entry_focus_arm');assert.equal(messages[0].server,1);assert.equal(messages[0].joinId,joinId);assert.equal(messages[1].kind,'host_entry_focus_bind');assert.equal(messages[1].id,messages[0].id);assert.equal(messages[1].sessionId,'99999999-9999-4999-8999-999999999999');
+  await a.click('entry-stop');assert.equal(a.hostMessages.at(-1).kind,'host_entry_focus_cancel');assert.equal(a.hostMessages.at(-1).id,messages[0].id);
+ }
+ const initial=sample();initial.capabilities.automaticEntry=true;const synthetic=await app({initial,host:true});await synthetic.click('play',{isTrusted:false});assert.equal(synthetic.posts()[0].body.initialFocus,undefined);assert.equal(synthetic.hostMessages.some(m=>m.kind==='host_entry_focus_arm'),false);
+});
+
+test('interfaz entrada: F8 mientras start sigue pendiente conserva el nonce para detener la sesión al vincularla',async()=>{
+ let resolve;const pending=new Promise(done=>resolve=done),initial=sample();initial.capabilities.automaticEntry=true;
+ const a=await app({initial,host:true,onPost:async(route,body,s)=>{await pending;return {...s,entry:{id:'99999999-9999-4999-8999-999999999999',server:1,joinId,team:body.team,status:'waiting_game',reason:'Esperando.',endAt:'2026-10-31T12:00:00Z'}};}});
+ const start=a.click('play',{isTrusted:true});a.hostKey('F8');const messages=()=>a.hostMessages.filter(m=>m.kind.startsWith('host_entry_focus_'));assert.deepEqual(messages().map(m=>m.kind),['host_entry_focus_arm','host_entry_focus_stop']);assert.equal(messages()[0].id,messages()[1].id);
+ resolve();await start;assert.equal(messages().at(-1).kind,'host_entry_focus_bind');assert.equal(messages().at(-1).id,messages()[0].id);assert.equal(messages().at(-1).sessionId,'99999999-9999-4999-8999-999999999999');
+});
+
+test('interfaz actualización: preferencia, comprobación e instalación conservan estado y bloquean nuevas entradas',async()=>{
+ const initial=sample();initial.capabilities.automaticEntry=true;initial.update={enabled:true,status:'idle',currentVersion:'0.4.0',available:false,busy:false,reason:'Actualizaciones automáticas activas.',installBlocked:false};
+ const a=await app({initial,onPost(route,body,s){
+  if(route==='/api/update/config')return {...s,update:{...s.update,enabled:body.enabled}};
+  if(route==='/api/update/check')return {...s,update:{...s.update,status:'available',available:true,latestVersion:'0.5.0',reason:'Lista para instalar.'}};
+  assert.equal(route,'/api/update/install');return {...s,update:{...s.update,status:'installing',available:false,reason:'Instalando y reabriendo.'}};
+ }});
+ assert.equal(a.node('update-version').textContent,'v0.4.0');await a.change('update-enabled',false);assert.equal(a.posts().at(-1).body.enabled,false);
+ await a.click('update-check');assert.equal(a.posts().at(-1).route,'/api/update/check');assert.equal(a.node('update-install').disabled,false);
+ await a.click('update-install');assert.equal(a.node('play').disabled,true);assert.equal(a.node('auto-start').disabled,true);assert.equal(a.node('update-check').disabled,true);assert.match(a.node('update-status').textContent,/Instalando/);
+});
 
 test('interfaz anti-AFK: pausa explícita sin Steam, población ni servidor y ajustes separados de seeding',async()=>{
  const initial=sample();initial.servers=[];initial.account={available:false,vipFresh:false,seedingFresh:false};

@@ -85,7 +85,20 @@ internal static class DesktopBootstrap
         for(Exception current=error;current!=null;current=current.InnerException){var socket=current as SocketException;if(socket!=null&&socket.SocketErrorCode==SocketError.ConnectionRefused)return true;}
         return false;
     }
-    internal static async Task<bool> ProbeService(HttpClient client,string baseUrl)
+    internal static bool SameRoot(string expected,string observed)
+    {
+        try
+        {
+            if(String.IsNullOrWhiteSpace(expected)||String.IsNullOrWhiteSpace(observed)||!AbsoluteRoot(expected)||!AbsoluteRoot(observed))return false;
+            return String.Equals(Path.GetFullPath(expected).Replace('/','\\').TrimEnd('\\'),Path.GetFullPath(observed).Replace('/','\\').TrimEnd('\\'),StringComparison.OrdinalIgnoreCase);
+        }
+        catch{return false;}
+    }
+    private static bool AbsoluteRoot(string value)
+    {
+        var text=value.Replace('/','\\');return text.StartsWith("\\\\",StringComparison.Ordinal)||(text.Length>=3&&Char.IsLetter(text[0])&&text[1]==':'&&text[2]=='\\');
+    }
+    internal static async Task<bool> ProbeService(HttpClient client,string baseUrl,string expectedRoot=null)
     {
         HttpResponseMessage response;
         try{response=await client.GetAsync(baseUrl+"/api/state").ConfigureAwait(false);}
@@ -98,6 +111,7 @@ internal static class DesktopBootstrap
             string body=await response.Content.ReadAsStringAsync().ConfigureAwait(false);if(body.Length>1048576)throw new InvalidOperationException("La respuesta local es demasiado grande.");
             Dictionary<string,object> state;try{state=Json.DeserializeObject(body) as Dictionary<string,object>;}catch{throw new InvalidOperationException("El puerto local no responde como FarmDogs.");}
             object value;if(state==null||!state.TryGetValue("appId",out value)||(value as string)!=AppId)throw new InvalidOperationException("El puerto local está ocupado por otro servicio o una versión anterior.");
+            if(expectedRoot!=null&&(!state.TryGetValue("installationRoot",out value)||!SameRoot(expectedRoot,value as string)))throw new InvalidOperationException("Otra instalación de FarmDogs está usando el servicio local. Cierra esa app antes de abrir esta copia.");
             return true;
         }
     }
@@ -108,7 +122,7 @@ internal static class DesktopBootstrap
         // A timeout remains an uncertain port; only ConnectionRefused permits starting.
         using(var client=new HttpClient(new HttpClientHandler {UseProxy=false,UseCookies=false,AllowAutoRedirect=false}) {Timeout=TimeSpan.FromMilliseconds(5000),MaxResponseContentBufferSize=1048576})
         {
-            return await EnsureCore(()=>ProbeService(client,baseUrl),()=>StartObserver(root,node,address.Port),10000,()=>Task.Delay(200)).ConfigureAwait(false);
+            return await EnsureCore(()=>ProbeService(client,baseUrl,root),()=>StartObserver(root,node,address.Port),10000,()=>Task.Delay(200)).ConfigureAwait(false);
         }
     }
     private static void StartObserver(string root,string node,int port)

@@ -4,7 +4,7 @@ const {connectionTarget}=require('./local-launch.cjs');
 const {createAutoSeeding}=require('./auto-seeding.cjs');
 const live=new Set(['watching','launching']);
 
-function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>{},limitEndAt=value=>value}){
+function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>{},limitEndAt=value=>value,automaticEntry=()=>false}){
  let job=load()||null,startedMono=null,budgetMs=null,closed=false;
  const observations=new Map();
  const emit=(kind,detail)=>{try{event(kind,detail);}catch{}};
@@ -21,11 +21,12 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
   if(!Number.isInteger(minPlayers)||!Number.isInteger(maxEntryPlayers)||minPlayers<1||maxEntryPlayers>99||minPlayers>maxEntryPlayers)throw Error('Rango de jugadores de 1 a 99, con mínimo menor o igual al máximo.');
   if(!Array.isArray(serverNumbers)||!serverNumbers.length||serverNumbers.length>5||new Set(serverNumbers).size!==serverNumbers.length||serverNumbers.some(number=>!Number.isInteger(number)||number<1||number>5))throw Error('Elige servidores distintos del 1 al 5.');
   if(input.seeding!==undefined&&(!input.seeding||typeof input.seeding!=='object'||Array.isArray(input.seeding)))throw Error('Ajustes de movimiento no válidos.');
+  if(input.team!==undefined&&!['any','blue','red','green'].includes(input.team))throw Error('Elige equipo aleatorio, azul, rojo o verde.');
   const at=now(),mono=monoNow(),raw=createAutoSeeding({...input.seeding,server:1,durationMinutes},at);
   const endAt=limitEndAt(raw.endAt),end=Date.parse(endAt);
   if(!Number.isFinite(at)||!Number.isFinite(mono)||!Number.isFinite(end)||end<=at||end>Date.parse(raw.endAt))throw Error('El límite de la vigilancia no es válido o ya ha pasado.');
   const seeding=Object.fromEntries(['startPlayers','intervalSeconds','holdMs'].map(key=>[key,raw[key]]));
-  const candidate={id:randomUUID(),status:'watching',reason:'Vigilando actividad pública; se necesitan dos lecturas recientes del mismo servidor.',createdAt:new Date(at).toISOString(),endAt:new Date(end).toISOString(),durationMinutes,minPlayers,maxEntryPlayers,serverNumbers:[...serverNumbers].sort((a,b)=>a-b),seeding,selectedServer:null,selectedJoinId:null,samples:[],finishedAt:null};
+  const candidate={id:randomUUID(),status:'watching',reason:'Vigilando actividad pública; se necesitan dos lecturas recientes del mismo servidor.',createdAt:new Date(at).toISOString(),endAt:new Date(end).toISOString(),durationMinutes,minPlayers,maxEntryPlayers,serverNumbers:[...serverNumbers].sort((a,b)=>a-b),seeding,...(input.team?{team:input.team}:{}),automaticEntry:automaticEntry()===true,selectedServer:null,selectedJoinId:null,samples:[],finishedAt:null};
   update(candidate);startedMono=mono;budgetMs=end-at;observations.clear();emit('activity_started',{id:job.id});return view();
  }
  function finish(status,reason){
@@ -47,7 +48,7 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
     try{target=connectionTarget(source,number,server.joinId);}catch{}
    }
    if(!target){observations.delete(number);continue;}
-   const identity=JSON.stringify([server.name,server.joinId,tope,server.capacity]);
+   const identity=JSON.stringify([server.joinId,tope,server.capacity]);
    const previous=observations.get(number);let consecutiveSamples=1,growth=null;
    if(previous&&previous.identity===identity){
     if(timestamp===previous.timestamp&&server.players===previous.players){consecutiveSamples=previous.consecutiveSamples;growth=previous.growth;}
@@ -71,16 +72,17 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
     const reason=samples.length?'Actividad candidata; esperando otra lectura reciente del mismo servidor.':'Esperando un servidor con actividad por debajo del umbral de entrada.';
     if(job.reason!==reason||JSON.stringify(job.samples)!==JSON.stringify(samples))update({...job,reason,samples});return;
    }
-   update({...job,status:'launching',reason:`Preparando seeding en el #${selected.number}; entrada y despliegue asistidos.`,selectedServer:selected.number,selectedJoinId:selected.target.joinId,samples,requestedAt:new Date(now()).toISOString()});
+   if(job.automaticEntry&&automaticEntry()!==true)throw Error('El controlador de entrada automática dejó de estar disponible.');
+   update({...job,status:'launching',reason:job.automaticEntry?`Completando la entrada automática al #${selected.number}.`:`Preparando seeding en el #${selected.number}; entrada y despliegue asistidos.`,selectedServer:selected.number,selectedJoinId:selected.target.joinId,samples,requestedAt:new Date(now()).toISOString()});
    const remainingMs=Math.min(Date.parse(job.endAt)-now(),budgetMs-(monoNow()-startedMono));
    if(remainingMs<=0){finish('expired','Fin del tiempo elegido para vigilar y seedear.');return;}
    const isCurrent=()=>!closed&&job?.id===id&&job.status==='launching'&&withinBudget();
    // Translate the remaining monotonic budget into a new UTC cap after clock rollback.
    const sessionEndAt=new Date(Math.min(Date.parse(job.endAt),now()+remainingMs)).toISOString();
-   await prepare(selected.target,{remainingMinutes:Math.max(1,Math.ceil(remainingMs/60000)),sessionEndAt,settings:structuredClone(job.seeding)},isCurrent);
+   await prepare(selected.target,{remainingMinutes:Math.max(1,Math.ceil(remainingMs/60000)),sessionEndAt,settings:{...structuredClone(job.seeding),...(job.team?{team:job.team}:{})}},isCurrent);
    if(job?.id!==id||job.status!=='launching')return;
    if(!withinBudget()){finish('expired','Terminó el tiempo mientras se preparaba la entrada.');return;}
-   finish('prepared',`Sesión preparada en el #${selected.number}. Completa la entrada y el despliegue; no se cambia de servidor automáticamente.`);
+   finish('prepared',job.automaticEntry?`Entrada automática preparada en el #${selected.number}. Consulta su progreso; no se cambiará de servidor.`:`Sesión preparada en el #${selected.number}. Completa la entrada y el despliegue; no se cambia de servidor automáticamente.`);
   }catch(error){
    if(job?.id!==id||!live.has(job.status))return;
    const next={...job,status:'error',reason:'No se pudo preparar la sesión: '+String(error.message||error).slice(0,500),finishedAt:new Date(now()).toISOString()};

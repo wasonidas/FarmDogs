@@ -6,14 +6,31 @@ const os=require('node:os');
 const path=require('node:path');
 const {spawn}=require('node:child_process');
 const {connectionTarget,createLocalLauncher,STEAM_URI}=require('../src/local-launch.cjs');
+const {normalizeServers}=require('../src/domain.cjs');
 const id='0665a9c0-80b7-4f32-ad47-f36b70367f10';
 const row={number:1,name:'[ESP] wardogsspain.com | #1',trusted:true,joinId:id,sourceAt:'2026-10-30T06:00:00Z'};
 
 test('entrada: rechaza una identidad antigua, ajena, desconocida o que ha cambiado',()=>{
- for(const bad of [{...row,trusted:false},{...row,name:'Otra comunidad'},{...row,joinId:'not-a-uuid'}])assert.throws(()=>connectionTarget([bad],1,id));
+ for(const bad of [{...row,trusted:false},{...row,trusted:'true'},{...row,joinId:'not-a-uuid'}])assert.throws(()=>connectionTarget([bad],1,id));
  assert.throws(()=>connectionTarget([row],6,id));
  assert.throws(()=>connectionTarget([row],1,'otro'),/cambiado/);
  const target=connectionTarget([row],1,id);assert.equal(target.status,'prepared_not_connected');assert.equal(target.joinId,id);assert.equal(target.connected,undefined);
+});
+
+test('entrada: un nombre enteramente distinto no altera la identidad oficial confiable',()=>{
+ for(const name of ['Otro título | Nuevo modo','',undefined]){
+  const target=connectionTarget([{...row,name}],1,id);assert.equal(target.server,1);assert.equal(target.joinId,id);
+  assert.throws(()=>connectionTarget([{...row,name,trusted:false}],1,id),/lectura reciente/);
+ }
+});
+
+test('entrada: el proveedor calcula confianza y rechaza flags forjados sin configuración o frescura',()=>{
+ const now=Date.parse('2026-10-31T18:40:00Z');
+ const payload=()=>({configured:true,fetchedAt:now,servers:[{id:3,num:1,name:'Título nuevo sin el nombre anterior',joinId:id,players:5,maxPlayers:100,online:true,configured:true,trusted:true}]});
+ const normalized=normalizeServers(payload(),now);assert.equal(normalized[0].trusted,true);assert.equal(connectionTarget(normalized,1,id).joinId,id);
+ for(const invalidate of [p=>p.configured=false,p=>p.servers[0].configured=false,p=>p.servers[0].online=false,p=>p.servers[0].stale=true,p=>p.fetchedAt=now-90001]){
+  const value=payload();invalidate(value);const rejected=normalizeServers(value,now);assert.equal(rejected[0].trusted,false);assert.throws(()=>connectionTarget(rejected,1,id),/lectura reciente/);
+ }
 });
 
 test('apertura: el proceso del controlador sigue vivo y completa su trabajo tras salir el panel',async t=>{

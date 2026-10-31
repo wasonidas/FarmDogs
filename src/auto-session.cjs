@@ -13,10 +13,10 @@ function createAutoSession({root,dataDir,now,monoNow,launcher,getInputs,event,re
   if(!current)return;
   const at=now();atomicJson(commandFile,{format:'wardogs-automatic-movement-v1',id:randomUUID(),sessionId:current.id,kind,issuedAt:new Date(at).toISOString(),expiresAt:new Date(at+3000).toISOString(),endAt:current.endAt,frameId:screen.frameId||null,capturedAt:screen.capturedAt||null,scene:screen.scene||null,gamePid:screen.gamePid||0,intervalSeconds:current.intervalSeconds,holdMs:current.holdMs,directions:'AD',reason:current.reason,cancelled});
  }
- async function start(input,{endAt=null}={}){
+ async function start(input,{endAt=null,trustedEntry=null}={}){
   if(closed||active())throw Error('Ya hay una sesión de movimiento activa.');
   if(!launcher.availability().automaticMovement)throw Error('Actualiza el controlador automático antes de iniciar.');
-  let candidate=createAutoSeeding(input,now());
+  let candidate=createAutoSeeding(input,now(),{trustedEntry});
   if(endAt!==null){const cap=Date.parse(endAt);if(!Number.isFinite(cap)||cap<=now()||cap>Date.parse(candidate.endAt))throw Error('Límite externo de sesión no válido.');candidate.endAt=new Date(cap).toISOString();}
   const guard=readJson(path.join(dataDir,'movement-run.json'));
   if(guard&&guard.dayMadrid===new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now()))){const limit=Date.parse(guard.stopAtUtc);if(!Number.isFinite(limit)||limit<=now())throw Error('Se alcanzó el límite de hoy.');if(limit<Date.parse(candidate.endAt))candidate.endAt=guard.stopAtUtc;}

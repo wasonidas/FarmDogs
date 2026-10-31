@@ -73,6 +73,13 @@ internal sealed class ForegroundAlertPolicy
                 "El anti-AFK necesita el juego delante para reconocer a tu personaje y moverse. Vuelve a Wardogs; deja los menús cerrados y las manos vacías.":
                 "El movimiento de seeding necesita el juego delante para reconocer a tu personaje. Vuelve a Wardogs; deja los menús cerrados y las manos vacías."};
         }
+        var entry=Object(state,"entry");session=Text(entry,"id");status=Text(entry,"status");
+        if(Guid.TryParse(session,out id)&&!True(entry,"operatorStopped")&&Utc(Text(entry,"endAt"),out end)&&end>now&&
+            (status=="opening"||status=="waiting_game"||status=="navigating"||status=="joining"||status=="choosing_team"||status=="deploying"||status=="starting_seeding"))
+        {
+            if(Text(Object(state,"movement"),"autoOperatorStopped")==session)return null;
+            return new ForegroundRequirement{Key="entry:"+session,Detail="FarmDogs está completando la entrada al servidor y al equipo elegido. Deja Wardogs en primer plano para reconocer cada pantalla. F8 o Detener cancelan la entrada."};
+        }
         var team=Object(state,"teamClicker");session=Text(team,"sessionId");
         if(True(team,"enabled")&&Guid.TryParse(session,out id))
             return new ForegroundRequirement{Key="team:"+session,Detail="La selección de equipo está esperando el selector. Entra al servidor y deja Wardogs delante para que FarmDogs pueda reconocerlo."};

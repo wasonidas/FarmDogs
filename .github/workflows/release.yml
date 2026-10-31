@@ -81,7 +81,7 @@ jobs:
       - name: Build the Windows components and portable
         if: steps.release.outputs.publish == 'true'
         run: |
-          foreach ($buildScript in @('build:movement', 'build:reader', 'build:team-clicker', 'build:desktop', 'build:launcher', 'package:portable')) {
+          foreach ($buildScript in @('build:movement', 'build:reader', 'build:team-clicker', 'build:entry', 'build:updater', 'build:desktop', 'build:launcher', 'package:portable')) {
             npm run $buildScript
             if ($LASTEXITCODE -ne 0) { throw "Build failed: $buildScript" }
           }

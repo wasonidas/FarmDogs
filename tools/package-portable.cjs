@@ -4,7 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..');
-const fixed=['FarmDogs.exe','LICENSE','README.md','bin/FarmDogsApp.exe','bin/WardogsMovement.exe','bin/WardogsTeamClicker.exe','bin/team-clicker-capabilities.json','bin/WardogsImageText.exe','bin/Microsoft.Web.WebView2.Core.dll','bin/Microsoft.Web.WebView2.WinForms.dll','bin/WebView2Loader.dll','bin/movement-capabilities.json','bin/runtime/node.exe','bin/runtime/LICENSE','bin/runtime/runtime.json'];
+const fixed=['FarmDogs.exe','LICENSE','README.md','package.json','bin/FarmDogsApp.exe','bin/WardogsMovement.exe','bin/WardogsTeamClicker.exe','bin/team-clicker-capabilities.json','bin/WardogsEntry.exe','bin/entry-capabilities.json','bin/FarmDogsUpdater.exe','bin/WardogsImageText.exe','bin/Microsoft.Web.WebView2.Core.dll','bin/Microsoft.Web.WebView2.WinForms.dll','bin/WebView2Loader.dll','bin/movement-capabilities.json','bin/runtime/node.exe','bin/runtime/LICENSE','bin/runtime/runtime.json'];
 const files=[...fixed];
 const desktopStaged=process.argv.includes('--staging-desktop');
 const sourceFile=relative=>path.join(root,desktopStaged&&relative==='bin/FarmDogsApp.exe'?'bin/FarmDogsApp.next.exe':relative);
@@ -14,7 +14,9 @@ const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).diges
 const cap=JSON.parse(fs.readFileSync(path.join(root,'bin/movement-capabilities.json')));
 if(cap.sha256!==hash(path.join(root,'bin/WardogsMovement.exe')))throw Error('El controlador y sus capacidades no coinciden.');
 const clickCap=JSON.parse(fs.readFileSync(path.join(root,'bin/team-clicker-capabilities.json')));
-if(clickCap.format!=='wardogs-team-clicker-capabilities-v1'||clickCap.teamClicker!==true||clickCap.automaticTeamRecognition!==true||clickCap.automaticTeamSelection!==true||clickCap.messageHotkeys!==true||clickCap.persistentTeamAttempt!==true||clickCap.positiveEntryConfirmation!==true||clickCap.sha256!==hash(path.join(root,'bin/WardogsTeamClicker.exe')))throw Error('El autoclic y sus capacidades no coinciden.');
+if(clickCap.format!=='wardogs-team-clicker-capabilities-v1'||clickCap.teamClicker!==true||clickCap.automaticTeamRecognition!==true||clickCap.automaticTeamSelection!==true||clickCap.automaticAnyTeam!==true||clickCap.messageHotkeys!==true||clickCap.persistentTeamAttempt!==true||clickCap.positiveEntryConfirmation!==true||clickCap.sha256!==hash(path.join(root,'bin/WardogsTeamClicker.exe')))throw Error('El autoclic y sus capacidades no coinciden.');
+const entryCap=JSON.parse(fs.readFileSync(path.join(root,'bin/entry-capabilities.json')));
+if(entryCap.automaticEntry!==true||entryCap.stopWatcher!==true||entryCap.mainDeployGate!==true||entryCap.splashKeyStart!==true||entryCap.absolutePointer!==true||entryCap.sha256!==hash(path.join(root,'bin/WardogsEntry.exe')))throw Error('La entrada automática y sus capacidades no coinciden.');
 const stamp=new Date().toISOString().replace(/[^0-9]/g,'');
 const build=path.join(root,'dist','portable-'+stamp),folder=path.join(build,'FarmDogs');
 fs.mkdirSync(folder,{recursive:true});
@@ -36,12 +38,14 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'Elige 5, 15 o 30 minutos o una duración propia; puedes ajustar tiempo entre pasos y duración de cada paso.',
  'Confirma que estás desplegado y con las manos vacías, pulsa Activar anti-AFK y vuelve al juego. No requiere Steam en la app, servidor elegido ni población.',
  'Solo mueve con HUD reconocido y Wardogs delante. Los menús o la pérdida de foco pausan; F8/Detener y el tiempo máximo cancelan.',
- 'FarmDogs muestra un aviso grande y reproduce un sonido cuando necesites poner el juego delante, sin cambiarte de ventana.',
+ 'FarmDogs muestra un aviso grande y reproduce un sonido cuando necesites poner el juego delante.',
+ 'La entrada automática intenta activar Wardogs una sola vez al empezar. Si cambias después de aplicación, espera y avisa sin recuperar el foco.',
  'Los avisos nativos funcionan con FarmDogs minimizada. Avisos con sonido permite silenciarlos; Probar aviso muestra un ejemplo.',
  'Conecta Steam desde Mi VIP para consultar premios y presencia. No se incluye ninguna sesión privada.',
  'El autoclic no necesita Steam conectado a la app.',
  'En Elegir equipo, elige azul/rojo/verde y pulsa Esperar equipo.',
- 'Entra al servidor manualmente. Al aparecer el selector, FarmDogs reconoce la tarjeta y empieza a clicar automáticamente.',
+ 'En Entrar, elige servidor y equipo y pulsa Entrar automáticamente. FarmDogs abre Wardogs, recorre sus menús, escribe el ID y confirma el destino.',
+ 'Puedes usar Elegir equipo por separado si prefieres entrar tú al servidor. Al aparecer el selector, FarmDogs reconoce la tarjeta y empieza a clicar automáticamente.',
  'No necesitas teclas de inicio, colocar el cursor ni guardar coordenadas.',
  'Cancelar detiene la espera o los clics; F8 conserva la parada de emergencia.',
  'Mantiene clics continuos al intervalo elegido. El color apagado o el equilibrio no pausan el bucle.',
@@ -54,7 +58,7 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'Continuar seeding conserva un ciclo ya confirmado por tu cuenta aunque se cierren nuevas admisiones; no vuelve a abrir el juego.',
  'El movimiento espera por defecto a 20 jugadores, presencia de tu cuenta y HUD con manos vacías en primer plano.',
  'Si ya estás desplegado, marca la casilla de confirmación manual para usar movimiento sin conectar Steam a la app.',
- 'F8 o Detener sesión cancelan el automatismo. La entrada todavía es asistida.',
+ 'F8 o Detener sesión cancelan el automatismo. La entrada, equipo y despliegue se verifican antes de preparar el movimiento.',
  'También puedes programar cuándo se prepara la sesión; el PC y el servicio deben seguir encendidos.',
  'El modo por actividad vigila los cinco servidores, elige un destino y prepara una sola sesión.',
  'Cobro antes de caducar puede proteger los retos semanales; actívalo con Steam conectado en la app.',
@@ -66,7 +70,9 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'Reglas de premios: https://wardogsspain.com/vip',
  '',
  'Los datos que cree la app se guardan en data junto a ella. Este paquete no contiene data, cuentas, cookies, historial ni capturas.',
- 'Node incluye su LICENSE completo en bin/runtime. WebView2 incluye LICENSE y NOTICE en licenses.'
+ 'Node incluye su LICENSE completo en bin/runtime. WebView2 incluye LICENSE y NOTICE en licenses.',
+ 'FarmDogs comprueba nuevas versiones públicas de wasonidas/FarmDogs en GitHub, verifica el ZIP y espera a estar inactiva para instalar.',
+ 'La actualización conserva data y el perfil Steam y vuelve a abrir FarmDogs sin reactivar una sesión anterior.'
 ].join('\r\n'),'utf8');
 const payload=[...files,'LEEME.txt','licenses/WebView2-LICENSE.txt','licenses/WebView2-NOTICE.txt'].sort();
 const manifest={format:'wardogs-portable-v1',application:'FarmDogs',version:JSON.parse(fs.readFileSync(path.join(root,'package.json'))).version,createdAt:new Date().toISOString(),platform:'win32-x64',privateDataIncluded:false,files:payload.map(relative=>({path:relative,sha256:hash(path.join(folder,relative))}))};

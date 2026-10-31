@@ -26,14 +26,23 @@ function classifyGameScreen(report,{expectedServer=null}={}){
  const header=exact(/^[¿?]?(?:UNIRSE AL SERVIDOR DEL JUEGO|JOIN GAME SERVER)[?]?$/);
  const join=exact(/^(?:UNIRSE A LA PARTIDA|JOIN GAME)$/);
  const cancel=exact(/^(?:CANCELAR|CANCEL)$/);
- const serverRows=rows.map(row=>row.text.match(/^#\s*0?([1-5])\s*\[ESP\]\s*WARDOGSSPAIN\.COM$/)).filter(Boolean);
+ const serverRows=[];
+ for(const row of rows){
+  // The number and exact community name identify the destination. Servers may
+  // append a mode after a separator; OCR also reads the vertical bar as I.
+  const match=row.text.match(/^#\s*0?([1-5])\s*\[ESP\]\s*WARDOGSSPAIN\.COM(?:\s+[|I]\s+\S.*)?$/);
+  if(!match)continue;
+  const server=Number(match[1]);
+  const duplicate=serverRows.some(other=>other.server===server&&Math.abs(other.bounds.x-row.bounds.x)<report.width*.015&&Math.abs(other.bounds.y-row.bounds.y)<report.height*.015);
+  if(!duplicate)serverRows.push({server,bounds:row.bounds});
+ }
  const joinModal=header.length===1&&join.length===1&&cancel.length===1&&serverRows.length===1;
  if((afk&&restart)||((afk||restart)&&joinModal))return unknown('Lectura con estados contradictorios.');
  const result=(phase,reason,button=null)=>({phase,reason,inputAllowed:false,activeMatchVerified:false,buttonCandidate:button?{bounds:button.bounds}:null});
  if(next.length===1&&afk)return result('afk_kick','El mensaje visible indica inactividad.',next[0]);
  if(next.length===1&&restart)return result('server_restart','El mensaje visible indica reinicio del servidor.',next[0]);
  if(joinModal){
-  const server=Number(serverRows[0][1]);
+  const server=serverRows[0].server;
   if(expectedServer!==null&&(!Number.isInteger(expectedServer)||expectedServer<1||expectedServer>5))return unknown('Servidor esperado no válido.');
   return {...result(expectedServer!==null&&server!==expectedServer?'join_wrong_server':'join_confirmation',`Confirmación visible para Wardogs Spain #${server}.`,join[0]),server};
  }

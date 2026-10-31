@@ -17,6 +17,14 @@ function app({native=false}={}){
 }
 const waiting=()=>({autoSeeding:{id:'55555555-5555-4555-8555-555555555555',purpose:'break',status:'waiting_game'}});
 
+test('aviso entrada: cubre el recorrido antes del selector y desaparece al terminar o cancelar',()=>{
+ const a=app(),state={now:'2026-10-31T15:00:00Z',entry:{id:'55555555-5555-4555-8555-555555555555',status:'navigating',endAt:'2026-10-31T15:05:00Z'}};
+ a.state(state);a.advance(1200);assert.equal(a.node('focus-alert').hidden,false);assert.match(a.node('focus-detail').textContent,/entrada al servidor/);assert.equal(a.sounds,1);
+ a.state({...state,entry:{...state.entry,status:'completed'}});assert.equal(a.node('focus-alert').hidden,true);
+ a.state({...state,entry:{...state.entry,operatorStopped:true}});a.advance(1400);assert.equal(a.node('focus-alert').hidden,true);assert.equal(a.sounds,1);
+ a.state({...state,entry:{...state.entry,endAt:state.now}});a.advance(1400);assert.equal(a.node('focus-alert').hidden,true);
+});
+
 test('aviso navegador: espera foco, no alarma por población, deduplica sonido y limpia al parar',()=>{
  const a=app();a.state({autoSeeding:{...waiting().autoSeeding,status:'waiting_match'}});a.advance(2000);assert.equal(a.node('focus-alert').hidden,true);assert.equal(a.sounds,0);
  a.state(waiting());a.advance(1199);assert.equal(a.node('focus-alert').hidden,true);a.advance(1);assert.equal(a.node('focus-alert').hidden,false);assert.match(a.node('focus-title').textContent,/PRIMER PLANO/);assert.equal(a.sounds,1);

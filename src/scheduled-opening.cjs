@@ -17,13 +17,15 @@ function createScheduledOpening({load,save,now,resolveTarget,openGame,event}){
   const scheduledAt=madridToUtc(input.madridStart),delay=Date.parse(scheduledAt)-now();
   if(delay<=0||delay>366*86400000)throw Error('Elige una hora futura dentro del próximo año.');
   const target=resolveTarget(input.server,input.expectedJoinId);
+  if(input.team!==undefined&&!['any','blue','red','green'].includes(input.team))throw Error('Elige equipo aleatorio, azul, rojo o verde.');
   let seeding=null;
   if(input.seeding!==undefined&&input.seeding!==null){
    if(typeof input.seeding!=='object'||Array.isArray(input.seeding))throw Error('Ajustes de seeding no válidos.');
    const validated=createAutoSeeding({...input.seeding,server:target.server},now());
    seeding=Object.fromEntries(['durationMinutes','startPlayers','intervalSeconds','holdMs'].map(key=>[key,validated[key]]));
   }
-  update({id:randomUUID(),server:target.server,joinId:target.joinId,scheduledAt,onlyEligible:input.onlyEligible,seeding,status:'scheduled',createdAt:new Date(now()).toISOString(),reason:seeding?'Esperando la hora para preparar seeding. La entrada sigue asistida.':'Esperando la hora de apertura. La entrada al servidor es asistida.',connected:false});
+  const automaticEntry=target.automaticEntry===true;
+  update({id:randomUUID(),server:target.server,joinId:target.joinId,...(input.team?{team:input.team}:{}),automaticEntry,scheduledAt,onlyEligible:input.onlyEligible,seeding,status:'scheduled',createdAt:new Date(now()).toISOString(),reason:automaticEntry?'Esperando la hora para completar la entrada automática'+(seeding?' y preparar seeding.':'.'):seeding?'Esperando la hora para preparar seeding. La entrada sigue asistida.':'Esperando la hora de apertura. La entrada al servidor es asistida.',connected:false});
   event('opening_scheduled',{server:job.server});return view();
  }
  function cancel(){
@@ -41,11 +43,12 @@ function createScheduledOpening({load,save,now,resolveTarget,openGame,event}){
   const id=job.id;
   try{
    const target=resolveTarget(job.server,job.joinId);
+   if(job.automaticEntry===true&&target.automaticEntry!==true)throw Error('El controlador de entrada automática dejó de estar disponible.');
    if(job.onlyEligible&&!target.entryCandidate)throw Error('No hay una oportunidad de seeding confirmada con el perfil vigente.');
    update({...job,status:'launching',requestedAt:new Date(now()).toISOString(),reason:'Solicitando apertura de Wardogs.'});
    await openGame(target,view(),()=>job?.id===id&&job.status==='launching');
    if(job.id!==id||job.status!=='launching')return;
-   update({...job,status:'open_requested',finishedAt:new Date(now()).toISOString(),reason:job.seeding?'Sesión de seeding preparada y apertura solicitada. Completa la entrada y el despliegue.':'Apertura solicitada. Completa la entrada por ID y el despliegue en el juego.'});event('scheduled_open_requested',{server:job.server});
+   update({...job,status:'open_requested',finishedAt:new Date(now()).toISOString(),reason:job.automaticEntry?'Entrada automática solicitada. Consulta sus pasos en la tarjeta de progreso.':job.seeding?'Sesión de seeding preparada y apertura solicitada. Completa la entrada y el despliegue.':'Apertura solicitada. Completa la entrada por ID y el despliegue en el juego.'});event('scheduled_open_requested',{server:job.server});
   }catch(error){
    if(job.id!==id||!['scheduled','launching'].includes(job.status))return;
    update({...job,status:job.status==='launching'?'uncertain':'blocked',finishedAt:new Date(now()).toISOString(),reason:error.message});event('opening_failed',{server:job.server,message:error.message});

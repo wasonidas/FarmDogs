@@ -38,8 +38,23 @@ public static class TeamClickerSelectorFrameTests {
    Check(!TeamClickerSelectorFrame.TryRecognize(image,"orange",Time,out target),"invalid requested colour refused");
    Check(!TeamClickerSelectorFrame.TryRecognize(image,"blue",DateTime.SpecifyKind(Time,DateTimeKind.Local),out target),"non UTC capture refused");
   }
+  foreach(var size in new[]{new Size(1280,720),new Size(1920,1080),new Size(2560,1440),new Size(3440,1440)})using(var image=Selector(size.Width,size.Height)){
+   TeamClickerSelectorSnapshot snapshot;Check(TeamClickerSelectorFrame.TryRecognizeAll(image,Time,out snapshot),"one structural scan acquires all candidates "+size);
+   Check(snapshot.Targets.Count==3&&snapshot.Cards.Count==3&&!snapshot.HeaderBounds.IsEmpty,"shared candidate set is complete");
+   var proof=new TeamClickerAnySelector(image,snapshot);Check(proof.ReadBounds.Width*proof.ReadBounds.Height<size.Width*size.Height*.15,"per-click shared region is a small part of the frame");
+   using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb))Check(proof.Available(region,Time).Count==0,"all-gray cards wait without selecting a closed color");
+   PaintAvailable(image,snapshot.Targets["blue"],Brushes.DeepSkyBlue);
+   using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb)){var choices=proof.Available(region,Time);Check(choices.Count==1&&choices.ContainsKey("blue"),"only currently blue available");}
+   PaintAvailable(image,snapshot.Targets["green"],Brushes.LimeGreen);
+   using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb)){var choices=proof.Available(region,Time);Check(choices.Count==2&&choices.ContainsKey("blue")&&choices.ContainsKey("green"),"multiple currently available colors share one read");}
+   PaintAvailable(image,snapshot.Targets["blue"],Brushes.Black);
+   using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb)){var choices=proof.Available(region,Time);Check(choices.Count==1&&choices.ContainsKey("green"),"closed chosen color is removed while another remains");}
+   using(var graphics=Graphics.FromImage(image))graphics.FillRectangle(Brushes.Black,snapshot.HeaderBounds);
+   using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb))Check(proof.Available(region,Time).Count==0,"colored patch without current selector header cannot authorize HUD clicks");
+  }
   return checks;
  }
+ static void PaintAvailable(Bitmap image,TeamClickerTarget target,Brush brush){using(var graphics=Graphics.FromImage(image))graphics.FillRectangle(brush,target.x-26,target.y-14,52,28);}
  public static int RunEvidence(string directory){
   int began=checks;
   string positive=Path.Combine(directory,"game-frame-b677b759-b15b-4bdf-a78e-68cfdcfe46c2.png");

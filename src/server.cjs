@@ -16,6 +16,8 @@ const {isAdmittedSeedingContinuation}=require('./auto-seeding.cjs');
 const {createActivityMode}=require('./activity-mode.cjs');
 const {createRewardProtection}=require('./reward-protection.cjs');
 const {createTeamClicker}=require('./team-clicker.cjs');
+const {createEntryFlow}=require('./entry-flow.cjs');
+const {createAppUpdate}=require('./app-update.cjs');
 function createObserver(options={}){
 const ROOT=path.resolve(__dirname,'..');
 const DATA=path.resolve(options.dataDir||process.env.WARDOGS_DATA_DIR||path.join(ROOT,'data'));
@@ -25,7 +27,7 @@ const utcNow=options.utcNow||Date.now;
 const monoNow=options.monoNow||(()=>performance.now());
 const isoNow=()=>new Date(utcNow()).toISOString();
 const launcher=options.launcher||createLocalLauncher({root:ROOT});
-let lastLaunch=null;
+let lastLaunch=null,entryOrigin=null,activityMovementId=null,updateShutdownRequested=false,updateShutdownId=null,updateShutdownRequestedAt=null,updateShutdownTimer=null;
 const PUBLIC_URL='https://api.wardogsspain.com/api/portal/public/wardogs-servers';
 const token=randomBytes(24).toString('hex');
 const configFile=path.join(DATA,'settings.json'),runtimeFile=path.join(DATA,'runtime.json');
@@ -41,14 +43,20 @@ function event(kind,detail={}){const item={at:isoNow(),kind,...detail};events.un
 function persist(){atomicJson(runtimeFile,runtime);}
 const rewardProtection=createRewardProtection({load:()=>readJson(path.join(DATA,'reward-protection.json')),save:value=>atomicJson(path.join(DATA,'reward-protection.json'),value),now:utcNow,monoNow,event});
 const teamClicker=createTeamClicker({root:ROOT,dataDir:DATA,now:utcNow,monoNow,event,...options.teamClickerOptions});
+const entryDriver=options.entryDriver||(launcher.availability().automaticEntry===true?require('./game-entry.cjs').createGameEntry({root:ROOT,dataDir:DATA,now:utcNow,monoNow,event,getTarget:(number,id)=>connectionTarget(publicViews(),number,id)}):{available:()=>false,view:()=>null,blocking:()=>false,stop:()=>{}});
+const entryAvailable=()=>entryDriver.available()&&(!!options.entryDriver||launcher.availability().automaticEntry===true);
 const opening=createScheduledOpening({load:()=>readJson(path.join(DATA,'opening-plan.json')),save:job=>atomicJson(path.join(DATA,'opening-plan.json'),job),now:utcNow,event,
  resolveTarget:(number,id)=>{
   const target=connectionTarget(publicViews(),number,id);
   if(runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status)&&runtime.watch.server!==number)throw Error('Detén el seguimiento antes de preparar otro servidor.');
   if(movement().armed===true)throw Error('Detén el movimiento antes de preparar una apertura.');
-  return {...target,entryCandidate:publicViews().find(s=>s.number===number)?.entryCandidate===true};
+  return {...target,entryCandidate:publicViews().find(s=>s.number===number)?.entryCandidate===true,automaticEntry:entryAvailable()};
  },
  openGame:async(target,job,isCurrent)=>{
+  if(entryAvailable()){
+   if(job.seeding&&publicViews().find(s=>s.number===target.server)?.seedingActive!==true)throw Error('El servidor indica seeding desactivado.');
+   await beginEntry(target,{...(job.seeding||{durationMinutes:Math.min(config.durationMinutes,720)}),team:job.team},!!job.seeding,null,isCurrent,{kind:'schedule',ownerId:job.id});return;
+  }
   teamClicker.stop('La programación ha preparado una sesión de seeding.');
   let preparedId=null;
   if(job.seeding){
@@ -63,7 +71,19 @@ const opening=createScheduledOpening({load:()=>readJson(path.join(DATA,'opening-
  }
 });
 const automatic=createAutoSession({root:ROOT,dataDir:DATA,now:utcNow,monoNow,launcher,event,getInputs:(number,purpose)=>purpose==='break'?{movement:movement()}:{server:publicViews().find(s=>s.number===number),account:accountView(),movement:movement()},...(options.screenReader?{reader:options.screenReader}:{})});
-const activity=createActivityMode({load:()=>readJson(path.join(DATA,'activity-mode.json')),save:value=>atomicJson(path.join(DATA,'activity-mode.json'),value),now:utcNow,monoNow,getServers:publicViews,event,
+const entry=createEntryFlow({now:utcNow,monoNow,driver:entryDriver,launcher,teamClicker,automatic,event,getTarget:(number,id)=>connectionTarget(publicViews(),number,id),getInputs:()=>({movement:movement()})});
+async function beginEntry(target,settings={},seeding=true,endAt=null,isCurrent=()=>true,origin={kind:'manual'}){
+ if(!entryAvailable())throw Error('Compila o instala el controlador de entrada automática antes de usar esta función.');
+ if(!isCurrent())return null;
+ const choice=teamClicker.view(),defaultTeam=seeding&&choice.automaticAnyTeamAvailable===true?'any':choice.team;
+ const pending=entry.start({server:target.server,joinId:target.joinId,team:settings.team||defaultTeam,seeding,durationMinutes:settings.durationMinutes??config.durationMinutes,startPlayers:settings.startPlayers??20,intervalSeconds:settings.intervalSeconds??60,holdMs:settings.holdMs??500,initialFocus:settings.initialFocus??'driver'},{endAt});
+ entryOrigin={...origin,entryId:entry.view()?.id};
+ const prepared=await pending;
+ if(!isCurrent()){if(entry.view()?.id===prepared.id)entry.stop('La programación se canceló antes de completar la entrada.');return prepared;}
+ lastLaunch={...target,kind:'automatic_entry',requestedAt:isoNow(),status:'entry_requested',entryId:prepared.id};
+ return prepared;
+}
+const activity=createActivityMode({load:()=>readJson(path.join(DATA,'activity-mode.json')),save:value=>atomicJson(path.join(DATA,'activity-mode.json'),value),now:utcNow,monoNow,getServers:publicViews,event,automaticEntry:entryAvailable,
  limitEndAt:endAt=>{const guard=readJson(path.join(DATA,'movement-run.json'));if(guard&&guard.dayMadrid===new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(utcNow()))){const limit=Date.parse(guard.stopAtUtc);if(!Number.isFinite(limit)||limit<=utcNow())throw Error('Se alcanzó el límite de hoy.');if(limit<Date.parse(endAt))return guard.stopAtUtc;}return endAt;},
  prepare:async(target,budget,isCurrent)=>{
   const fresh=connectionTarget(publicViews(),target.server,target.joinId);
@@ -71,7 +91,12 @@ const activity=createActivityMode({load:()=>readJson(path.join(DATA,'activity-mo
   if(['scheduled','launching'].includes(opening.view()?.status))throw Error('Hay una apertura programada activa.');
   if(runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))throw Error('Hay un seguimiento activo.');
   if(!isCurrent())return;
+  if(entryAvailable()){
+   config={...config,selectedServer:fresh.server};atomicJson(configFile,config);
+   await beginEntry(fresh,{durationMinutes:budget.remainingMinutes,...budget.settings},true,budget.sessionEndAt,isCurrent,{kind:'activity',ownerId:activity.view()?.id});return;
+  }
   const prepared=await automatic.start({server:fresh.server,durationMinutes:budget.remainingMinutes,...budget.settings,purpose:'seeding'},{endAt:budget.sessionEndAt});
+  activityMovementId=prepared.id;
   if(!isCurrent()){if(automatic.view()?.id===prepared.id)automatic.stop('Vigilancia detenida antes de abrir el juego.');return;}
   const motion=movement();
   if(automatic.view()?.id!==prepared.id||!automatic.active()||[prepared.id,activity.view()?.id].includes(motion.autoOperatorStopped)){
@@ -83,6 +108,22 @@ const activity=createActivityMode({load:()=>readJson(path.join(DATA,'activity-mo
   catch(error){if(automatic.view()?.id===prepared.id)automatic.stop('No se pudo abrir Wardogs por actividad.','error');throw error;}
  }
 });
+function updateBusy(){
+ const manifest=readJson(path.join(ROOT,'manifest.json'));
+ if(manifest?.application!=='FarmDogs'||manifest?.format!=='wardogs-portable-v1'||fs.existsSync(path.join(ROOT,'.git')))return {busy:true,reason:'Esta es la copia de desarrollo. Las actualizaciones se instalan en el portable.'};
+ const motion=movement(),reward=rewardProtection.view();
+ if(entry.active()||entry.view()?.cleanupPending||teamClicker.blocking()||automatic.active()||motion.armed===true||motion.busy===true||activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))return {busy:true,reason:'La actualización esperará a que terminen los automatismos y programaciones.'};
+ if(reward.attempts?.some(attempt=>attempt.status==='reserved'))return {busy:true,reason:'La protección de premios está terminando una operación.'};
+ return {busy:false,reason:'FarmDogs está inactivo.'};
+}
+async function prepareUpdateShutdown({phase,plan}){
+ if(phase==='prepare')return {processes:[{pid:process.pid,executablePath:process.execPath}]};
+ if(phase!=='commit')throw Error('Fase de actualización no válida.');
+ const at=utcNow();atomicJson(path.join(DATA,'app-shutdown.json'),{format:'farmdogs-app-shutdown-v1',id:plan.id,root:ROOT,servicePid:process.pid,issuedAt:new Date(at).toISOString(),expiresAt:new Date(at+5000).toISOString()});
+ updateShutdownRequested=true;updateShutdownId=plan.id;updateShutdownRequestedAt=new Date(at).toISOString();
+ updateShutdownTimer=setTimeout(()=>{void close().finally(()=>{if(require.main===module)process.exit(0);});},500);
+}
+const updater=options.appUpdate||createAppUpdate({root:ROOT,dataDir:DATA,now:utcNow,event,getBusy:updateBusy,prepareShutdown:options.prepareUpdateShutdown||prepareUpdateShutdown,...options.updateOptions});
 function activityCommand(kind,job){
  if(!job)return;const at=utcNow();atomicJson(path.join(DATA,'movement-command.json'),{format:'wardogs-automatic-movement-v1',id:randomUUID(),sessionId:job.id,kind,issuedAt:new Date(at).toISOString(),expiresAt:new Date(at+3000).toISOString(),endAt:job.endAt,intervalSeconds:job.seeding.intervalSeconds,holdMs:job.seeding.holdMs,directions:'AD',cancelled:kind==='stop',reason:job.reason});
 }
@@ -149,11 +190,15 @@ function state(){
  const account=accountView(),motion=movement(),views=publicViews(),autoSeeding=automatic.view();
  const seedingContinuity=Object.fromEntries(views.map(server=>[server.number,isAdmittedSeedingContinuation(server,account)]));
  const diagnostics=Object.fromEntries([1,2,3,4,5].map(selectedServer=>[selectedServer,sessionDiagnostics({config:{selectedServer},account,movement:motion,screen:autoSeeding?.screen},{now:utcNow()})]));
- return {appId:'wardogs-seeding-local-v1',capabilities:{standaloneMovement:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools:launcher.availability(),lastLaunch,opening:opening.view(),autoSeeding,activity:activity.view(),rewards:rewardProtection.view(),teamClicker:teamClicker.view(),diagnostics};
+ const occupancy=updateBusy(),update={...updater.view(),installBlocked:occupancy.busy,installBlockedReason:occupancy.reason,shutdownRequested:updateShutdownRequested,shutdownId:updateShutdownId,shutdownRequestedAt:updateShutdownRequestedAt};
+ return {appId:'wardogs-seeding-local-v1',installationRoot:ROOT,version:require('../package.json').version,capabilities:{standaloneMovement:true,automaticEntry:entryAvailable(),appUpdates:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools:launcher.availability(),lastLaunch,opening:opening.view(),autoSeeding,entry:entry.view(),activity:activity.view(),rewards:rewardProtection.view(),teamClicker:teamClicker.view(),diagnostics,update};
 }
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 async function body(req){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>65536)throw Error('Solicitud demasiado grande.');}return JSON.parse(text||'{}');}
-function requireSeedingPurpose(input){if(input?.purpose!==undefined&&input.purpose!=='seeding')throw Error('Usa Movimiento temporal para una ausencia; esta función prepara seeding.');}
+function requireSeedingPurpose(input){
+ if(input?.purpose!==undefined&&input.purpose!=='seeding')throw Error('Usa Movimiento temporal para una ausencia; esta función prepara seeding.');
+ if(input?.presenceMode==='entry'||input?.trustedEntry!==undefined||input?.entryProof!==undefined||input?.entryId!==undefined)throw Error('La comprobación de entrada solo puede proceder del flujo automático, no de esta solicitud.');
+}
 const server=http.createServer(async(req,res)=>{
  try{
   if(req.headers.host!==`127.0.0.1:${PORT}`&&req.headers.host!==`localhost:${PORT}`){send(res,403,{error:'Host no admitido'});return;}
@@ -165,7 +210,27 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='POST'){
    if(req.headers['x-session-token']!==token){send(res,403,{error:'Recarga la página antes de cambiar el seguimiento.'});return;}
    const input=await body(req);
+   if(updater.view().status==='installing'&&!route.endsWith('/stop')&&!['/api/opening/cancel','/api/account/disconnect','/api/rewards/disconnect','/api/rewards/result'].includes(route))throw Error('FarmDogs está instalando una actualización. Espera a que vuelva a abrirse.');
+   if(route==='/api/update/config'){updater.setEnabled(input.enabled);send(res,200,state());return;}
+   if(route==='/api/update/check'){await updater.check();send(res,200,state());return;}
+   if(route==='/api/update/install'){const occupancy=updateBusy();if(occupancy.busy)throw Error(occupancy.reason);await updater.install();send(res,200,state());return;}
+   if(route==='/api/entry/start'){
+    requireSeedingPurpose(input);
+    if(entry.active()||automatic.active()||movement().armed===true||movement().busy===true||teamClicker.blocking())throw Error('Detén la sesión anterior antes de entrar automáticamente.');
+    if(activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))throw Error('Detén las programaciones y seguimientos antes de iniciar otra entrada.');
+    if(input.seeding!==undefined&&typeof input.seeding!=='boolean')throw Error('Indica si quieres iniciar seeding después de entrar.');
+    const target=connectionTarget(publicViews(),input.server,input.expectedJoinId);
+    const seeding=input.seeding!==false;
+    if(seeding&&publicViews().find(s=>s.number===target.server)?.seedingActive!==true)throw Error('El servidor no admite nuevas sesiones de seeding. Puedes elegir solo entrar.');
+    await beginEntry(target,input,seeding);
+    config={...config,selectedServer:target.server};atomicJson(configFile,config);send(res,200,state());return;
+   }
+   if(route==='/api/entry/stop'){
+    if(input.expectedSessionId!==undefined&&input.expectedSessionId!==entry.view()?.id)throw Error('La entrada cambió; no se detuvo otra sesión.');
+    entry.stop('Entrada detenida por el usuario.');send(res,200,state());return;
+   }
    if(route==='/api/team-clicker/config'){
+    if(entry.active())throw Error('Detén la entrada automática antes de cambiar la selección de equipo.');
     if(input.enabled&&(automatic.active()||movement().armed===true||movement().busy===true||activity.active()||['scheduled','launching'].includes(opening.view()?.status)))throw Error('Detén el seeding y sus programaciones antes de preparar el autoclic. Después de elegir equipo podrás iniciar seeding.');
     await teamClicker.configure(input);send(res,200,state());return;
    }
@@ -173,7 +238,7 @@ const server=http.createServer(async(req,res)=>{
    if(route==='/api/team-clicker/calibrate'){teamClicker.calibrate(input);send(res,200,state());return;}
    if(route==='/api/team-clicker/stop'){
     if(input.expectedSessionId!==undefined&&input.expectedSessionId!==teamClicker.view().sessionId)throw Error('La sesión de autoclic cambió; no se detuvo la nueva sesión.');
-    teamClicker.stop();send(res,200,state());return;
+    if(entry.active())entry.stop('Selección detenida por el usuario.');else teamClicker.stop();send(res,200,state());return;
    }
    if(route==='/api/rewards/config'){rewardProtection.configure(input);send(res,200,state());return;}
    if(route==='/api/rewards/observe'){if(!rewardProtection.observe(input))throw Error('Lectura de retos no admitida o desactualizada.');send(res,200,state());return;}
@@ -183,6 +248,7 @@ const server=http.createServer(async(req,res)=>{
    if(route==='/api/rewards/result'){if(!rewardProtection.result(input))throw Error('Resultado de cobro no admitido.');send(res,200,state());return;}
    if(route==='/api/activity/start'){
     requireSeedingPurpose(input);requireSeedingPurpose(input.seeding);
+    if(entry.active())throw Error('Detén la entrada automática antes de vigilar actividad.');
     if(teamClicker.blocking())throw Error('Apaga el autoclic de equipo antes de iniciar seeding y espera a que se detenga.');
     if(!launcher.availability().automaticMovement||!launcher.availability().game)throw Error('El modo por actividad necesita el controlador y Steam en Windows.');
     if(automatic.active()||movement().armed===true||movement().busy===true)throw Error('Detén la sesión anterior antes de vigilar actividad.');
@@ -191,8 +257,13 @@ const server=http.createServer(async(req,res)=>{
     try{activityCommand('watch',watching);await launcher.openMovementBackground();}catch(error){if(activity.view()?.id===watching.id)try{stopActivity('No se pudo preparar el controlador para F8.');}catch{}throw error;}
     send(res,200,state());return;
    }
-   if(route==='/api/activity/stop'){stopActivity();if(automatic.view()?.purpose!=='break')automatic.stop();send(res,200,state());return;}
+   if(route==='/api/activity/stop'){
+    const ownedEntry=entryOrigin?.kind==='activity'&&entryOrigin.entryId===entry.view()?.id&&entryOrigin.ownerId===activity.view()?.id;
+    stopActivity();if(ownedEntry)entry.stop('Vigilancia detenida por el usuario.');
+    if(automatic.view()?.id===activityMovementId)automatic.stop();send(res,200,state());return;
+   }
    if(route==='/api/movement/start'){
+    if(entry.active())throw Error('Detén la entrada automática antes de activar movimiento temporal.');
     if(input.purpose!==undefined&&input.purpose!=='break')throw Error('Esta función prepara movimiento temporal para una ausencia.');
     if(teamClicker.blocking())throw Error('Cancela la selección de equipo y espera a que se detenga antes de activar movimiento.');
     if(automatic.active()||movement().armed===true||movement().busy===true)throw Error('Detén el movimiento o seeding anterior antes de iniciar otra sesión.');
@@ -208,6 +279,7 @@ const server=http.createServer(async(req,res)=>{
    }
    if(route==='/api/seeding/start'){
     requireSeedingPurpose(input);
+    if(entry.active())throw Error('Ya hay una entrada automática activa.');
     if(teamClicker.blocking())throw Error('Apaga el autoclic de equipo antes de iniciar seeding y espera a que se detenga.');
     if(activity.active())throw Error('Detén la vigilancia por actividad antes de elegir una sesión manual.');
     const target=connectionTarget(publicViews(),input.server,input.expectedJoinId);
@@ -216,15 +288,19 @@ const server=http.createServer(async(req,res)=>{
     if(movement().armed===true||movement().busy===true)throw Error('Detén el movimiento anterior antes de iniciar seeding.');
     if(['scheduled','launching'].includes(opening.view()?.status))throw Error('Cancela la apertura programada antes de iniciar seeding.');
     if(runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status)&&runtime.watch.server!==target.server)throw Error('Detén el seguimiento anterior antes de cambiar de servidor.');
+    if(!manualPresence&&!continuing&&entryAvailable()){
+     await beginEntry(target,input,true);config={...config,selectedServer:target.server};atomicJson(configFile,config);send(res,200,state());return;
+    }
     const prepared=await automatic.start(input);
     if(automatic.view()?.id!==prepared.id||!automatic.active()){send(res,200,state());return;}
     if(!manualPresence&&!continuing){try{await launcher.openGame();}catch(error){if(automatic.view()?.id===prepared.id)automatic.stop('No se pudo solicitar abrir Wardogs.','error');throw error;}}
     config={...config,selectedServer:target.server};atomicJson(configFile,config);
     if(!manualPresence&&!continuing)lastLaunch={...target,kind:'game',requestedAt:isoNow(),status:'launch_requested'};send(res,200,state());return;
    }
-   if(route==='/api/seeding/stop'){teamClicker.stop();stopActivity();if(opening.view()?.status==='scheduled')opening.cancel();else if(opening.view()?.status==='launching')opening.interrupt();automatic.stop();send(res,200,state());return;}
+   if(route==='/api/seeding/stop'){entry.stop('Sesión detenida por el usuario.');teamClicker.stop();stopActivity();if(opening.view()?.status==='scheduled')opening.cancel();else if(opening.view()?.status==='launching')opening.interrupt();automatic.stop();send(res,200,state());return;}
    if(route==='/api/opening/schedule'){
     requireSeedingPurpose(input);requireSeedingPurpose(input.seeding);
+    if(entry.active())throw Error('Detén la entrada automática antes de programar otra sesión.');
     if(teamClicker.blocking())throw Error('Apaga el autoclic de equipo antes de programar seeding.');
     if(activity.active())throw Error('Detén la vigilancia por actividad antes de programar otra apertura.');
     if(automatic.active())throw Error('Detén la sesión de seeding antes de programar otra apertura.');
@@ -236,6 +312,7 @@ const server=http.createServer(async(req,res)=>{
    }
    if(route==='/api/opening/cancel'){opening.cancel();send(res,200,state());return;}
    if(route==='/api/open/game'){
+    if(entry.active())throw Error('Ya hay una entrada automática activa.');
     if(activity.active())throw Error('Detén la vigilancia por actividad antes de abrir manualmente.');
     if(['scheduled','launching'].includes(opening.view()?.status))throw Error('Cancela la apertura programada antes de abrir manualmente.');
     const target=connectionTarget(publicViews(),input.server,input.expectedJoinId);
@@ -243,11 +320,16 @@ const server=http.createServer(async(req,res)=>{
     const watching=runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled');
     if(watching&&runtime.watch.server!==target.server)throw Error('Detén el seguimiento antes de preparar la entrada a otro servidor.');
     if(config.selectedServer!==target.server){config={...config,selectedServer:target.server};atomicJson(configFile,config);event('config_saved');}
+    if(entryAvailable()){
+     if(automatic.active()||movement().armed===true||movement().busy===true||teamClicker.blocking())throw Error('Detén los automatismos anteriores antes de entrar a otro servidor.');
+     await beginEntry(target,{team:input.team,durationMinutes:Math.min(config.durationMinutes,720)},false);send(res,200,state());return;
+    }
     await launcher.openGame();
     lastLaunch={...target,kind:'game',requestedAt:isoNow(),status:'launch_requested'};
     event('game_open_requested',{server:target.server});send(res,200,state());return;
    }
    if(route==='/api/open/movement'){
+    if(entry.active())entry.stop('Entrada detenida para revisar las herramientas.');
     if(teamClicker.blocking())throw Error('Apaga el autoclic de equipo antes de abrir las pruebas de movimiento.');
     stopActivity('Vigilancia detenida para revisar las herramientas.');
     if(automatic.active())automatic.stop('Sesión detenida para revisar las herramientas de prueba.');
@@ -269,6 +351,7 @@ const server=http.createServer(async(req,res)=>{
     send(res,200,state());return;
    }
    if(route==='/api/config'){
+    if(entry.active())throw Error('Detén la entrada automática antes de cambiar los ajustes.');
     if(activity.active())throw Error('Detén la vigilancia por actividad antes de cambiar los ajustes.');
     if(automatic.active())throw Error('Detén el seeding antes de cambiar los ajustes.');
     if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))throw Error('Detén la observación antes de editar su configuración.');
@@ -279,6 +362,7 @@ const server=http.createServer(async(req,res)=>{
     config={selectedServer:input.selectedServer,durationMinutes:input.durationMinutes,profiles};atomicJson(configFile,config);event('config_saved');send(res,200,state());return;
    }
    if(route==='/api/watch/start'){
+    if(entry.active())throw Error('Detén la entrada automática antes de iniciar un seguimiento.');
     if(automatic.active())throw Error('Detén la sesión de movimiento antes de iniciar un seguimiento.');
     if(activity.active())throw Error('Detén la vigilancia por actividad antes de iniciar otro seguimiento.');
     if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))throw Error('Ya hay una observación activa o programada.');
@@ -300,11 +384,12 @@ let resolveReady,rejectReady;
 const ready=new Promise((resolve,reject)=>{resolveReady=resolve;rejectReady=reject;});
 server.on('error',error=>{clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);rejectReady(error);});
 function tickClicker(){try{teamClicker.tick();}catch(error){try{teamClicker.stop('Error del controlador de autoclic.');}catch{}event('team_clicker_error',{message:error.message});}}
+async function tickEntry(){try{await entry.tick();}catch(error){try{entry.stop('Error local de la entrada automática.','error');}catch{}event('entry_error',{message:error.message});}}
 const clickerTimer=setInterval(tickClicker,100);
-const refreshTimer=setInterval(refreshServers,1000),watchTimer=setInterval(()=>{tickWatch();automatic.tick();tickActivity().catch(error=>event('activity_error',{message:error.message}));opening.tick().catch(error=>event('opening_error',{message:error.message}));},1000);
+const refreshTimer=setInterval(refreshServers,1000),watchTimer=setInterval(()=>{tickWatch();void tickEntry();automatic.tick();tickActivity().catch(error=>event('activity_error',{message:error.message}));opening.tick().catch(error=>event('opening_error',{message:error.message}));if(options.autoUpdate!==false)void updater.tick();},1000);
 server.listen(PORT,'127.0.0.1',async()=>{PORT=server.address().port;atomicJson(configFile,config);persist();atomicJson(path.join(DATA,'service.json'),{pid:process.pid,port:PORT,url:`http://127.0.0.1:${PORT}`,startedAt:isoNow()});await refreshServers();resolveReady(`http://127.0.0.1:${PORT}`);});
-function close(){if(closePromise)return closePromise;teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
-return {ready,close,tick:async()=>{tickClicker();tickWatch();automatic.tick();await tickActivity();await opening.tick();},refresh:refreshServers,state};
+function close(){if(closePromise)return closePromise;updater.close();entry.close();teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);clearTimeout(updateShutdownTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
+return {ready,close,tick:async()=>{tickClicker();tickWatch();await tickEntry();automatic.tick();await tickActivity();await opening.tick();if(options.autoUpdate!==false)await updater.tick();},refresh:refreshServers,state};
 }
 module.exports={createObserver};
 if(require.main===module){const service=createObserver();service.ready.then(url=>console.log(`Observador disponible en ${url}`)).catch(error=>{console.error(error.message);process.exitCode=1;});for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>service.close().then(()=>process.exit(0)));}

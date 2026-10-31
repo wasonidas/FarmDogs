@@ -11,8 +11,9 @@
  function beep(){if(!sound||bridge)return;audioReady();if(!audio)return;try{const oscillator=audio.createOscillator(),gain=audio.createGain(),at=audio.currentTime;oscillator.type='sine';oscillator.frequency.setValueAtTime(740,at);gain.gain.setValueAtTime(0,at);gain.gain.linearRampToValueAtTime(.14,at+.025);gain.gain.linearRampToValueAtTime(0,at+.25);oscillator.connect(gain);gain.connect(audio.destination);oscillator.start(at);oscillator.stop(at+.27);}catch{}}
  function fallbackIntent(){
   if(!state||clock()-stateAt>5000||!document.hasFocus())return null;
-  const a=state.autoSeeding,c=state.teamClicker;
+  const a=state.autoSeeding,c=state.teamClicker,e=state.entry;
   if(a&&['waiting_game','starting_movement','moving'].includes(a.status))return {key:'movement:'+a.id,title:'PON WARDOGS EN PRIMER PLANO',detail:a.purpose==='break'?'Tu anti-AFK espera el juego desplegado y con las manos vacías.':'El movimiento de seeding necesita el juego desplegado y con las manos vacías.'};
+  if(e&&!e.operatorStopped&&['opening','waiting_game','navigating','joining','choosing_team','deploying','starting_seeding'].includes(e.status)&&Date.parse(e.endAt)>Date.parse(state.now))return {key:'entry:'+e.id,title:'PON WARDOGS EN PRIMER PLANO',detail:'FarmDogs está completando la entrada al servidor y al equipo elegido. Deja el juego delante; F8 o Detener cancelan.'};
   if(c?.enabled)return {key:'team:'+c.sessionId,title:'PON WARDOGS EN PRIMER PLANO',detail:'La selección automática necesita ver el selector de facciones. Vuelve al juego para que pueda elegir tu equipo.'};
   return null;
  }

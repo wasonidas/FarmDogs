@@ -29,10 +29,10 @@ internal static class GameFrameCapture
     {
         // This affects only this helper's coordinate interpretation.
         if (!SetProcessDPIAware()) throw new InvalidOperationException("No se pudo establecer la escala del lector.");
-        var window = GetForegroundWindow();
-        uint pid; GetWindowThreadProcessId(window, out pid);
-        if (window == IntPtr.Zero || pid == 0 || Process.GetProcessById((int)pid).ProcessName != "WardogsClient-Win64-Shipping")
+        var resolved=GameWindowResolver.ResolveForeground();
+        if(resolved==null)
             throw new InvalidOperationException("game_not_foreground");
+        var window=new IntPtr(resolved.Window);uint pid=(uint)resolved.Pid;
         Rect client; var origin = new Point();
         if (!GetClientRect(window, out client) || !ClientToScreen(window, ref origin)) throw new InvalidOperationException("game_bounds_unavailable");
         var bounds = new Rectangle(origin.X, origin.Y, client.Right-client.Left, client.Bottom-client.Top);
@@ -44,9 +44,9 @@ internal static class GameFrameCapture
         using (var graphics = Graphics.FromImage(bitmap))
         {
             graphics.CopyFromScreen(bounds.Location,System.Drawing.Point.Empty,bounds.Size,CopyPixelOperation.SourceCopy);
-            uint afterPid; GetWindowThreadProcessId(GetForegroundWindow(),out afterPid);
+            var afterGame=GameWindowResolver.ResolveForeground();
             Rect afterClient; var afterOrigin = new Point();
-            if (GetForegroundWindow()!=window || afterPid!=pid || !GetClientRect(window,out afterClient) || !ClientToScreen(window,ref afterOrigin) ||
+            if (afterGame==null||afterGame.Window!=window.ToInt64()||afterGame.Pid!=pid||!GetClientRect(window,out afterClient) || !ClientToScreen(window,ref afterOrigin) ||
                 afterOrigin.X!=origin.X || afterOrigin.Y!=origin.Y || afterClient.Right!=client.Right || afterClient.Bottom!=client.Bottom || timer.ElapsedMilliseconds>2000)
                 throw new InvalidOperationException("game_changed_during_capture");
             frame.CaptureFinishedAt=DateTime.UtcNow.ToString("o");

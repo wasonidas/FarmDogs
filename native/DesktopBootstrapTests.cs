@@ -30,6 +30,12 @@ internal static class DesktopBootstrapTests
             using(var handler=new FakeHttp())using(var client=new HttpClient(handler))
             {
                 Check(DesktopBootstrap.ProbeService(client,"http://fixture").GetAwaiter().GetResult(),"Identidad propia rechazada.");
+                handler.Body=new JavaScriptSerializer().Serialize(new {appId="wardogs-seeding-local-v1",installationRoot="C:\\Games\\FarmDogs"});
+                Check(DesktopBootstrap.ProbeService(client,"http://fixture","c:/games/FarmDogs/").GetAwaiter().GetResult(),"Ruta propia normalizada rechazada.");
+                Reject(()=>DesktopBootstrap.ProbeService(client,"http://fixture","C:\\Other\\FarmDogs").GetAwaiter().GetResult(),"Se reutilizó otra instalación.");
+                handler.Body="{\"appId\":\"wardogs-seeding-local-v1\"}";Reject(()=>DesktopBootstrap.ProbeService(client,"http://fixture","C:\\Games\\FarmDogs").GetAwaiter().GetResult(),"Se aceptó un servicio sin instalación.");
+                Check(!DesktopBootstrap.SameRoot("C:\\Games\\FarmDogs","relative"),"Una ruta relativa se confundió con la instalación.");
+                Check(!DesktopBootstrap.SameRoot("C:\\Games\\FarmDogs","C:Games\\FarmDogs"),"Una ruta relativa a unidad se confundió con la instalación.");
                 handler.Body="{\"appId\":\"other\"}";Reject(()=>DesktopBootstrap.ProbeService(client,"http://fixture").GetAwaiter().GetResult(),"Servicio ajeno aceptado.");
                 handler.Body="not-json";Reject(()=>DesktopBootstrap.ProbeService(client,"http://fixture").GetAwaiter().GetResult(),"JSON inválido aceptado.");
                 handler.Status=HttpStatusCode.Redirect;Reject(()=>DesktopBootstrap.ProbeService(client,"http://fixture").GetAwaiter().GetResult(),"Redirección aceptada.");
@@ -57,7 +63,7 @@ internal static class DesktopBootstrapTests
         string url="http://127.0.0.1:"+port;bool started=false;
         Directory.CreateDirectory(Path.Combine(root,"src"));
         // A real loopback response slower than 1500ms must survive a cold start.
-        File.WriteAllText(Path.Combine(root,"src","server.cjs"),"const http=require('node:http');let cold=true;const server=http.createServer((q,r)=>{const reply=()=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify({appId:'wardogs-seeding-local-v1'}));if(q.url==='/test-stop')server.close(()=>process.exit(0));};if(q.url==='/api/state'&&cold){cold=false;setTimeout(reply,2000);}else reply();});server.listen(Number(process.env.WARDOGS_PORT),'127.0.0.1');");
+        File.WriteAllText(Path.Combine(root,"src","server.cjs"),"const http=require('node:http');let cold=true;const server=http.createServer((q,r)=>{const reply=()=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify({appId:'wardogs-seeding-local-v1',installationRoot:process.cwd()}));if(q.url==='/test-stop')server.close(()=>process.exit(0));};if(q.url==='/api/state'&&cold){cold=false;setTimeout(reply,2000);}else reply();});server.listen(Number(process.env.WARDOGS_PORT),'127.0.0.1');");
         try
         {
             started=DesktopBootstrap.EnsureObserver(root,node,url).GetAwaiter().GetResult();Check(started,"No inició el servicio aislado.");

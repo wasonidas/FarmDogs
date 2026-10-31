@@ -20,6 +20,8 @@ internal sealed class RewardBridge
     private DateTime since,nextRead=DateTime.MinValue;
     private int generation;
     private bool handling;
+    public string BeginClose(){generation++;string previous=commandId;Reset();return previous;}
+    public async Task AbortForCloseAsync(){await AbortBrowserAsync();}
 
     public RewardBridge(HttpClient client,string appRoot,string id,Func<CoreWebView2> core,Func<bool> isReady,Action<string> report)
     {
@@ -116,6 +118,11 @@ internal sealed class RewardBridge
     public async Task CancelAsync()
     {
         generation++;string previous=commandId;Reset();
+        await AbortBrowserAsync();
+        if(previous!=null)await SendResult(previous,"uncertain");
+    }
+    private async Task AbortBrowserAsync()
+    {
         try
         {
             var core=getCore();if(core!=null&&DesktopProtocol.IsAccount(core.Source))
@@ -125,7 +132,6 @@ internal sealed class RewardBridge
             }
         }
         catch{}
-        if(previous!=null)await SendResult(previous,"uncertain");
     }
     public async Task DisconnectAsync()
     {

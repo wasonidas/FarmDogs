@@ -1,8 +1,8 @@
 {
   "name": "farmdogs",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "FarmDogs: servidores, seeding, equipos y VIP de Wardogs",
   "engines": { "node": ">=24" },
-  "scripts": { "start": "node src/server.cjs", "test": "node --test", "build:movement": "node tools/build-movement.cjs", "build:team-clicker": "node tools/build-team-clicker.cjs", "build:reader": "node tools/build-image-text.cjs", "build:desktop": "node tools/build-desktop.cjs", "build:launcher": "node tools/build-launcher.cjs", "package:portable": "node tools/package-portable.cjs", "desktop": "node tools/open-desktop.cjs" }
+  "scripts": { "start": "node src/server.cjs", "test": "node tools/run-tests.cjs", "build:movement": "node tools/build-movement.cjs", "build:team-clicker": "node tools/build-team-clicker.cjs", "build:entry": "node tools/build-entry.cjs", "build:updater": "node tools/build-updater.cjs", "build:reader": "node tools/build-image-text.cjs", "build:desktop": "node tools/build-desktop.cjs", "build:launcher": "node tools/build-launcher.cjs", "package:portable": "node tools/package-portable.cjs", "desktop": "node tools/open-desktop.cjs" }
 }

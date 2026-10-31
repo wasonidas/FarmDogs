@@ -10,19 +10,23 @@ class TeamClickerTests {
  static int checks;
  static void Check(bool value,string message){checks++;if(!value)throw new Exception(message);}
  static DateTime time=new DateTime(2026,10,31,10,0,0,DateTimeKind.Utc);
- sealed class FakePlatform:ITeamClickerPlatform,ITeamClickerButtonInput {
+ sealed class FakePlatform:ITeamClickerPlatform,ITeamClickerAnyPlatform,ITeamClickerButtonInput {
   public bool Alive=true,Modifiers,Patch=true,FailDown,FailClick,FailCapture,DarkTarget;
-  public Action OnCapture;
+  public Action OnCapture,OnAvailable,AfterDown;
+  public string[] AvailableTeams={"blue","red","green"};
+  public readonly List<int> ClickedX=new List<int>();
   public string CapturedTeam;
   public TeamClickerFrame Frame=new TeamClickerFrame {Pid=123,Window=456,Width=1920,Height=1080};
-  public int Clicks,Captures,PatchCalls;
+  public int Clicks,Captures,PatchCalls,AnyCaptures,AvailabilityReads;
   public List<bool> Buttons=new List<bool>();
   public bool ServiceAlive(int p){return Alive;}
   public bool ModifiersDown(){return Modifiers;}
   public TeamClickerFrame ForegroundGame(){return Frame;}
   public TeamClickerTarget CaptureTarget(TeamClickerFrame f,DateTime now,string selectedTeam){Captures++;CapturedTeam=selectedTeam;if(OnCapture!=null)OnCapture();if(FailCapture)throw new InvalidOperationException("Selector missing or ambiguous");var target=Target();if(DarkTarget)target.signature=new int[45];return target;}
+  public Dictionary<string,TeamClickerTarget> CaptureAnyTargets(TeamClickerFrame f,DateTime now){AnyCaptures++;if(OnCapture!=null)OnCapture();if(FailCapture)throw new InvalidOperationException("Selector missing or ambiguous");var values=new Dictionary<string,TeamClickerTarget>();int x=100;foreach(string team in new[]{"blue","red","green"}){var target=Target();target.x=x;target.patchLeft=x-32;values.Add(team,target);x+=200;}return values;}
+  public Dictionary<string,TeamClickerTarget> AvailableTargets(TeamClickerFrame f,DateTime now){AvailabilityReads++;if(OnAvailable!=null)OnAvailable();var values=new Dictionary<string,TeamClickerTarget>();foreach(string team in AvailableTeams){var target=Target();target.x=team=="blue"?100:team=="red"?300:500;target.patchLeft=target.x-32;values.Add(team,target);}return values;}
   public bool PatchMatches(TeamClickerFrame f,TeamClickerTarget t){PatchCalls++;return Patch;}
-  public void Click(TeamClickerFrame f,TeamClickerTarget t){Clicks++;if(FailClick)throw new Exception("Input rejected");TeamClickerButton.Click(this);}
+  public void Click(TeamClickerFrame f,TeamClickerTarget t){Clicks++;ClickedX.Add(t.x);if(FailClick)throw new Exception("Input rejected");TeamClickerButton.Click(this,AfterDown);}
   public void Button(bool down){Buttons.Add(down);if(down&&FailDown)throw new Exception("Down rejected");}
  }
  sealed class FakeHotkeyRegistration:ITeamClickerHotkeyRegistration {
@@ -32,6 +36,23 @@ class TeamClickerTests {
   public readonly List<uint> Flags=new List<uint>();
   public bool Register(int id,uint modifiers,uint key){Registered.Add(id);Flags.Add(modifiers);if(key==FailedKey)return false;Active.Add(id,key);return true;}
   public void Unregister(int id){Unregistered.Add(id);Active.Remove(id);}
+ }
+ static void ButtonPulseTests(){
+  var button=new FakePlatform();bool held=false;
+  TeamClickerButton.Click(button,()=>{held=true;Check(button.Buttons.SequenceEqual(new[]{true}),"Hold/guard runs after down and before up");});
+  Check(held&&button.Buttons.SequenceEqual(new[]{true,false}),"Successful hold releases button exactly once");
+  foreach(Exception failure in new Exception[]{new InvalidOperationException("Wait interrupted"),new TeamClickerOperatorStopException(),new InvalidOperationException("Focus changed"),new InvalidOperationException("Point obscured"),new InvalidOperationException("Modifier pressed")}){
+   button=new FakePlatform();Exception observed=null;try{TeamClickerButton.Click(button,()=>{Check(button.Buttons.SequenceEqual(new[]{true}),"Failure guard executes while button is held");throw failure;});}catch(Exception error){observed=error;}
+   Check(Object.ReferenceEquals(observed,failure),"Pulse failure propagates to engine without being swallowed");Check(button.Buttons.SequenceEqual(new[]{true,false}),"Wait/stop/focus/point/modifier failure still releases button");
+  }
+  button=new FakePlatform{FailDown=true};bool waited=false;try{TeamClickerButton.Click(button,()=>waited=true);}catch{}Check(!waited&&button.Buttons.SequenceEqual(new[]{true,false}),"Rejected down skips hold but still attempts up");
+  foreach(bool stop in new[]{true,false}){
+   var fake=new FakePlatform();var engine=Engine(fake);var command=Command();command.startMode="automatic";engine.Apply(command,time,0);engine.Tick(time,0);
+   fake.AfterDown=()=>{if(stop)throw new TeamClickerOperatorStopException();throw new InvalidOperationException("Focus changed during held click");};engine.Tick(time.AddMilliseconds(20),20);
+   Check(fake.Buttons.SequenceEqual(new[]{true,false}),"Engine pulse interruption releases the accepted down");Check(!engine.Active&&!engine.Armed&&engine.Count==0,"Interrupted pulse is terminal and never counted as accepted");
+   if(stop)Check(Convert.ToString(Field(engine,"operatorStoppedSessionId"))==command.sessionId,"F8 during hold remains an operator stop");
+   fake.AfterDown=null;engine.Apply(Command(command.sessionId,time.AddMilliseconds(40)),time.AddMilliseconds(40),40);engine.Tick(time.AddMilliseconds(40),40);Check(fake.Buttons.Count==2,"Renewing same cancelled session never repeats input");
+  }
  }
  static void HotkeyTests(){
   var native=new FakeHotkeyRegistration();var gate=new TeamClickerHotkeyGate(native);
@@ -150,8 +171,11 @@ class TeamClickerTests {
   var rows=new List<object>();
   try{using(var source=new Bitmap(file))using(var image=new Bitmap(source.Width,source.Height,PixelFormat.Format32bppArgb)){
    using(var graphics=Graphics.FromImage(image))graphics.DrawImageUnscaled(source,0,0);
-   foreach(string team in new[]{"blue","red","green"}){Rectangle bounds;TeamClickerTarget target;if(!TeamClickerSelectorFrame.TryRecognize(image,team,DateTime.UtcNow,out target,out bounds))throw new InvalidOperationException("No se reconoce la estructura actual del selector.");rows.Add(new {team=team,x=target.x,y=target.y,bounds=new{x=bounds.X,y=bounds.Y,width=bounds.Width,height=bounds.Height}});}
-   Console.WriteLine(new JavaScriptSerializer().Serialize(new{offlineImage=true,inputAllowed=false,recognizer="selector-cards",recognized=true,width=image.Width,height=image.Height,targets=rows}));return 0;
+   TeamClickerSelectorSnapshot snapshot;if(!TeamClickerSelectorFrame.TryRecognizeAll(image,DateTime.UtcNow,out snapshot))throw new InvalidOperationException("No se reconoce la estructura actual del selector.");
+   foreach(string team in new[]{"blue","red","green"}){Rectangle bounds=snapshot.Cards[team];TeamClickerTarget target=snapshot.Targets[team];rows.Add(new {team=team,x=target.x,y=target.y,bounds=new{x=bounds.X,y=bounds.Y,width=bounds.Width,height=bounds.Height}});}
+   var any=new TeamClickerAnySelector(image,snapshot);string[] available;
+   using(var shared=image.Clone(any.ReadBounds,PixelFormat.Format32bppArgb))available=any.Available(shared,DateTime.UtcNow).Keys.ToArray();
+   Console.WriteLine(new JavaScriptSerializer().Serialize(new{offlineImage=true,inputAllowed=false,recognizer="selector-cards",recognized=true,width=image.Width,height=image.Height,targets=rows,automaticAnyTeam=true,availableTeams=available,sharedReadBounds=new{x=any.ReadBounds.X,y=any.ReadBounds.Y,width=any.ReadBounds.Width,height=any.ReadBounds.Height}}));return 0;
   }}catch(Exception error){Console.WriteLine(new JavaScriptSerializer().Serialize(new{offlineImage=true,inputAllowed=false,recognized=false,error=error.Message}));return 0;}
  }
  static TeamClickerTarget Target(){return new TeamClickerTarget{x=100,y=200,width=1920,height=1080,patchLeft=68,patchTop=184,patchWidth=64,patchHeight=32,capturedAt=time.ToString("o"),signature=Enumerable.Repeat(0x4fb0e6,45).ToArray()};}
@@ -329,6 +353,56 @@ class TeamClickerTests {
   Check(!engine.Armed&&fake.Clicks==total,"Automatic deployment completion remains stopped after renewed leases");
   Reject(c=>c.startMode="random","Unknown start mode is rejected");Reject(c=>{c.startMode="automatic";c.calibrateTeam="blue";},"Automatic mode cannot request F9 calibration");
  }
+ static TeamClickerCommand AnyCommand(string session=null,DateTime? now=null){var command=AutoCommand(session,now);command.selectedTeam="any";return command;}
+ static TeamClickerCommand AnyProof(TeamClickerEngine engine,string session,int capturedMs,int observedMs,string team){var proof=Proof(engine,session,time.AddMilliseconds(capturedMs),time.AddMilliseconds(observedMs));proof.startMode="automatic";proof.selectedTeam="any";proof.entryActualTeam=team;return proof;}
+ static void AnyTeamTests(){
+  Check(TeamClickerCommand.IsSelection("any")&&!TeamClickerCommand.IsTeam("any"),"Any is a request, never an actual faction");
+  AnyCommand().Validate(time);Check(true,"Automatic any command is valid");
+  Reject(c=>{c.selectedTeam="any";c.calibrateTeam="any";},"Any cannot be saved as a fixed-team calibration");
+  Reject(c=>c.entryActualTeam="any","Any cannot be an actual-team receipt");
+  Reject(c=>c.entryActualTeam="orange","Unknown actual-team receipt rejected");
+  RejectProof(c=>c.entryActualTeam="red","A fixed-blue proof cannot claim red");
+  var fake=new FakePlatform{AvailableTeams=new string[0]};int randomCalls=0;
+  var engine=new TeamClickerEngine(fake,null,()=>0,maximum=>{randomCalls++;return maximum-1;});var command=AnyCommand();engine.Apply(command,time,0);engine.Tick(time,0);
+  string attempt=(string)Field(engine,"attemptId");
+  Check(engine.Active&&engine.Running&&fake.AnyCaptures==1&&fake.Captures==0&&fake.Clicks==0,"Any acquires all candidates in one scan without clicking or picking a closed team");
+  Check((string)Field(engine,"selectedTeam")=="any"&&(string)Field(engine,"requestedTeam")=="any"&&Field(engine,"actualTeam")==null,"Requested and actual team remain distinct before clicking");
+  engine.Apply(AnyProof(engine,command.sessionId,0,1,"green"),time.AddMilliseconds(1),1);
+  Check(engine.Active&&Field(engine,"completedAttemptId")==null,"Zero-click any proof cannot complete");
+  engine.Tick(time.AddMilliseconds(1),1);engine.Tick(time.AddMilliseconds(20),20);
+  Check(fake.Clicks==0&&fake.AvailabilityReads==1&&randomCalls==0&&engine.Active,"All closed teams wait with interval limiting, no random closed choice");
+  fake.AvailableTeams=new[]{"blue","green"};engine.Tick(time.AddMilliseconds(21),21);
+  Check(fake.Clicks==1&&fake.ClickedX.Last()==500&&(string)Field(engine,"actualTeam")=="green"&&randomCalls==1,"Random selection uses only currently available candidates");
+  engine.Tick(time.AddMilliseconds(41),41);Check(fake.Clicks==2&&fake.ClickedX.Last()==500&&randomCalls==1,"Chosen color continues while available without unnecessary random switching");
+  fake.AvailableTeams=new[]{"blue"};engine.Tick(time.AddMilliseconds(61),61);
+  Check(fake.Clicks==3&&fake.ClickedX.Last()==100&&(string)Field(engine,"actualTeam")=="blue"&&(string)Field(engine,"attemptId")==attempt,"Closing chosen color switches to another available team within the same attempt");
+  Check(fake.AnyCaptures==1&&fake.Captures==0&&fake.PatchCalls==0,"Any reuses structural acquisition instead of three full scans per click");
+  fake.AvailableTeams=new string[0];engine.Tick(time.AddMilliseconds(81),81);
+  Check(fake.Clicks==3&&engine.Active&&engine.Armed&&(string)Field(engine,"actualTeam")=="blue","Selector disappearance or no available logos pauses clicks while retaining proof intent");
+  engine.Apply(AnyProof(engine,command.sessionId,82,83,null),time.AddMilliseconds(83),83);Check(engine.Active,"Any proof requires an actual color");
+  engine.Apply(AnyProof(engine,command.sessionId,40,84,"blue"),time.AddMilliseconds(84),84);Check(engine.Active&&Field(engine,"completedAttemptId")==null,"Capture from before the latest color switch cannot prove the new color");
+  engine.Apply(AnyProof(engine,command.sessionId,84,85,"green"),time.AddMilliseconds(85),85);Check(engine.Active&&Field(engine,"completedAttemptId")==null,"Stale chosen-color receipt cannot acknowledge a switched attempt");
+  engine.Apply(AnyProof(engine,command.sessionId,86,87,"blue"),time.AddMilliseconds(87),87);
+  Check(!engine.Active&&!engine.Armed&&(string)Field(engine,"completedAttemptId")==attempt&&(string)Field(engine,"completedActualTeam")=="blue"&&(string)Field(engine,"actualTeam")=="blue"&&(string)Field(engine,"requestedTeam")=="any","Any receipt preserves requested any and actual entered color");
+  engine.Apply(AnyCommand(command.sessionId,time.AddMilliseconds(90)),time.AddMilliseconds(90),90);engine.Tick(time.AddMilliseconds(100),100);Check(fake.Clicks==3&&!engine.Armed,"Completed any intent cannot resume via renewal");
+  var fresh=AnyCommand(null,time.AddMilliseconds(110));engine.Apply(fresh,time.AddMilliseconds(110),110);Check(engine.Armed&&Field(engine,"actualTeam")==null&&Field(engine,"completedActualTeam")==null,"New any session clears the previous actual-team proof");
+  engine.Apply(AnyCommand(command.sessionId,time.AddMilliseconds(120)),time.AddMilliseconds(120),120);Check(!engine.Armed&&(string)Field(engine,"completedActualTeam")=="blue","Completed old session retains its own actual-team receipt");
+
+  fake=new FakePlatform();engine=new TeamClickerEngine(fake,null,()=>0,maximum=>0);command=AnyCommand();engine.Apply(command,time,0);engine.Tick(time,0);fake.OnAvailable=()=>engine.EmergencyStop();engine.Tick(time.AddMilliseconds(1),1);
+  Check(!engine.Armed&&!engine.Active&&fake.Clicks==0&&Field(engine,"actualTeam")==null,"F8 during a shared availability read cannot be undone by its return");
+  fake.OnAvailable=null;engine.Apply(AnyCommand(command.sessionId,time.AddMilliseconds(2)),time.AddMilliseconds(2),2);engine.Tick(time.AddMilliseconds(2),2);Check(!engine.Armed&&fake.Clicks==0,"Same-session renewal cannot undo any-mode F8");
+  fake=new FakePlatform();engine=new TeamClickerEngine(fake,null,()=>0,maximum=>0);command=AnyCommand();engine.Apply(command,time,0);fake.OnCapture=()=>{throw new TeamClickerOperatorStopException();};engine.Tick(time,0);
+  Check(!engine.Armed&&fake.Clicks==0&&(string)Field(engine,"operatorStoppedSessionId")==command.sessionId,"A native F8 observed during acquisition is terminal, not a retry");
+  fake=new FakePlatform();engine=new TeamClickerEngine(fake,null,()=>0,maximum=>0);command=AnyCommand();engine.Apply(command,time,0);engine.Tick(time,0);fake.OnAvailable=()=>{throw new TeamClickerOperatorStopException();};engine.Tick(time.AddMilliseconds(1),1);
+  Check(!engine.Armed&&fake.Clicks==0&&(string)Field(engine,"operatorStoppedSessionId")==command.sessionId,"A native F8 observed during availability read is terminal");
+  foreach(var change in new Action<FakePlatform>[] {p=>p.Frame=null,p=>p.Frame.Window++,p=>p.Frame.Pid++,p=>p.Frame.Width++,p=>p.Modifiers=true,p=>p.Alive=false}){
+   fake=new FakePlatform();engine=new TeamClickerEngine(fake,null,()=>0,maximum=>0);command=AnyCommand();engine.Apply(command,time,0);engine.Tick(time,0);var current=fake;fake.OnAvailable=()=>change(current);engine.Tick(time.AddMilliseconds(1),1);
+   Check(!engine.Active&&!engine.Armed&&fake.Clicks==0,"Availability read revalidates focus/window/PID/geometry/modifiers/service before clicking");
+  }
+  double elapsed=0;fake=new FakePlatform();engine=new TeamClickerEngine(fake,null,()=>elapsed,maximum=>0);command=AnyCommand();engine.Apply(command,time,0);engine.Tick(time,0);fake.OnAvailable=()=>elapsed+=4000;engine.Tick(time.AddMilliseconds(1),1);
+  Check(!engine.Armed&&!engine.Active&&fake.Clicks==0,"Lease expiry during availability read forbids any click");
+  fake=new FakePlatform{FailClick=true};engine=new TeamClickerEngine(fake,null,()=>0,maximum=>0);command=AnyCommand();engine.Apply(command,time,0);engine.Tick(time,0);engine.Tick(time.AddMilliseconds(1),1);Check(!engine.Armed&&Field(engine,"actualTeam")==null&&engine.Count==0,"Rejected input never claims an actual entered color");
+ }
  static void ValidationTests(){
   Reject(c=>c.intervalMs=19,"Interval lower bound");Reject(c=>c.intervalMs=2001,"Interval upper bound");Reject(c=>c.toggleKey="F8","Stop key cannot become toggle");Reject(c=>c.captureKey="F7","Movement key cannot capture");Reject(c=>c.selectedTeam="unknown","Unknown team rejected");Reject(c=>c.calibrateTeam="red","Recognition target must match selected team");Reject(c=>c.expiresAt=time.ToString("o"),"Expired lease rejected");Reject(c=>c.expiresAt=time.AddSeconds(6).ToString("o"),"Unbounded lease rejected");Reject(c=>c.id="x","Invalid command ID rejected");Reject(c=>c.servicePid=0,"Missing owner rejected");Reject(c=>c.issuedAt=time.AddSeconds(2).ToString("o"),"Future command rejected");Reject(c=>c.expiresAt="2026-10-31T11:00:00+01:00","Non-UTC date rejected");
   var invalid=Target();invalid.x=1920;Check(!invalid.Valid(),"Out-of-client coordinate rejected");invalid=Target();invalid.signature=new int[0];Check(!invalid.Valid(),"Missing signature rejected");invalid=Target();invalid.patchLeft=1910;Check(!invalid.Valid(),"Patch outside client rejected");
@@ -356,7 +430,7 @@ class TeamClickerTests {
   Console.WriteLine(new JavaScriptSerializer().Serialize(new{format="wardogs-team-clicker-timer-probe-v1",at=DateTime.UtcNow.ToString("o"),nativeInputsAllowed=false,keyboardOrMouseOrHotkeysUsed=false,platform="FakePlatform",samples=new[]{baseline,precise},timerError=error}));return 0;
  }
  static int Main(string[] args){if(args.Length==2&&args[0]=="--image")return Probe(args[1]);if(args.Length==1&&args[0]=="--timer-probe")return TimerProbe();try{
-  EngineTests();AutomaticTests();ConfirmationTests();ValidationTests();HotkeyTests();LogoTests();checks+=TeamClickerSelectorFrameTests.Run();checks+=TeamClickerWaiterTests.Run();
+  EngineTests();AutomaticTests();ConfirmationTests();AnyTeamTests();ValidationTests();ButtonPulseTests();HotkeyTests();LogoTests();checks+=TeamClickerSelectorFrameTests.Run();checks+=TeamClickerWaiterTests.Run();
   Console.WriteLine("Team clicker: "+checks+" checks passed; no native input or hotkey calls invoked.");return 0;
  }catch(Exception error){Console.Error.WriteLine(error);return 1;}}
 }

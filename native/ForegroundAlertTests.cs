@@ -26,7 +26,13 @@ internal static class ForegroundAlertTests
         state["now"]=Now.AddSeconds(-4).ToString("o");Check(ForegroundAlertPolicy.FromState(state,Now)==null,"API antigua");
         state["now"]=Now.AddMilliseconds(1).ToString("o");Check(ForegroundAlertPolicy.FromState(state,Now)==null,"API futura");
         state["now"]=Now.ToString("o");((Dictionary<string,object>)state["autoSeeding"])["endAt"]=Now.ToString("o");Check(ForegroundAlertPolicy.FromState(state,Now)==null,"duración vencida");
-        state["autoSeeding"]=null;state["teamClicker"]=Obj("enabled",true,"sessionId",Session);Check(ForegroundAlertPolicy.FromState(state,Now).Key=="team:"+Session,"espera selector");
+        state["autoSeeding"]=null;
+        foreach(var entryStatus in new[]{"opening","waiting_game","navigating","joining","choosing_team","deploying","starting_seeding"}){state["entry"]=Moving(entryStatus);Check(ForegroundAlertPolicy.FromState(state,Now).Key=="entry:"+Session,"entrada necesita foco "+entryStatus);}
+        foreach(var entryStatus in new[]{"completed","cancelled","expired","interrupted","error"}){state["entry"]=Moving(entryStatus);Check(ForegroundAlertPolicy.FromState(state,Now)==null,"entrada terminal no alarma "+entryStatus);}
+        state["entry"]=Moving("joining");((Dictionary<string,object>)state["entry"])["operatorStopped"]=true;Check(ForegroundAlertPolicy.FromState(state,Now)==null,"entrada parada no alarma");
+        state["entry"]=Moving("joining");state["movement"]=Obj("autoOperatorStopped",Session);Check(ForegroundAlertPolicy.FromState(state,Now)==null,"F8 entrada inmediato");state.Remove("movement");
+        ((Dictionary<string,object>)state["entry"])["endAt"]=Now.ToString("o");Check(ForegroundAlertPolicy.FromState(state,Now)==null,"entrada vencida no alarma");state.Remove("entry");
+        state["teamClicker"]=Obj("enabled",true,"sessionId",Session);Check(ForegroundAlertPolicy.FromState(state,Now).Key=="team:"+Session,"espera selector");
         state["teamClicker"]=Obj("enabled",true,"sessionId","inválida");Check(ForegroundAlertPolicy.FromState(state,Now)==null,"sin UUID no hay aviso");
         var reason="Autoclic detenido: Wardogs ha perdido el foco o ha cambiado su ventana.";
         state["teamClicker"]=Obj("enabled",false,"sessionId",Session,"reason",reason);state["events"]=new object[]{Obj("kind","team_clicker_stopped","reason",reason,"at",Now.AddSeconds(-1).ToString("o"))};

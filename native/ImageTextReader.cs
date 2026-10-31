@@ -94,6 +94,31 @@ internal static class ImageTextReader
                 // Keep modal and warmup text independently visible even when the
                 // full-frame recognizer returns no lines for the 3D scene.
                 await AddRegion(engine,decoder,lines,passes,"central_context",.30,.15,.40,.70,2);
+                bool mainMenu=lines.Any(line=>new[]{"JUGAR","PLAY"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase))&&line.words.Any(word=>word.y<decoder.PixelHeight*.12))&&
+                    lines.Any(line=>new[]{"NAVEGADOR DEL SERVIDOR","SERVER BROWSER"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase))&&line.words.Any(word=>word.x<decoder.PixelWidth*.4&&word.y>decoder.PixelHeight*.60&&word.y<decoder.PixelHeight*.9));
+                EntryControlState mainDeploy=EntryControlVisual.NotMainMenu((int)decoder.PixelWidth,(int)decoder.PixelHeight);
+                if(mainMenu)
+                {
+                    using(var original=new System.Drawing.Bitmap(fileInfo.FullName))mainDeploy=EntryControlVisual.MainDeploy(original);
+                    await AddRegion(engine,decoder,lines,passes,"main_deploy_control",.025,.68,.19,.12,4,24);
+                    if(!lines.Any(line=>line.pass=="main_deploy_control"&&new[]{"DESPLEGAR","DEPLOY"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase))))
+                        await AddRegion(engine,decoder,lines,passes,"main_deploy_title",.055,.714,.12,.033,5,24,true);
+                }
+                // The broad modal pass can omit the small '#02' prefix while
+                // retaining the community name. Read the complete name row at
+                // higher scale; no number is inferred from the selected server.
+                if(lines.Any(line=>line.text.IndexOf("UNIRSE AL SERVIDOR DEL JUEGO",StringComparison.OrdinalIgnoreCase)>=0||line.text.IndexOf("JOIN GAME SERVER",StringComparison.OrdinalIgnoreCase)>=0))
+                    await AddRegion(engine,decoder,lines,passes,"join_server_name",.305,.45,.185,.025,4,24);
+                // Category titles can be gray. The full-frame/central pass
+                // may read only the description below the Community card.
+                bool categories=lines.Any(line=>new[]{"DESPLEGAR","DEPLOY"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase))&&line.words.Any(word=>word.y<decoder.PixelHeight*.12))&&
+                    lines.Any(line=>new[]{"OFICIAL","OFFICIAL"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase))&&line.words.Any(word=>word.y>decoder.PixelHeight*.55&&word.y<decoder.PixelHeight*.92));
+                if(categories)
+                {
+                    await AddRegion(engine,decoder,lines,passes,"category_community",.405,.725,.14,.032,4,24);
+                    if(!lines.Any(line=>line.pass=="category_community"&&String.Equals(line.text.Trim(),"COMUNIDAD",StringComparison.OrdinalIgnoreCase)))
+                        await AddRegion(engine,decoder,lines,passes,"category_community_gray",.405,.725,.14,.032,4,24,false,false,true);
+                }
                 await AddRegion(engine,decoder,lines,passes,"warmup_context",.30,.15,.40,.15,2);
                 await AddRegion(engine,decoder,lines,passes,"hud_compass",.485,.020,.030,.027,3);
                 await AddRegion(handsEngine,decoder,lines,passes,"hud_hands",.90,.80,.095,.095,3);
@@ -112,6 +137,7 @@ internal static class ImageTextReader
                     language = engine.RecognizerLanguage.LanguageTag, width = decoder.PixelWidth, height = decoder.PixelHeight,
                     textAngle = result.TextAngle, text = String.Join(" ",lines.Select(line=>line.text)),
                     lines = lines.ToArray(), ocrPasses=passes.ToArray(), wordCoordinateSpace="original_image_pixels",
+                    controls = new {mainDeploy=mainDeploy},
                     captureFreshnessVerified = false
                 };
                 File.WriteAllText(Path.GetFullPath(outputPath), new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
@@ -136,7 +162,7 @@ internal static class ImageTextReader
     }
     private static bool HasHandsReading(List<ReadLine> lines)
     {return lines.Any(line=>line.pass.StartsWith("hud_hands",StringComparison.Ordinal)&&new[]{"FISTS","PUÑOS","PUNOS"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase)));}
-    private static async Task AddRegion(OcrEngine engine,BitmapDecoder decoder,List<ReadLine> lines,List<ReadPass> passes,string name,double left,double top,double width,double height,uint scale,uint padding=0,bool contrast=false,bool nearest=false)
+    private static async Task AddRegion(OcrEngine engine,BitmapDecoder decoder,List<ReadLine> lines,List<ReadPass> passes,string name,double left,double top,double width,double height,uint scale,uint padding=0,bool contrast=false,bool nearest=false,bool grayText=false)
     {
         uint x=(uint)Math.Floor(decoder.PixelWidth*left),y=(uint)Math.Floor(decoder.PixelHeight*top);
         uint w=Math.Min((uint)Math.Ceiling(decoder.PixelWidth*width),decoder.PixelWidth-x),h=Math.Min((uint)Math.Ceiling(decoder.PixelHeight*height),decoder.PixelHeight-y);
@@ -152,9 +178,9 @@ internal static class ImageTextReader
         {
             if(crop.PixelWidth!=w*scale||crop.PixelHeight!=h*scale)throw new InvalidOperationException("La region OCR no conserva la transformacion esperada.");
             OcrResult result;
-            if(padding>0||contrast){using(var padded=PadBitmap(crop,padding,contrast))result=await AwaitOperation(engine.RecognizeAsync(padded));}
+            if(padding>0||contrast||grayText){using(var padded=PadBitmap(crop,padding,contrast,grayText))result=await AwaitOperation(engine.RecognizeAsync(padded));}
             else result=await AwaitOperation(engine.RecognizeAsync(crop));
-            passes.Add(new ReadPass {name=name,x=x,y=y,width=w,height=h,scale=scale,padding=padding,text=result.Text,language=engine.RecognizerLanguage.LanguageTag,preprocessing=contrast?"white_text_threshold_min150_max175_chroma60":null,interpolation=nearest?"nearest_neighbor":"cubic",textAngle=result.TextAngle,lineCount=result.Lines.Count});
+            passes.Add(new ReadPass {name=name,x=x,y=y,width=w,height=h,scale=scale,padding=padding,text=result.Text,language=engine.RecognizerLanguage.LanguageTag,preprocessing=grayText?"gray_text_threshold_min80_max170_chroma35":contrast?"white_text_threshold_min150_max175_chroma60":null,interpolation=nearest?"nearest_neighbor":"cubic",textAngle=result.TextAngle,lineCount=result.Lines.Count});
             var local=ConvertLines(result,name,x,y,scale,padding,(uint)crop.PixelWidth+padding*2,(uint)crop.PixelHeight+padding*2).ToArray();
             // Prefer the bounded reading inside that region. This avoids counting
             // the same HUD anchor twice when the full-frame pass also recognised it.
@@ -170,16 +196,16 @@ internal static class ImageTextReader
         double bx=second.words.Min(word=>word.x),by=second.words.Min(word=>word.y),br=second.words.Max(word=>word.x+word.width),bb=second.words.Max(word=>word.y+word.height);
         return Math.Abs((ax+ar-bx-br)/2)<Math.Max(8,Math.Min(ar-ax,br-bx)*.35)&&Math.Abs((ay+ab-by-bb)/2)<Math.Max(8,Math.Min(ab-ay,bb-by)*.7);
     }
-    private static SoftwareBitmap PadBitmap(SoftwareBitmap source,uint padding,bool contrast)
+    private static SoftwareBitmap PadBitmap(SoftwareBitmap source,uint padding,bool contrast,bool grayText=false)
     {
         int width=source.PixelWidth,height=source.PixelHeight,margin=(int)padding;
         int targetWidth=width+margin*2,targetHeight=height+margin*2;
         var buffer=new Windows.Storage.Streams.Buffer((uint)(width*height*4));source.CopyToBuffer(buffer);
         byte[] pixels=new byte[buffer.Length];using(var reader=DataReader.FromBuffer(buffer))reader.ReadBytes(pixels);
-        if(contrast)for(int i=0;i<pixels.Length;i+=4)
+        if(contrast||grayText)for(int i=0;i<pixels.Length;i+=4)
         {
             int min=Math.Min(pixels[i],Math.Min(pixels[i+1],pixels[i+2])),max=Math.Max(pixels[i],Math.Max(pixels[i+1],pixels[i+2]));
-            byte value=(byte)(min>=150&&max>=175&&max-min<=60?255:0);
+            byte value=(byte)((grayText?min>=80&&max<=170&&max-min<=35:min>=150&&max>=175&&max-min<=60)?255:0);
             pixels[i]=value;pixels[i+1]=value;pixels[i+2]=value;pixels[i+3]=255;
         }
         byte[] padded=new byte[targetWidth*targetHeight*4];

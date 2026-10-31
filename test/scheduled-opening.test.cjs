@@ -38,3 +38,8 @@ test('programación: conserva los ajustes de seeding y valida antes de guardar',
  const settings={durationMinutes:75,startPlayers:20,intervalSeconds:45,holdMs:600,server:5};s.schedule({...input,seeding:settings});settings.durationMinutes=1;
  assert.equal(s.view().server,2);assert.deepEqual(s.view().seeding,{durationMinutes:75,startPlayers:20,intervalSeconds:45,holdMs:600});
 });
+
+test('programación: conserva aleatorio o color fijo para la futura entrada',()=>{
+ for(const team of ['any','blue','red','green']){const f=fixture(),s=f.build();s.schedule({...input,team,seeding:{durationMinutes:30}});assert.equal(s.view().team,team);assert.equal(s.view().seeding.durationMinutes,30);}
+ const f=fixture(),s=f.build();assert.throws(()=>s.schedule({...input,team:'orange'}));assert.equal(s.view(),null);
+});

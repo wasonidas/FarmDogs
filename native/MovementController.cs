@@ -23,7 +23,7 @@ namespace WardogsSeeding {
   readonly Button arm = new Button(), test = new Button(), stop = new Button();
   readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
   readonly JavaScriptSerializer json = new JavaScriptSerializer();
-  readonly string dataDir, eventsPath, statePath;
+  readonly string dataDir, eventsPath, statePath,appRoot;
   readonly DateTime? hardStop;
   readonly TimeZoneInfo madrid = TimeZoneInfo.FindSystemTimeZoneById("Romance Standard Time");
   readonly EventWaitHandle showRequest;
@@ -39,7 +39,7 @@ namespace WardogsSeeding {
 
   public ControllerForm(string root, DateTime? until, EventWaitHandle openRequest) {
    showRequest = openRequest;
-   hardStop = until; dataDir = Path.Combine(root, "data");
+   appRoot=Path.GetFullPath(root);hardStop = until; dataDir = Path.Combine(root, "data");
    Directory.CreateDirectory(dataDir);
    eventsPath = Path.Combine(dataDir, "movement-events.jsonl"); statePath = Path.Combine(dataDir, "movement-state.json");
    Text = "Wardogs - Control de movimiento"; ClientSize = new Size(600, 475);
@@ -137,6 +137,7 @@ namespace WardogsSeeding {
   }
   async void OnTick(object sender, EventArgs args) {
    if (closing) return;
+   if(AppShutdown.Requested(appRoot,dataDir,DateTime.UtcNow)){Close();return;}
    try{ReadAutomaticCommand();if(autoSessionId!=null&&plan.Armed&&(DateTime.UtcNow>=autoLease||clock.Elapsed.TotalMilliseconds>=autoLeaseMono))Stop("Esperando datos recientes del automatismo");}
    catch(Exception error){lastError=error.Message;Stop(error.Message);return;}
    if(busy)return;

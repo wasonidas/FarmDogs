@@ -1,0 +1,14 @@
+'use strict';
+const fs=require('node:fs');
+const path=require('node:path');
+const {execFileSync}=require('node:child_process');
+const root=path.resolve(__dirname,'..');
+if(process.platform!=='win32')throw Error('El actualizador portable se compila en Windows.');
+const compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
+const output=path.join(root,'bin','FarmDogsUpdater.exe');fs.mkdirSync(path.dirname(output),{recursive:true});
+const common=['/nologo','/nowarn:0649','/codepage:65001','/platform:x64','/r:System.Web.Extensions.dll','/r:System.IO.Compression.dll','/r:System.IO.Compression.FileSystem.dll'];
+execFileSync(compiler,[...common,'/target:winexe','/out:'+output,path.join(root,'native','AppUpdater.cs')],{cwd:root,windowsHide:true,stdio:'inherit'});
+const test=path.join(root,'bin','AppUpdaterTests.exe');
+execFileSync(compiler,[...common,'/target:exe','/main:AppUpdaterTests','/out:'+test,path.join(root,'native','AppUpdater.cs'),path.join(root,'native','AppUpdaterTests.cs')],{cwd:root,windowsHide:true,stdio:'inherit'});
+execFileSync(test,[],{cwd:root,windowsHide:true,stdio:'inherit',timeout:30000});
+console.log('Built updater: '+output);
