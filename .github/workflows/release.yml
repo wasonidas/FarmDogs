@@ -1,0 +1,169 @@
+name: Build and release FarmDogs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: farmdogs-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+          architecture: x64
+      - name: Read the version
+        id: version
+        run: |
+          $releaseVersion = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          if ($releaseVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'package.json must contain a numeric major.minor.patch version.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tag=v$releaseVersion"
+      - name: Check whether this version is already published
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $viewErrors = Join-Path $env:RUNNER_TEMP 'farmdogs-release-view.err'
+          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GH_REPO --json tagName,isDraft 2> $viewErrors
+          if ($LASTEXITCODE -eq 0) {
+            $existingRelease = $releaseJson | ConvertFrom-Json
+            if ($existingRelease.isDraft) { throw 'This version has an incomplete draft release. Review the draft before publishing again.' }
+            if ($existingRelease.tagName -ne $env:RELEASE_TAG) { throw 'GitHub returned an unexpected release.' }
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'publish=false'
+            Write-Output 'The published version is unchanged. Increase package.json version to publish a new portable.'
+            exit 0
+          }
+          # A failed release view can also mean authentication/network failure.
+          # Only a confirmed HTTP 404 authorizes creating a new release.
+          $apiErrors = Join-Path $env:RUNNER_TEMP 'farmdogs-release-api.err'
+          $apiResponse = (& gh api --include "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" 2> $apiErrors) -join "`n"
+          if ($LASTEXITCODE -eq 0) { throw 'The release appeared during the check. Run again to inspect it without modifying it.' }
+          if ($apiResponse -notmatch '(?m)^HTTP/\S+\s+404(?:\s|$)') { throw 'Could not verify that the release is absent. No release will be created.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'publish=true'
+          exit 0
+      - name: Check the Windows build requirements
+        run: |
+          $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
+          $metadata = Join-Path $env:WINDIR 'System32\WinMetadata'
+          $runtimeFacade = Join-Path $env:WINDIR 'Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.0.0.0__b03f5f7f11d50a3a\System.Runtime.dll'
+          foreach ($requiredFile in @((Join-Path $framework 'csc.exe'), (Join-Path $framework 'System.Runtime.WindowsRuntime.dll'), $runtimeFacade)) {
+            if (!(Test-Path -LiteralPath $requiredFile -PathType Leaf)) { throw "Missing Windows build dependency: $requiredFile" }
+          }
+          if (!(Test-Path -LiteralPath $metadata -PathType Container) -or !(Get-ChildItem -LiteralPath $metadata -Filter '*.winmd')) { throw 'The Windows WinRT metadata directory is unavailable.' }
+          $nodeLicense = Join-Path (Split-Path (Get-Command node).Source) 'LICENSE'
+          if (!(Test-Path -LiteralPath $nodeLicense -PathType Leaf)) { throw 'The official Node distribution LICENSE is required to bundle Node.' }
+          if (!(Test-Path -LiteralPath LICENSE -PathType Leaf)) { throw 'The FarmDogs source license is missing.' }
+          Get-Command tar.exe | Out-Null
+      - name: Test without game input
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'The test suite failed.' }
+      - name: Build the Windows components and portable
+        if: steps.release.outputs.publish == 'true'
+        run: |
+          foreach ($buildScript in @('build:movement', 'build:reader', 'build:team-clicker', 'build:desktop', 'build:launcher', 'package:portable')) {
+            npm run $buildScript
+            if ($LASTEXITCODE -ne 0) { throw "Build failed: $buildScript" }
+          }
+      - name: Verify the bundled runtime and prepare the release files
+        if: steps.release.outputs.publish == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $portableInfo = Get-Content -LiteralPath dist/latest-portable.json -Raw | ConvertFrom-Json
+          $probeReport = Join-Path $env:RUNNER_TEMP 'farmdogs-portable-probe.json'
+          $probe = [System.Diagnostics.Process]::new()
+          $probe.StartInfo.FileName = Join-Path $portableInfo.folder 'FarmDogs.exe'
+          $probe.StartInfo.WorkingDirectory = $portableInfo.folder
+          $probe.StartInfo.UseShellExecute = $false
+          $probe.StartInfo.CreateNoWindow = $true
+          $probe.StartInfo.Environment['PATH'] = ''
+          $probe.StartInfo.Environment['NODE_OPTIONS'] = ''
+          $probe.StartInfo.ArgumentList.Add('--probe')
+          $probe.StartInfo.ArgumentList.Add($probeReport)
+          $probe.Start() | Out-Null
+          if (!$probe.WaitForExit(15000)) { $probe.Kill(); throw 'The portable probe timed out.' }
+          if ($probe.ExitCode -ne 0) { throw 'The portable probe failed.' }
+          $probeResult = Get-Content -LiteralPath $probeReport -Raw | ConvertFrom-Json
+          if (!$probeResult.success -or !$probeResult.bundledRuntime -or $probeResult.windowShown) { throw 'The portable did not pass its isolated-runtime probe.' }
+          if (Test-Path -LiteralPath (Join-Path $portableInfo.folder 'data')) { throw 'The probe unexpectedly created private data.' }
+          $releaseDirectory = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
+          New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+          $releaseArchive = Join-Path $releaseDirectory 'FarmDogs-portable.zip'
+          Copy-Item -LiteralPath $portableInfo.archive -Destination $releaseArchive
+          $archiveHash = (Get-FileHash -LiteralPath $releaseArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveHash -ne $portableInfo.sha256) { throw 'The archive checksum changed.' }
+          Set-Content -LiteralPath (Join-Path $releaseDirectory 'SHA256SUMS.txt') -Encoding ascii -Value "$archiveHash  FarmDogs-portable.zip"
+          $releaseNotes = @(
+            "FarmDogs $env:RELEASE_TAG para Windows x64.",
+            '',
+            'Descarga **FarmDogs-portable.zip**, extrae la carpeta completa y abre **FarmDogs.exe**.',
+            '',
+            'Incluye el runtime Node. Steam/Wardogs y Microsoft Edge WebView2 deben estar instalados.',
+            'Para actualizar, cierra FarmDogs y conserva tu carpeta data; cada jugador usa sus propios datos.',
+            '',
+            'La guía de anti-AFK, seeding, selector de equipo y avisos está en el README del repositorio.',
+            'SHA256SUMS.txt permite comprobar la descarga. El paquete no contiene cuentas, cookies ni registros locales.'
+          )
+          Set-Content -LiteralPath (Join-Path $releaseDirectory 'RELEASE_NOTES.md') -Encoding utf8 -Value $releaseNotes
+      - uses: actions/upload-artifact@v4
+        if: steps.release.outputs.publish == 'true'
+        with:
+          name: farmdogs-release
+          path: |
+            release-artifacts/FarmDogs-portable.zip
+            release-artifacts/SHA256SUMS.txt
+            release-artifacts/RELEASE_NOTES.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: farmdogs-release
+          path: release-artifacts
+      - name: Publish the verified portable
+        shell: bash
+        working-directory: release-artifacts
+        run: |
+          set -euo pipefail
+          sha256sum --check SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" FarmDogs-portable.zip SHA256SUMS.txt \
+            --repo "$GH_REPO" --target "$GITHUB_SHA" --draft \
+            --title "FarmDogs $RELEASE_TAG" --notes-file RELEASE_NOTES.md
+          gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets,isDraft \
+            --jq 'if .isDraft and ([.assets[].name] | index("FarmDogs-portable.zip") != null and index("SHA256SUMS.txt") != null) then "Release assets verified" else error("Incomplete draft assets") end'
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
+          release_url=$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq .url)
+          printf '### FarmDogs publicado\n\n%s\n' "$release_url" >> "$GITHUB_STEP_SUMMARY"
