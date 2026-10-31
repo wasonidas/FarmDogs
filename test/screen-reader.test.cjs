@@ -90,3 +90,39 @@ test('lector: terminar un helper cancelado o entregar un OCR antiguo no renueva 
  const first=reader.refresh();await entered;assert.equal(reader.busy,true);reader.stop();release();await first;assert.equal(reader.busy,false);assert.equal(reader.view().status,'unknown');
  clock=now+6001;await reader.refresh();assert.equal(reader.view().status,'unknown');await reader.refresh();assert.equal(reader.view().status,'verified_capture');assert.equal((await retained(cache)).length,6);
 });
+
+test('lector: conserva la última captura para diagnóstico entre bloqueos, sin reutilizarla como escena actual',async t=>{
+ const {root,cache}=await temporaryReader(t);let clock=now,captured=false,originalFile,originalImage;
+ const run=async(_exe,args)=>{
+  if(!captured){captured=true;originalFile=args[1];originalImage=(await writeReport(originalFile,{captured:clock})).source.path;return;}
+  await fs.writeFile(args[1],JSON.stringify({format:'wardogs-game-screen-unavailable-v1',reason:'game_not_foreground'}));
+ };
+ const reader=createScreenReader({root,dataDir:root,directory:cache,now:()=>clock,run});
+ await reader.refresh();assert.equal(reader.view().status,'verified_capture');
+ // The clock and all newly produced reports advance; diagnostic retention must
+ // not make the old game capture into evidence of current foreground status.
+ for(let i=0;i<12;i++){
+  clock+=1000;await reader.refresh();assert.equal(reader.view().status,'unknown');assert.equal(reader.view().gameForeground,false);assert.equal(reader.view().capturedAt,undefined);
+  assert.ok((await retained(cache)).length<=8);
+ }
+ await fs.access(originalFile);await fs.access(originalImage);
+ reader.stop();
+ const restarted=createScreenReader({root,dataDir:root,directory:cache,now:()=>clock,run});
+ assert.equal(restarted.view().status,'unknown');await restarted.refresh();
+ assert.equal(restarted.view().status,'unknown');assert.equal(restarted.view().gameForeground,false);
+ await fs.access(originalFile);await fs.access(originalImage);assert.ok((await retained(cache)).length<=8);
+});
+
+test('lector: una captura nueva sustituye al diagnóstico anterior y mantiene acotada la caché',async t=>{
+ const {root,cache}=await temporaryReader(t);let clock=now,makeCapture=true;const captures=[];
+ const reader=createScreenReader({root,dataDir:root,directory:cache,now:()=>clock,run:async(_exe,args)=>{
+  if(makeCapture){const report=await writeReport(args[1],{captured:clock});captures.push([args[1],report.source.path]);}
+  else await fs.writeFile(args[1],JSON.stringify({format:'wardogs-game-screen-unavailable-v1',reason:'game_not_foreground'}));
+ }});
+ await reader.refresh();clock+=1000;await reader.refresh();assert.equal(captures.length,2);
+ makeCapture=false;
+ for(let i=0;i<12;i++){clock+=1000;await reader.refresh();}
+ for(const file of captures[0])await assert.rejects(fs.access(file),{code:'ENOENT'});
+ for(const file of captures[1])await fs.access(file);
+ assert.equal(reader.view().status,'unknown');assert.ok((await retained(cache)).length<=8);
+});

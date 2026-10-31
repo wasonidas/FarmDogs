@@ -66,10 +66,25 @@ function classifyEntryScreen(report,{server,joinId,typedJoinId=null,ownLookup=nu
  if(deployHeader&&community&&official)return action('server_categories','Abriendo servidores de comunidad.','community',community);
  const communityHeader=one(/^(?:COMUNIDAD|COMMUNITY)$/,b=>top(b)&&left(b));
  const byId=one(/^(?:UNIRSE (?:POR|CON) (?:EL )?ID|UNIRSE POR ID DE SERVIDOR|JOIN (?:BY|VIA) (?:SERVER )?ID)$/,b=>b.y>h*.5&&b.y<h*.96);
+ const cancel=one(/^(?:CANCELAR|CANCEL)$/,center);
+ const queue=rows.find(a=>center(a.bounds)&&/^(?:POSICION EN (?:LA )?COLA|QUEUE POSITION|EN COLA|QUEUED)(?:\s*[:#]?\s*\d.*)?$/.test(a.text));
+ if(queue&&cancel)return {phase:'queue',reason:'En cola del servidor. Esperando plaza sin repetir la conexión.'};
+ // The real queue remains on top of the community browser as a bottom bar.
+ // Recognize it before the still-visible Join-by-ID control. Its tiny exit
+ // label can be absent from OCR; the explicit queue+position line is enough.
+ const footer=b=>b.x>w*.25&&b.x+b.width<w*.9&&b.y>h*.88&&b.y+b.height<h*.99;
+ const queueBar=one(/^EN LA COLA DEL SERVIDOR(?:\.{0,3}|…)?(?:\s*POSICION\s*\d{1,4}\s*DE\s*\d{1,4})?$/,footer);
+ if(communityHeader&&byId&&queueBar){
+  const counter=queueBar.text.match(/\bPOSICION\s*(\d{1,4})\s*DE\s*(\d{1,4})$/)||one(/^POSICION\s*\d{1,4}\s*DE\s*\d{1,4}$/,footer)?.text.match(/\bPOSICION\s*(\d{1,4})\s*DE\s*(\d{1,4})$/);
+  const position=counter?Number(counter[1]):null,total=counter?Number(counter[2]):null;
+  const counted=counter&&position>=0&&total>0&&position<=total;
+  const exit=one(/^SALIR DE (?:LA )?COLA$/,footer);
+  if(counted||exit)return {phase:'queue',reason:`En cola del servidor${counted?`: posición ${position} de ${total}`:''}. Esperando plaza sin repetir la conexión.`};
+  return {phase:'unknown',reason:'Esperando confirmar la barra de cola del servidor, sin repetir la conexión.'};
+ }
  if(communityHeader&&byId)return action('community_browser','Abriendo entrada por ID.','join_by_id',byId);
  const idHeader=one(/^(?:BUSCAR SERVIDOR|FIND SERVER|UNIRSE (?:POR|CON) (?:EL )?ID|UNIRSE POR ID DE SERVIDOR|JOIN (?:BY|VIA) (?:SERVER )?ID)$/,center);
  const lookup=one(/^(?:BUSCAR|BUSQUEDA|LOOKUP|LOOK UP|SEARCH)$/,center);
- const cancel=one(/^(?:CANCELAR|CANCEL)$/,center);
  const idLabel=one(/^(?:ID (?:DEL? )?SERVIDOR|SERVER ID|IDENTIFICACION DEL SERVIDOR\.{0,3}|ENTER SERVER ID)$/,center);
  const idInstruction=one(/^(?:INTRODUCE LA IDENTIFICACION DEL SERVIDOR|ENTER (?:THE )?SERVER (?:ID|IDENTIFICATION))$/,center);
  const idValue=rows.filter(a=>UUID.test(a.text)&&center(a.bounds));
@@ -91,8 +106,6 @@ function classifyEntryScreen(report,{server,joinId,typedJoinId=null,ownLookup=nu
   const b=idInstruction.bounds,field={x:b.x+w*.006,y:b.y+b.height+h*.023,width:Math.min(b.width*.7,w*.23),height:h*.023};
   return {phase:'join_id_input',reason:'Escribiendo el ID en el cuadro reconocido.',action:{key:'type_join_id',kind:'replace_join_id',bounds:field,anchorBounds:b}};
  }
- const queue=rows.find(a=>center(a.bounds)&&/^(?:POSICION EN (?:LA )?COLA|QUEUE POSITION|EN COLA|QUEUED)(?:\s*[:#]?\s*\d.*)?$/.test(a.text));
- if(queue&&cancel)return {phase:'queue',reason:'En cola del servidor. Esperando plaza sin repetir la conexión.'};
  return unknown;
 }
 module.exports={classifyEntryScreen};

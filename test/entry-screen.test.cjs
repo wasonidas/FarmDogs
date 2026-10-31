@@ -92,3 +92,17 @@ test('entrada: pantalla inicial y cola no repiten conexión',()=>{
  const splash=classifyEntryScreen(report([['PULSA UN BOTÓN PARA EMPEZAR',1032,1144,496]]),target);assert.equal(splash.action.key,'splash_continue');assert.equal(splash.action.kind,'press_start');
  const queued=classifyEntryScreen(report([['EN COLA',1100,650],['CANCELAR',1100,850]]),target);assert.equal(queued.phase,'queue');assert.equal(queued.action,undefined);
 });
+
+test('entrada: la cola real inferior precede al navegador y conserva posición aunque no se lea el botón de salida',()=>{
+ const fixture=require('./fixtures/ocr-browser-queue.json'),queued=classifyEntryScreen(fixture,target);
+ assert.equal(queued.phase,'queue');assert.equal(queued.action,undefined);assert.match(queued.reason,/posición 8 de 10/);assert.equal(fixture.source.capturedAt,null);assert.equal(fixture.source.path,undefined);
+ const split=structuredClone(fixture),bar=split.lines.find(row=>row.text.startsWith('EN LA COLA'));bar.text='EN LA COLA DEL SERVIDOR...';split.lines.push({text:'POSICIÓN 2 DE 9',words:[{text:'POSICIÓN 2 DE 9',x:1005,y:1006,width:150,height:11}]});const next=classifyEntryScreen(split,target);assert.equal(next.phase,'queue');assert.match(next.reason,/posición 2 de 9/);assert.equal(next.action,undefined);
+});
+
+test('entrada: una barra de cola incompleta no crea clics y texto fuera del pie no oculta el navegador',()=>{
+ const fixture=require('./fixtures/ocr-browser-queue.json'),incomplete=structuredClone(fixture);incomplete.lines.find(row=>row.text.startsWith('EN LA COLA')).text='EN LA COLA DEL SERVIDOR...';
+ const waiting=classifyEntryScreen(incomplete,target);assert.equal(waiting.phase,'unknown');assert.equal(waiting.action,undefined);
+ const withExit=structuredClone(incomplete);withExit.lines.push({text:'SALIR DE LA COLA',words:[{text:'SALIR DE LA COLA',x:1190,y:1008,width:90,height:10}]});assert.equal(classifyEntryScreen(withExit,target).phase,'queue');
+ const chat=structuredClone(fixture);for(const word of chat.lines.find(row=>row.text.startsWith('EN LA COLA')).words)word.y=750;assert.equal(classifyEntryScreen(chat,target).phase,'community_browser');
+ const noContext=structuredClone(fixture);noContext.lines=noContext.lines.filter(row=>row.text!=='COMUNIDAD');assert.notEqual(classifyEntryScreen(noContext,target).phase,'queue');
+});

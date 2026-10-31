@@ -18,6 +18,8 @@ const {createRewardProtection}=require('./reward-protection.cjs');
 const {createTeamClicker}=require('./team-clicker.cjs');
 const {createEntryFlow}=require('./entry-flow.cjs');
 const {createAppUpdate}=require('./app-update.cjs');
+const {currentClanAssociation}=require('./clan-association.cjs');
+const {createClanPresence}=require('./clan-presence.cjs');
 function createObserver(options={}){
 const ROOT=path.resolve(__dirname,'..');
 const DATA=path.resolve(options.dataDir||process.env.WARDOGS_DATA_DIR||path.join(ROOT,'data'));
@@ -41,6 +43,7 @@ let servers=[],lastSuccessAt=null,lastAttemptAt=null,sourceError=null,fetchInFli
 const events=[];
 function event(kind,detail={}){const item={at:isoNow(),kind,...detail};events.unshift(item);events.splice(100);appendEvent(path.join(DATA,'events.jsonl'),item);}
 function persist(){atomicJson(runtimeFile,runtime);}
+const clanPresence=createClanPresence({now:utcNow,fetchImpl:fetcher,event,getAssociation:()=>accountView().clanAssociation||{status:'disconnected'},getServers:publicViews});
 const rewardProtection=createRewardProtection({load:()=>readJson(path.join(DATA,'reward-protection.json')),save:value=>atomicJson(path.join(DATA,'reward-protection.json'),value),now:utcNow,monoNow,event});
 const teamClicker=createTeamClicker({root:ROOT,dataDir:DATA,now:utcNow,monoNow,event,...options.teamClickerOptions});
 const entryDriver=options.entryDriver||(launcher.availability().automaticEntry===true?require('./game-entry.cjs').createGameEntry({root:ROOT,dataDir:DATA,now:utcNow,monoNow,event,getTarget:(number,id)=>connectionTarget(publicViews(),number,id)}):{available:()=>false,view:()=>null,blocking:()=>false,stop:()=>{}});
@@ -149,7 +152,7 @@ function accountView(){
  const seedingFresh=running&&seedingAge>=-60000&&seedingAge<100000&&typeof seeding?.data?.estado==='string'&&Number.isFinite(countedAge)&&countedAge>=-60000&&countedAge<=120000&&!account.errors?.some(e=>e.kind==='sedeo');
  let difference={status:'unknown',newSeeding:[],expiryDeltaMs:null};
  try{const name=account.status==='browser_snapshot'?browserBaselineFile(vip?.observedAt):'account-baseline.json';const baseline=readJson(path.join(DATA,name));if(baseline&&vipFresh)difference=rewardDifference(baseline,vip.data,config.selectedServer,baseline.observedAt);}catch{}
- return {available:vipFresh||seedingFresh,vipFresh,seedingFresh,vipAt:vip?.observedAt,seedingAt:seeding?.observedAt,vip:vip?.data?.prioridad||null,history:Array.isArray(vip?.data?.historial)?vip.data.historial:[],seeding:seeding?.data||null,condition:seedingFresh?seedingCondition(seeding.data,utcNow()):{status:'unknown',mode:null,reason:'Hace falta una lectura reciente de la cuenta.',rewardVerified:false},difference,differenceServer:config.selectedServer,errors:(account.errors||[]).map(e=>({kind:e.kind,error:e.error})),status:account.status};
+ return {available:vipFresh||seedingFresh,vipFresh,seedingFresh,vipAt:vip?.observedAt,seedingAt:seeding?.observedAt,vip:vip?.data?.prioridad||null,history:Array.isArray(vip?.data?.historial)?vip.data.historial:[],seeding:seeding?.data||null,clanAssociation:currentClanAssociation(account.clanAssociation,{running,now:utcNow()}),condition:seedingFresh?seedingCondition(seeding.data,utcNow()):{status:'unknown',mode:null,reason:'Hace falta una lectura reciente de la cuenta.',rewardVerified:false},difference,differenceServer:config.selectedServer,errors:(account.errors||[]).map(e=>({kind:e.kind,error:e.error})),status:account.status};
 }
 async function refreshServers(){
  if(fetchInFlight||utcNow()<nextFetchAt)return;
@@ -191,7 +194,7 @@ function state(){
  const seedingContinuity=Object.fromEntries(views.map(server=>[server.number,isAdmittedSeedingContinuation(server,account)]));
  const diagnostics=Object.fromEntries([1,2,3,4,5].map(selectedServer=>[selectedServer,sessionDiagnostics({config:{selectedServer},account,movement:motion,screen:autoSeeding?.screen},{now:utcNow()})]));
  const occupancy=updateBusy(),update={...updater.view(),installBlocked:occupancy.busy,installBlockedReason:occupancy.reason,shutdownRequested:updateShutdownRequested,shutdownId:updateShutdownId,shutdownRequestedAt:updateShutdownRequestedAt};
- return {appId:'wardogs-seeding-local-v1',installationRoot:ROOT,version:require('../package.json').version,capabilities:{standaloneMovement:true,automaticEntry:entryAvailable(),appUpdates:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools:launcher.availability(),lastLaunch,opening:opening.view(),autoSeeding,entry:entry.view(),activity:activity.view(),rewards:rewardProtection.view(),teamClicker:teamClicker.view(),diagnostics,update};
+ return {appId:'wardogs-seeding-local-v1',installationRoot:ROOT,version:require('../package.json').version,capabilities:{standaloneMovement:true,automaticEntry:entryAvailable(),appUpdates:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,clanPresence:clanPresence.view(),recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools:launcher.availability(),lastLaunch,opening:opening.view(),autoSeeding,entry:entry.view(),activity:activity.view(),rewards:rewardProtection.view(),teamClicker:teamClicker.view(),diagnostics,update};
 }
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 async function body(req){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>65536)throw Error('Solicitud demasiado grande.');}return JSON.parse(text||'{}');}
@@ -342,6 +345,7 @@ const server=http.createServer(async(req,res)=>{
     if(!fs.existsSync(baseline))atomicJson(baseline,{...account.vip.data,observedAt:account.vip.observedAt,source:account.vip.source});
     appendEvent(path.join(DATA,'account-browser-observations.jsonl'),account);
     atomicJson(path.join(DATA,'account-snapshot.json'),account);
+    void clanPresence.tick().catch(error=>event('clan_presence_error',{message:error.message}));
     event('account_imported',{server:account.seeding.data.servidor??null});send(res,200,state());return;
    }
    if(route==='/api/account/disconnect'){
@@ -375,9 +379,9 @@ const server=http.createServer(async(req,res)=>{
    if(route==='/api/service/stop'){send(res,200,state());setImmediate(()=>close().catch(error=>console.error(error.message)));return;}
    send(res,404,{error:'Ruta desconocida'});return;
   }
-  const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/mini':'mini.html','/mini.js':'mini.js','/mini.css':'mini.css','/attention.js':'attention.js','/attention.css':'attention.css','/account-import':'account-import.html','/account-import.js':'account-import.js'};
+  const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/mini':'mini.html','/mini.js':'mini.js','/mini.css':'mini.css','/attention.js':'attention.js','/attention.css':'attention.css','/account-import':'account-import.html','/account-import.js':'account-import.js','/farmdogs-ai-mark.png':'farmdogs-ai-mark.png','/rajdhani-bold.ttf':'rajdhani-bold.ttf','/OFL-Rajdhani.txt':'OFL-Rajdhani.txt'};
   if(req.method!=='GET'||!files[route]){send(res,404,{error:'No encontrado'});return;}
-  const file=files[route];res.writeHead(200,{'Content-Type':file.endsWith('.html')?'text/html; charset=utf-8':file.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store'});fs.createReadStream(path.join(ROOT,'public',file)).pipe(res);
+  const file=files[route],extension=path.extname(file),types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.ttf':'font/ttf','.txt':'text/plain; charset=utf-8'};res.writeHead(200,{'Content-Type':types[extension],'Cache-Control':'no-store'});fs.createReadStream(path.join(ROOT,'public',file)).pipe(res);
  }catch(error){send(res,400,{error:error.message});}
 });
 let resolveReady,rejectReady;
@@ -386,10 +390,10 @@ server.on('error',error=>{clearInterval(refreshTimer);clearInterval(watchTimer);
 function tickClicker(){try{teamClicker.tick();}catch(error){try{teamClicker.stop('Error del controlador de autoclic.');}catch{}event('team_clicker_error',{message:error.message});}}
 async function tickEntry(){try{await entry.tick();}catch(error){try{entry.stop('Error local de la entrada automática.','error');}catch{}event('entry_error',{message:error.message});}}
 const clickerTimer=setInterval(tickClicker,100);
-const refreshTimer=setInterval(refreshServers,1000),watchTimer=setInterval(()=>{tickWatch();void tickEntry();automatic.tick();tickActivity().catch(error=>event('activity_error',{message:error.message}));opening.tick().catch(error=>event('opening_error',{message:error.message}));if(options.autoUpdate!==false)void updater.tick();},1000);
+const refreshTimer=setInterval(refreshServers,1000),watchTimer=setInterval(()=>{tickWatch();void tickEntry();automatic.tick();void clanPresence.tick().catch(error=>event('clan_presence_error',{message:error.message}));tickActivity().catch(error=>event('activity_error',{message:error.message}));opening.tick().catch(error=>event('opening_error',{message:error.message}));if(options.autoUpdate!==false)void updater.tick();},1000);
 server.listen(PORT,'127.0.0.1',async()=>{PORT=server.address().port;atomicJson(configFile,config);persist();atomicJson(path.join(DATA,'service.json'),{pid:process.pid,port:PORT,url:`http://127.0.0.1:${PORT}`,startedAt:isoNow()});await refreshServers();resolveReady(`http://127.0.0.1:${PORT}`);});
-function close(){if(closePromise)return closePromise;updater.close();entry.close();teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);clearTimeout(updateShutdownTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
-return {ready,close,tick:async()=>{tickClicker();tickWatch();await tickEntry();automatic.tick();await tickActivity();await opening.tick();if(options.autoUpdate!==false)await updater.tick();},refresh:refreshServers,state};
+function close(){if(closePromise)return closePromise;clanPresence.close();updater.close();entry.close();teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);clearTimeout(updateShutdownTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
+return {ready,close,tick:async()=>{tickClicker();tickWatch();await tickEntry();automatic.tick();await clanPresence.tick();await tickActivity();await opening.tick();if(options.autoUpdate!==false)await updater.tick();},refresh:refreshServers,state};
 }
 module.exports={createObserver};
 if(require.main===module){const service=createObserver();service.ready.then(url=>console.log(`Observador disponible en ${url}`)).catch(error=>{console.error(error.message);process.exitCode=1;});for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>service.close().then(()=>process.exit(0)));}

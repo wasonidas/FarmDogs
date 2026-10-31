@@ -11,6 +11,7 @@ internal static class DesktopProtocol
     public const string AccountUrl = "https://wardogsspain.com/mi-cuenta";
     public const string VipUrl = "https://api.wardogsspain.com/api/cuenta/vip";
     public const string SeedUrl = "https://api.wardogsspain.com/api/cuenta/sedeo";
+    public const string IdentityUrl = "https://api.wardogsspain.com/api/cuenta/yo";
     public static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength=131072 };
     public static bool IsLocal(string value)
     {

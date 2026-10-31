@@ -20,6 +20,7 @@ function lines(screen){
   case 'deploying':return[line('ENTRANDO',450,250,300),line('ABANDONAR PARTIDA',40,680,250)];
   case 'hud':return[line('FISTS',1190,630,65,15),line('100',1200,680,40),line('263 W',600,20,70)];
   case 'queue':return[line('EN COLA',400,260,250),line('CANCELAR',400,420,100)];
+  case 'browser_queue':{const fixture=require('./fixtures/ocr-browser-queue.json');return fixture.lines.map(row=>({...row,words:row.words.map(word=>({...word,x:word.x*1280/fixture.width,y:word.y*720/fixture.height,width:word.width*1280/fixture.width,height:word.height*720/fixture.height}))}));}
   default:return[];
  }
 }
@@ -121,6 +122,14 @@ test('entrada nativa: cadena propia por ID, servidor y ventana antes de equipo/H
  await f.driver.stop({ownerId:f.input.id,reason:'handoff'});assert.equal(f.driver.view().phase,'gameplay_hud');assert.equal(f.driver.view().chainConfirmed,true);assert.equal(f.driver.view().stopped,true);assert.equal(f.driver.blocking(),false);assert.equal(fs.existsSync(f.watchFile()+'.stop'),true);
 });
 
+test('entrada nativa: la cola inferior real conserva la conexión propia hasta el selector sin repetir Lookup ni Unirse',async t=>{
+ const f=await fixture(t);await confirmed(f);const count=f.actions().length;
+ await f.step('browser_queue');assert.equal(f.driver.view().phase,'joining');assert.equal(f.driver.view().chainConfirmed,true);assert.match(f.driver.view().reason,/posición 8 de 10/);
+ await f.step('browser_queue',30000);assert.equal(f.actions().length,count);assert.equal(f.driver.view().phase,'joining');
+ await f.step('team');assert.equal(f.driver.view().phase,'team_selector');assert.equal(f.driver.view().chainConfirmed,true);assert.equal(f.actions().length,count);
+ const expired=await fixture(t);await confirmed(expired);await expired.step('browser_queue');const before=expired.actions().length;expired.advance(15*60000);await expired.driver.tick();assert.equal(expired.driver.view().phase,'error');assert.match(expired.driver.view().reason,/Terminó el tiempo/);assert.equal(expired.actions().length,before);
+});
+
 test('contrato entrada JS→C#: el validador productivo acepta cada JSON original generado durante el recorrido completo',async t=>{
  if(process.platform!=='win32'){t.skip('El contrato C# se compila en Windows.');return;}
  const f=await fixture(t),compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe'),probe=path.join(f.root,'bin','GameEntryContractProbe.exe');
@@ -139,7 +148,7 @@ test('entrada nativa: ID prellenado no autoriza Lookup sin escritura nativa prop
  const f=await fixture(t);await f.driver.start(f.input);await f.step('prefilled');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id']);await f.step('prefilled');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id','lookup']);
 });
 test('entrada nativa: selector o HUD ajenos no prueban servidor',async t=>{
- for(const screen of ['team','hud','deploying','queue','confirmation']){
+ for(const screen of ['team','hud','deploying','queue','browser_queue','confirmation']){
   const f=await fixture(t);await f.driver.start(f.input);const state=await f.step(screen);assert.equal(state.phase,'error',screen);assert.equal(state.chainConfirmed,false);assert.equal(f.actions().length,0,screen);
  }
 });
@@ -225,7 +234,7 @@ test('entrada nativa: reintento de navegación exige frame nuevo, 800ms y máxim
 });
 test('entrada nativa: F8 del watcher cancela también sin menú reconocido y en cola',async t=>{
  for(const inQueue of [false,true]){
-  const f=await fixture(t);if(inQueue)await confirmed(f);else await f.driver.start(f.input);
+  const f=await fixture(t);if(inQueue){await confirmed(f);await f.step('browser_queue');}else await f.driver.start(f.input);
   f.heartbeat({status:'cancelled',reason:'operator_stop'});const count=f.actions().length;await f.driver.tick();assert.equal(f.driver.view().phase,'cancelled');assert.equal(f.driver.view().operatorStopped,true);assert.equal(f.driver.view().stopped,true);await f.step('main');assert.equal(f.actions().length,count);
  }
 });

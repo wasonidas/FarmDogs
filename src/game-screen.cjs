@@ -51,7 +51,7 @@ function classifyGameScreen(report,{expectedServer=null}={}){
  const deploy=allRows.filter(row=>/^(?:DESPLEGAR|DEPLOY)$/.test(row.text)&&row.bounds.x<report.width*.4&&row.bounds.y>report.height*.55&&row.bounds.y<report.height*.83);
  const browser=allRows.filter(row=>/^(?:NAVEGADOR DEL SERVIDOR|SERVER BROWSER)$/.test(row.text)&&row.bounds.x<report.width*.4&&row.bounds.y>report.height*.6&&row.bounds.y<report.height*.9);
  if(play.length===1&&deploy.length===1&&browser.length===1)return result('main_menu','Menú principal reconocido por sus tres anclas de navegación.',deploy[0]);
- const blockers=allRows.some(row=>/^(?:CONTINUAR|CONTINUE|CANCELAR|CANCEL|COMPRAR|BUY|EQUIPAR|EQUIP|AJUSTES|SETTINGS|SELECCIONAR EQUIPO|SELECT TEAM)$/.test(row.text)||/^(?:\/{1,3}\s*)?(?:SELECCIONAR FACCION|SELECT FACTION)$/.test(row.text)||/ESCRIBE UN MENSAJE|TYPE A MESSAGE/.test(row.text));
+ const blockers=allRows.some(row=>/^(?:CONTINUAR|CONTINUE|CANCELAR|CANCEL|COMPRAR|BUY|EQUIPAR|EQUIP|AJUSTES|SETTINGS|SELECCIONAR EQUIPO|SELECT TEAM)$/.test(row.text)||/^(?:\/{1,3}\s*)?(?:SELECCIONAR FACCION|SELECT FACTION)$/.test(row.text)||/^(?:\/{1,3}\s*)?(?:CARGANDO|LOADING|DESPLEGANDO|DEPLOYING|ENTRANDO|ENTERING)(?:\s*\.{0,3})?$/.test(row.text)||/ESCRIBE UN MENSAJE|TYPE A MESSAGE/.test(row.text));
  const fists=allRows.filter(row=>/^(?:FISTS|PUNOS)$/.test(row.text)&&row.bounds.x>report.width*.85&&row.bounds.y>report.height*.78);
  // Icons beside the health value may share its OCR line. Use the literal numeric
  // word, retaining its original geometry; overlapping passes describe one anchor.
@@ -66,7 +66,9 @@ function classifyGameScreen(report,{expectedServer=null}={}){
   if(!duplicate)health.push(word);
  }
  const compass=allRows.filter(row=>/^\|?\s*\d{1,3}\s+[NEWS]{1,2}$/.test(row.text)&&row.bounds.x>report.width*.25&&row.bounds.x<report.width*.75&&row.bounds.y<report.height*.08);
- if(!blockers&&fists.length===1&&health.length===1&&compass.length===1)return result('gameplay_hud','HUD de personaje con manos vacías, salud y brújula reconocido.');
+ const control=allRows.filter(row=>/^CONTROL:\s*(?:LONESTAR|VALKYRA|MANTICORE)$/.test(row.text)&&row.bounds.x>report.width*.01&&row.bounds.x+row.bounds.width<report.width*.25&&row.bounds.y>report.height*.92&&row.bounds.y+row.bounds.height<report.height*.99);
+ const third=compass.length===1||compass.length===0&&control.length===1;
+ if(!blockers&&fists.length===1&&health.length===1&&third)return result('gameplay_hud',compass.length===1?'HUD de personaje con manos vacías, salud y brújula reconocido.':'HUD de personaje con manos vacías, salud y control de facción reconocido.');
  return unknown('No hay suficientes anclas de interfaz verificadas.');
 }
 module.exports={classifyGameScreen};

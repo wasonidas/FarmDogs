@@ -66,7 +66,7 @@ internal sealed class DesktopWindow : Form
     private CoreWebView2Environment environment;
     private string pendingId;
     private DateTime pendingSince,nextRead;
-    private Dictionary<string,object> vipPart,seedPart;
+    private Dictionary<string,object> vipPart,seedPart,identityPart;
     private bool reading,exiting,closeAllowed,importing;
     private int handshakes;
     private Task importTask;
@@ -78,12 +78,12 @@ internal sealed class DesktopWindow : Form
 
     public DesktopWindow(bool hiddenTest)
     {
-        selfTest=hiddenTest;Text="FarmDogs";ClientSize=new Size(1000,790);MinimumSize=new Size(780,650);StartPosition=FormStartPosition.CenterScreen;
+        selfTest=hiddenTest;Text="FarmDogs Launcher";ClientSize=new Size(1000,790);MinimumSize=new Size(780,650);StartPosition=FormStartPosition.CenterScreen;
         rewards=new RewardBridge(http,root,readerId,()=>authView==null?null:authView.CoreWebView2,()=>reading&&!exiting&&!selfTest&&!authNavigating,message=>SetStatus("reward_protection",message));
         BackColor=Color.FromArgb(16,22,21);Font=new Font("Segoe UI",9);
         view.Dock=DockStyle.Fill;Controls.Add(view);
         var bar=new ToolStrip {GripStyle=ToolStripGripStyle.Hidden,Dock=DockStyle.Top};
-        var home=new ToolStripButton("FarmDogs");home.Click+=(s,e)=>{if(view.CoreWebView2!=null)view.CoreWebView2.Navigate(DesktopProtocol.LocalBase+"/mini");};
+        var home=new ToolStripButton("FarmDogs Launcher");home.Click+=(s,e)=>{if(view.CoreWebView2!=null)view.CoreWebView2.Navigate(DesktopProtocol.LocalBase+"/mini");};
         var account=new ToolStripButton("Cuenta Steam");account.Click+=async(s,e)=>await OpenAccount();
         stop.Enabled=false;stop.Click+=async(s,e)=>await StopReading();
         bar.Items.AddRange(new ToolStripItem[]{home,account,stop,new ToolStripSeparator(),status});Controls.Add(bar);
@@ -170,7 +170,7 @@ internal sealed class DesktopWindow : Form
             if(environment==null)throw new InvalidOperationException("La app todavía se está abriendo.");
             if(authForm==null)
             {
-                authForm=new Form {Text="FarmDogs · Conectar cuenta Steam",ClientSize=new Size(1000,780),StartPosition=FormStartPosition.CenterParent};
+                authForm=new Form {Text="FarmDogs Launcher · Conectar cuenta Steam",ClientSize=new Size(1000,780),StartPosition=FormStartPosition.CenterParent};
                 authView=new WebView2 {Dock=DockStyle.Fill};authForm.Controls.Add(authView);
                 var header=new Panel {Dock=DockStyle.Top,Height=65};
                 authLocation=new Label {Dock=DockStyle.Fill,AutoEllipsis=true,Text="Inicia Steam una vez. Puedes ocultar esta ventana y mantener la lectura mientras la app esté abierta."};
@@ -201,9 +201,8 @@ internal sealed class DesktopWindow : Form
     {
         if(exiting||!reading||authView==null||authView.CoreWebView2==null||!DesktopProtocol.IsAccount(authView.CoreWebView2.Source)||DateTime.UtcNow<nextRead||importing)return;
         if(pendingId!=null&&DateTime.UtcNow-pendingSince<TimeSpan.FromSeconds(20))return;
-        pendingId=Guid.NewGuid().ToString("D");pendingSince=DateTime.UtcNow;vipPart=null;seedPart=null;
-        var id=DesktopProtocol.Json.Serialize(pendingId);
-        var script="(()=>{const id="+id+";const entries=[['vip','"+DesktopProtocol.VipUrl+"'],['sedeo','"+DesktopProtocol.SeedUrl+"']];for(const [endpoint,source] of entries){(async()=>{const c=new AbortController();const t=setTimeout(()=>c.abort(),15000);try{const r=await fetch(source,{credentials:'include',cache:'no-store',signal:c.signal});const data=await r.json();window.chrome.webview.postMessage({kind:'account_part',id,endpoint,source,httpStatus:r.status,data});}catch{window.chrome.webview.postMessage({kind:'account_error',id,endpoint});}finally{clearTimeout(t);}})();}})();";
+        pendingId=Guid.NewGuid().ToString("D");pendingSince=DateTime.UtcNow;vipPart=null;seedPart=null;identityPart=null;
+        var script=AccountReadScript.Build(pendingId);
         bool failed=false;
         try{await authView.CoreWebView2.ExecuteScriptAsync(script);}catch{failed=true;}
         if(failed){pendingId=null;await DisconnectSnapshot();SetStatus("read_error","No se pudo consultar la cuenta. Vuelve a abrirla.");}
@@ -224,12 +223,12 @@ internal sealed class DesktopWindow : Form
             string endpoint=DesktopProtocol.Text(msg,"endpoint"),source=DesktopProtocol.Text(msg,"source");object data;
             if(!msg.TryGetValue("data",out data)||DesktopProtocol.Object(data)==null)return;
             var part=new Dictionary<string,object>{{"observedAt",DateTime.UtcNow.ToString("o")},{"source",source},{"data",data}};
-            if(endpoint=="vip"&&source==DesktopProtocol.VipUrl)vipPart=part;else if(endpoint=="sedeo"&&source==DesktopProtocol.SeedUrl)seedPart=part;else return;
-            if(vipPart==null||seedPart==null||importing)return;
+            if(endpoint=="vip"&&source==DesktopProtocol.VipUrl)vipPart=part;else if(endpoint=="sedeo"&&source==DesktopProtocol.SeedUrl)seedPart=part;else if(endpoint=="identity"&&source==DesktopProtocol.IdentityUrl)identityPart=part;else return;
+            if(vipPart==null||seedPart==null||identityPart==null||importing)return;
             importing=true;var id=pendingId;pendingId=null;
             try
             {
-                importTask=DesktopProtocol.PostLocal(http,"/api/account/import",new {format="wardogs-account-snapshot-v1",readerId=readerId,observedAt=DateTime.UtcNow.ToString("o"),vip=vipPart,seeding=seedPart});
+                importTask=DesktopProtocol.PostLocal(http,"/api/account/import",new {format="wardogs-account-snapshot-v1",readerId=readerId,observedAt=DateTime.UtcNow.ToString("o"),vip=vipPart,seeding=seedPart,identity=identityPart});
                 await importTask;
                 if(reading){nextRead=DateTime.UtcNow.AddSeconds(25);SetStatus("connected","Cuenta actualizada · lectura cada 30 segundos.");}
                 else await DisconnectSnapshot();

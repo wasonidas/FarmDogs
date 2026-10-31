@@ -19,6 +19,18 @@ function normalizeScreen(report,now,directory,{classify=classifyGameScreen}={}){
 function createScreenReader({root,dataDir,run=promisify(execFile),now=Date.now,directory=path.join(dataDir,'screen-monitor'),classify=classifyGameScreen}={}){
  let last=null,busy=false,abort=null,generation=0,lastObservedAt=null;
  const cacheDirectory=path.resolve(directory);
+ let evidenceFiles=new Set(),evidenceRestored=false;
+ async function retainEvidence(report,file,inventory){
+  // Keep one acquired frame for diagnosis when an Alt-Tab produces a burst of
+  // unavailable reports. This never feeds view() or renews capture freshness.
+  const acquisition=Date.parse(report?.source?.captureFinishedAt);
+  if(normalizeScreen(report,acquisition,cacheDirectory,{classify:()=>({phase:'unknown'})}).status!=='verified_capture')return false;
+  const image=path.resolve(report.source.path);
+  if(inventory&&!inventory.has(image))return false;
+  const imageStat=await fs.lstat(image).catch(()=>null);
+  if(!imageStat?.isFile()||imageStat.isSymbolicLink())return false;
+  evidenceFiles=new Set([file,image]);return true;
+ }
  async function prune(protectedFiles=new Set()){
   // Inventory survives restarts and includes partial/invalid helper output.
   // Never follow links or descend into other directories while pruning.
@@ -28,9 +40,20 @@ function createScreenReader({root,dataDir,run=promisify(execFile),now=Date.now,d
   for(const entry of await fs.readdir(cacheDirectory,{withFileTypes:true})){
    if(!entry.isFile()||!CACHE_FILE.test(entry.name))continue;
    const file=path.join(cacheDirectory,entry.name),stat=await fs.lstat(file).catch(()=>null);
-   if(stat?.isFile()&&!stat.isSymbolicLink())files.push({file,modified:stat.mtimeMs});
+   if(stat?.isFile()&&!stat.isSymbolicLink())files.push({file,modified:stat.mtimeMs,size:stat.size});
   }
-  files.sort((a,b)=>Number(protectedFiles.has(b.file))-Number(protectedFiles.has(a.file))||b.modified-a.modified||a.file.localeCompare(b.file));
+  if(!evidenceRestored){
+   const inventory=new Set(files.map(row=>row.file));
+   const reports=files.filter(row=>path.extname(row.file)==='.json'&&row.size<=262144).sort((a,b)=>b.modified-a.modified);
+   for(const row of reports){
+    const text=await fs.readFile(row.file,'utf8').catch(()=>null);
+    if(!text||text.length>262144)continue;
+    try{if(await retainEvidence(JSON.parse(text),row.file,inventory))break;}catch{}
+   }
+   evidenceRestored=true;
+  }
+  const priority=file=>protectedFiles.has(file)?2:evidenceFiles.has(file)?1:0;
+  files.sort((a,b)=>priority(b.file)-priority(a.file)||b.modified-a.modified||a.file.localeCompare(b.file));
   for(const {file} of files.slice(8)){
    const stat=await fs.lstat(file).catch(()=>null);
    if(stat?.isFile()&&!stat.isSymbolicLink())await fs.unlink(file).catch(()=>{});
@@ -51,6 +74,7 @@ function createScreenReader({root,dataDir,run=promisify(execFile),now=Date.now,d
    const report=JSON.parse(text);if(currentGeneration===generation){last=normalizeScreen(report,now(),directory,{classify});lastObservedAt=now();}
    const image=report?.source?.path;
    if(typeof image==='string'&&path.dirname(path.resolve(image))===cacheDirectory&&/^game-frame-/i.test(path.basename(image))&&CACHE_FILE.test(path.basename(image)))protectedFiles.add(path.resolve(image));
+   await retainEvidence(report,file);
   }catch{if(currentGeneration===generation){last={status:'unknown',scene:'unknown',gameForeground:false,reason:'No se pudo leer una pantalla actual del juego.'};lastObservedAt=now();}}
   finally{await prune(protectedFiles).catch(()=>{});busy=false;abort=null;}
  }

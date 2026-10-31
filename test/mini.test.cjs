@@ -12,9 +12,12 @@ const joinId='0665a9c0-80b7-4f32-ad47-f36b70367f10';
 class Element{
  constructor(){this.listeners=new Map();this.attributes={};this.dataset={};this.value='';this.checked=false;this.disabled=false;this.hidden=false;this.textContent='';this.children=new Map();}
  addEventListener(name,handler){const list=this.listeners.get(name)||[];list.push(handler);this.listeners.set(name,list);}
+ get disabled(){return this._disabled;}
+ set disabled(value){this._disabled=!!value;}
  setAttribute(name,value){this.attributes[name]=value;}
- querySelector(selector){assert.ok(['.map','.players','.status'].includes(selector));if(!this.children.has(selector))this.children.set(selector,new Element());return this.children.get(selector);}
+ querySelector(selector){assert.ok(['.map','.players','.status','.clan-presence','.clan-label'].includes(selector));if(!this.children.has(selector))this.children.set(selector,new Element());return this.children.get(selector);}
  reportValidity(){return true;}
+ set innerHTML(value){throw Error('La interfaz debe mostrar el contenido de la fuente como texto, sin interpretar HTML.');}
  focus(){}
 }
 function sample(){return {token:'test-token',now:'2026-10-31T10:00:00Z',capabilities:{standaloneMovement:true},config:{selectedServer:1},source:{lastSuccessAt:'2026-10-31T10:00:00Z',error:null},servers:Array.from({length:5},(_,i)=>({number:i+1,trusted:true,joinId,players:25,capacity:100,map:'Prueba',seedingActive:true,status:'above_entry_threshold'})),seedingContinuity:{},account:{vipFresh:false,seedingFresh:false},movement:{available:false},localTools:{game:true,movement:true,automaticMovement:true},autoSeeding:null,activity:null,opening:null,watch:null,rewards:null,teamClicker:{available:true,automaticSelectionAvailable:true,automaticAnyTeamAvailable:true,enabled:false,startMode:'automatic',team:'blue',intervalMs:20,targets:{}},diagnostics:{}};}
@@ -30,8 +33,29 @@ async function app({initial=sample(),clipboardFails=false,onPost,host=false}={})
  const context=vm.createContext({document,window:mockWindow,navigator:{clipboard:{writeText:async()=>{copies++;if(clipboardFails)throw Error('Portapapeles remoto ocupado');}}},console,Intl,Date,Number,Object,Set,fetch:async(route,options={})=>{const request={route,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,headers:options.headers};requests.push(request);if(request.method==='POST'&&onPost)current=await onPost(route,request.body,current)||current;return {ok:true,json:async()=>current};},setInterval:()=>0});
  vm.runInContext(script,context,{filename:'public/mini.js'});await new Promise(setImmediate);
  if(host)for(const handler of hostListeners)handler({data:{kind:'host_entry_focus_support',supported:true}});
- return {node,requests,hostMessages,hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},posts:()=>requests.filter(request=>request.method==='POST')};
+ return {node,requests,hostMessages,hostEvent:message=>{for(const handler of hostListeners)handler({data:message});},hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},async disconnect(){current=null;await vm.runInContext('poll()',context);},posts:()=>requests.filter(request=>request.method==='POST')};
 }
+
+test('clan: solo una presencia lista en servidor confirmado se vuelve verde y muestra el recuento real',async()=>{
+ const initial=sample();initial.servers=initial.servers.map(s=>({...s,online:true}));initial.clanPresence={status:'ready',clan:{slug:'arc-troopers',tag:'ARC',name:'Arc Troopers'},selfExcluded:false,servers:{'1':{status:'present',reportedCount:7,teams:{blue:7,red:0,green:0,unassigned:0},members:[{name:'DO_NOT_RENDER_ROSTER_NAME'}]},'2':{status:'empty',reportedCount:0,teams:{blue:0,red:0,green:0}},'3':{status:'unknown',reportedCount:null},'4':{status:'present',reportedCount:2},'5':{status:'present',reportedCount:1}}};initial.servers[3].online=false;initial.servers[4].trusted=false;
+ const a=await app({initial}),indicator=n=>a.node('server-'+n).querySelector('.clan-presence'),label=n=>a.node('server-'+n).querySelector('.clan-label').textContent;
+ assert.equal(indicator(1).dataset.state,'present');assert.equal(label(1),'Miembros del clan · 7');assert.match(indicator(1).title,/\[ARC\] Arc Troopers/);assert.match(indicator(1).title,/Azul 7 \/ Rojo 0 \/ Verde 0/);assert.match(indicator(1).title,/cada minuto; puedes estar incluido/);assert.doesNotMatch(indicator(1).title,/DO_NOT_RENDER_ROSTER_NAME/);
+ assert.equal(indicator(2).dataset.state,'empty');assert.equal(label(2),'Miembros del clan · 0');for(const n of [3,4,5]){assert.equal(indicator(n).dataset.state,'unknown');assert.doesNotMatch(label(n),/Miembros del clan · [0-9]/);}
+ await a.click('server-3');assert.equal(a.node('server-3').attributes['aria-pressed'],'true');assert.equal(a.posts().length,0);
+});
+
+test('clan: cuenta ausente, datos pendientes, caducados o inválidos permanecen neutros sin inventar cero',async()=>{
+ const initial=sample();initial.servers=initial.servers.map(s=>({...s,online:true}));const a=await app({initial});
+ for(const [status,expected]of [['login_required',/Conecta Steam/],['no_clan',/Sin clan/],['loading',/Consultando/],['stale',/caducada/],['unavailable',/sin datos/]]){a.update({...initial,clanPresence:{status,servers:{1:{status:'present',reportedCount:3}}}});assert.equal(a.node('server-1').querySelector('.clan-presence').dataset.state,'unknown');assert.match(a.node('server-1').querySelector('.clan-label').textContent,expected);}
+ for(const row of [{status:'stale',reportedCount:3},{status:'unknown',reportedCount:null},{status:'present',reportedCount:'3'},{status:'present',reportedCount:-1},{status:'empty',reportedCount:null}]){a.update({...initial,clanPresence:{status:'ready',servers:{1:row}}});assert.equal(a.node('server-1').querySelector('.clan-presence').dataset.state,'unknown');assert.doesNotMatch(a.node('server-1').querySelector('.clan-label').textContent,/Miembros del clan · 0/);}
+ const ready={...initial,clanPresence:{status:'ready',servers:{1:{status:'present',reportedCount:3}}}};a.update(ready);assert.equal(a.node('server-1').querySelector('.clan-presence').dataset.state,'present');a.update({...ready,servers:initial.servers.filter(s=>s.number!==1)});assert.equal(a.node('server-1').querySelector('.clan-presence').dataset.state,'unknown');a.update(ready);await a.disconnect();assert.equal(a.node('server-1').querySelector('.clan-presence').dataset.state,'unknown');
+});
+
+test('clan: nombre hostil se presenta como texto y no cambia equipo, destino ni modo elegidos',async()=>{
+ const initial=sample();initial.servers=initial.servers.map(s=>({...s,online:true}));const a=await app({initial});a.node('entry-team').value='red';a.node('seed-team').value='green';
+ const name='<img src=x onerror=alert(1)>',renamed={...initial,clanPresence:{status:'ready',clan:{tag:'<script>',name},servers:{1:{status:'present',reportedCount:1,teams:{blue:null,red:1,green:undefined}}}}};a.update(renamed);
+ const indicator=a.node('server-1').querySelector('.clan-presence');assert.ok(indicator.title.includes(name));assert.match(indicator.title,/Azul — \/ Rojo 1 \/ Verde —/);assert.equal(indicator.attributes['aria-label'],indicator.title);assert.equal(a.node('entry-team').value,'red');assert.equal(a.node('seed-team').value,'green');assert.equal(a.selectedTeam(),'blue');assert.equal(a.node('server-1').attributes['aria-pressed'],'true');assert.equal(a.posts().length,0);
+});
 
 test('interfaz entrada: elige servidor y equipo sin portapapeles, muestra progreso y cancela por UUID',async()=>{
  const initial=sample();initial.capabilities.automaticEntry=true;initial.teamClicker.team='red';
@@ -95,6 +119,57 @@ test('interfaz entrada: F8 mientras start sigue pendiente conserva el nonce para
  const a=await app({initial,host:true,onPost:async(route,body,s)=>{await pending;return {...s,entry:{id:'99999999-9999-4999-8999-999999999999',server:1,joinId,team:body.team,status:'waiting_game',reason:'Esperando.',endAt:'2026-10-31T12:00:00Z'}};}});
  const start=a.click('play',{isTrusted:true});a.hostKey('F8');const messages=()=>a.hostMessages.filter(m=>m.kind.startsWith('host_entry_focus_'));assert.deepEqual(messages().map(m=>m.kind),['host_entry_focus_arm','host_entry_focus_stop']);assert.equal(messages()[0].id,messages()[1].id);
  resolve();await start;assert.equal(messages().at(-1).kind,'host_entry_focus_bind');assert.equal(messages().at(-1).id,messages()[0].id);assert.equal(messages().at(-1).sessionId,'99999999-9999-4999-8999-999999999999');
+});
+
+test('foco inicial: admite el aviso antes del POST, deduplica tras vincular y conserva F8',async()=>{
+ let resolve;const pending=new Promise(done=>resolve=done),initial=sample();initial.capabilities.automaticEntry=true;
+ initial.entry={id:'88888888-8888-4888-8888-888888888888',server:1,status:'completed',reason:'Entrada anterior.'};
+ const sessionId='99999999-9999-4999-8999-999999999999';
+ const a=await app({initial,host:true,onPost:async(route,body,s)=>{await pending;return {...s,entry:{id:sessionId,server:1,joinId,status:'waiting_game',reason:'Esperando.',endAt:'2026-10-31T12:00:00Z'}};}});
+ const start=a.click('play',{isTrusted:true}),id=a.hostMessages.find(m=>m.kind==='host_entry_focus_arm').id;
+ const warning={kind:'host_entry_focus_status',id,sessionId:null,status:'cancelled',reason:'Has cambiado de aplicación; vuelve a Wardogs cuando quieras.'};
+ a.hostEvent(warning);assert.equal(a.node('notice-text').textContent,warning.reason);assert.equal(a.node('notice').hidden,false);
+ await a.click('notice-close');a.hostEvent(warning);assert.equal(a.node('notice').hidden,true,'el mismo estado no reabre un aviso cerrado');
+ a.hostKey('F8');assert.equal(a.hostMessages.at(-1).kind,'host_entry_focus_stop');assert.equal(a.hostMessages.at(-1).id,id);
+ resolve();await start;const prepared=a.node('notice-text').textContent;assert.match(prepared,/Entrada automática al #1 preparada/);
+ a.hostEvent({...warning,sessionId});assert.equal(a.node('notice-text').textContent,prepared,'un Bind tardío no sustituye el mensaje de éxito por el aviso repetido');
+ assert.equal(a.hostMessages.at(-1).kind,'host_entry_focus_bind');assert.equal(a.hostMessages.at(-1).sessionId,sessionId);
+});
+
+test('foco inicial: sólo la sesión vigente puede avisar y el primer plano conocido liquida sólo ese aviso',async()=>{
+ const initial=sample();initial.capabilities.automaticEntry=true;const sessionId='99999999-9999-4999-8999-999999999999';
+ const a=await app({initial,host:true,onPost:(route,body,s)=>({...s,entry:{id:sessionId,server:1,joinId,status:'waiting_game',reason:'Esperando.',endAt:'2026-10-31T12:00:00Z'}})});
+ a.hostEvent({kind:'host_foreground_status',supported:true,known:true,gameForeground:true});
+ await a.click('play',{isTrusted:true});const id=a.hostMessages.find(m=>m.kind==='host_entry_focus_arm').id,prepared=a.node('notice-text').textContent;
+ const warning={kind:'host_entry_focus_status',id,sessionId,status:'refused',reason:'Windows no permitió activar Wardogs; ponlo delante manualmente.'};
+ a.hostEvent({...warning,id:'77777777-7777-4777-8777-777777777777'});a.hostEvent({...warning,sessionId:'88888888-8888-4888-8888-888888888888'});assert.equal(a.node('notice-text').textContent,prepared);
+ a.hostEvent(warning);assert.equal(a.node('notice-text').textContent,warning.reason,'una muestra de foco anterior al clic no oculta un aviso nuevo');
+ for(const message of [{supported:false,known:true,gameForeground:true},{supported:true,known:false,gameForeground:true},{supported:true,known:true,gameForeground:false}]){a.hostEvent({kind:'host_foreground_status',...message});assert.equal(a.node('notice').hidden,false);}
+ a.hostEvent({kind:'host_foreground_status',supported:true,known:true,gameForeground:true});assert.equal(a.node('notice').hidden,true);
+ a.hostEvent({...warning,status:'cancelled',reason:'Estado inicial tardío.'});assert.equal(a.node('notice').hidden,true,'el foco inicial ya satisfecho no vuelve a avisar');
+ a.hostKey('F8');assert.equal(a.hostMessages.at(-1).kind,'host_entry_focus_stop');assert.equal(a.hostMessages.at(-1).id,id);
+});
+
+test('foco inicial: avanzar, terminar, cambiar de sesión o detener invalida los avisos tardíos sin perder el nonce',async()=>{
+ for(const status of ['navigating','joining','choosing_team','deploying','starting_seeding','completed','cancelled','expired','error','interrupted','operator_stop','other_session']){
+  const initial=sample();initial.capabilities.automaticEntry=true;const sessionId='99999999-9999-4999-8999-999999999999';
+  const a=await app({initial,host:true,onPost:(route,body,s)=>({...s,entry:{id:sessionId,server:1,joinId,status:'opening',reason:'Abriendo.',endAt:'2026-10-31T12:00:00Z'}})});
+  await a.click('play',{isTrusted:true});const id=a.hostMessages.find(m=>m.kind==='host_entry_focus_arm').id;
+  const warning={kind:'host_entry_focus_status',id,sessionId,status:'cancelled',reason:'Vuelve a Wardogs.'};a.hostEvent(warning);assert.equal(a.node('notice').hidden,false);
+  a.update({...a.current,entry:{...a.current.entry,status:status==='other_session'||status==='operator_stop'?'waiting_game':status,id:status==='other_session'?'88888888-8888-4888-8888-888888888888':sessionId,operatorStopped:status==='operator_stop'}});
+  assert.equal(a.node('notice').hidden,true,status+' limpia el aviso inicial');a.hostEvent({...warning,status:'refused',reason:'Respuesta inicial tardía.'});assert.equal(a.node('notice').hidden,true,status+' ignora avisos posteriores');
+  a.hostKey('F8');assert.equal(a.hostMessages.at(-1).kind,'host_entry_focus_stop');assert.equal(a.hostMessages.at(-1).id,id);
+ }
+});
+
+test('foco inicial: primer plano y progreso conservan mensajes de éxito y error',async()=>{
+ for(const failure of [false,true]){
+  const initial=sample();initial.capabilities.automaticEntry=true;const sessionId='99999999-9999-4999-8999-999999999999';
+  const a=await app({initial,host:true,onPost:(route,body,s)=>{if(failure)throw Error('No se pudo iniciar la entrada.');return {...s,entry:{id:sessionId,server:1,joinId,status:'waiting_game',reason:'Esperando.',endAt:'2026-10-31T12:00:00Z'}};}});
+  await a.click('play',{isTrusted:true});const message=a.node('notice-text').textContent;assert.match(message,failure?/No se pudo iniciar/:/Entrada automática/);
+  a.hostEvent({kind:'host_foreground_status',supported:true,known:true,gameForeground:true});a.update({...a.current,entry:{id:sessionId,server:1,status:'completed',reason:'Completada.'}});
+  const id=a.hostMessages.find(m=>m.kind==='host_entry_focus_arm').id;a.hostEvent({kind:'host_entry_focus_status',id,sessionId,status:'cancelled',reason:'Aviso tardío.'});assert.equal(a.node('notice-text').textContent,message);assert.equal(a.node('notice').hidden,false);
+ }
 });
 
 test('interfaz actualización: preferencia, comprobación e instalación conservan estado y bloquean nuevas entradas',async()=>{

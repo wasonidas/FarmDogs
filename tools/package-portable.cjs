@@ -8,7 +8,7 @@ const fixed=['FarmDogs.exe','LICENSE','README.md','package.json','bin/FarmDogsAp
 const files=[...fixed];
 const desktopStaged=process.argv.includes('--staging-desktop');
 const sourceFile=relative=>path.join(root,desktopStaged&&relative==='bin/FarmDogsApp.exe'?'bin/FarmDogsApp.next.exe':relative);
-for(const directory of ['src','public'])for(const entry of fs.readdirSync(path.join(root,directory),{withFileTypes:true}))if(entry.isFile()&&/\.(?:cjs|js|html|css)$/.test(entry.name))files.push(directory+'/'+entry.name);
+for(const directory of ['src','public'])for(const entry of fs.readdirSync(path.join(root,directory),{withFileTypes:true}))if(entry.isFile()&&(/\.(?:cjs|js|html|css)$/.test(entry.name)||directory==='public'&&/\.(?:png|ttf|txt)$/.test(entry.name)))files.push(directory+'/'+entry.name);
 for(const relative of files)if(!fs.statSync(sourceFile(relative)).isFile())throw Error('Falta '+relative);
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const cap=JSON.parse(fs.readFileSync(path.join(root,'bin/movement-capabilities.json')));
@@ -27,7 +27,7 @@ for(const member of ['LICENSE.txt','NOTICE.txt']){
  fs.mkdirSync(path.join(folder,'licenses'),{recursive:true});fs.writeFileSync(path.join(folder,'licenses','WebView2-'+member),contents);
 }
 fs.writeFileSync(path.join(folder,'LEEME.txt'),[
- 'FARMDOGS - versión de prueba para Windows x64',
+ 'FARMDOGS LAUNCHER - versión de prueba para Windows x64',
  '',
  'Extrae esta carpeta completa y abre FarmDogs.exe con doble clic.',
  'Conserva las carpetas bin, src y public junto al ejecutable. Node está incluido.',

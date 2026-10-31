@@ -1,4 +1,5 @@
 'use strict';
+const {normalizeClanAssociation}=require('./clan-association.cjs');
 const VIP_SOURCE='https://api.wardogsspain.com/api/cuenta/vip';
 const SEED_SOURCE='https://api.wardogsspain.com/api/cuenta/sedeo';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -15,7 +16,7 @@ function normalizeAccountImport(input,now){
  if(!object(s)||typeof s.estado!=='string'||!Number.isFinite(Date.parse(s.ahora))||Math.abs(Date.parse(s.ahora)-seedAt)>90000)throw Error('La lectura de seeding esta incompleta o atrasada.');
  if(s.servidor!==undefined&&(!Number.isInteger(s.servidor)||s.servidor<1||s.servidor>5))throw Error('Servidor de cuenta no admitido.');
  if(s.contando!==undefined&&typeof s.contando!=='boolean')throw Error('Estado del contador no valido.');
- return {status:'browser_snapshot',transport:input.readerId?'desktop_webview':'browser_import',readerId:input.readerId||null,observedAt:input.observedAt,ingestedAt:new Date(now).toISOString(),vip:structuredClone(input.vip),seeding:structuredClone(input.seeding),errors:[]};
+ return {status:'browser_snapshot',transport:input.readerId?'desktop_webview':'browser_import',readerId:input.readerId||null,observedAt:input.observedAt,ingestedAt:new Date(now).toISOString(),vip:structuredClone(input.vip),seeding:structuredClone(input.seeding),clanAssociation:normalizeClanAssociation(input.identity,now),errors:[]};
 }
 function browserBaselineFile(observedAt){
  const date=new Date(observedAt);if(!Number.isFinite(date.getTime()))throw Error('Referencia de cuenta sin fecha.');

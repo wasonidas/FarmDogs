@@ -35,7 +35,9 @@ test('contrato JS→C#: los JSON originales de preparación y grant arman una se
  await f.controller.prepareOwned({ownerId:'11111111-1111-4111-8111-111111111111',team:'any',endAt:new Date(f.utc+60000).toISOString(),canArm:async()=>true});commands.push(f.command());
  const compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe'),probe=path.join(f.dir,'StartupContractProbe.exe'),sequence=path.join(f.dir,'startup-sequence.json');
  execFileSync(compiler,['/nologo','/langversion:5','/platform:x64','/target:exe','/main:TeamClickerStartupContractProbe','/r:System.Web.Extensions.dll','/out:'+probe,path.join(__dirname,'..','native','TeamClickerCore.cs'),path.join(__dirname,'..','native','TeamClickerStartupContractProbe.cs')],{encoding:'utf8',windowsHide:true,timeout:30000});
- const validate=values=>{fs.writeFileSync(sequence,JSON.stringify(values));return JSON.parse(execFileSync(probe,[sequence],{encoding:'utf8',windowsHide:true,timeout:5000}));};
+ // Cold Windows executable startup can exceed 5s before this input-free probe
+ // begins. Keep its test timeout separate from the production input leases.
+ const validate=values=>{fs.writeFileSync(sequence,JSON.stringify(values));return JSON.parse(execFileSync(probe,[sequence],{encoding:'utf8',windowsHide:true,timeout:30000}));};
  const result=validate(commands);assert.equal(result.nativeInputsAllowed,false);assert.equal(result.steps.length,2);assert.equal(result.steps[0].armed,false);assert.equal(result.steps[1].armed,true);assert.equal(result.steps[1].automaticStoppedSessionId,null);assert.equal(result.steps[1].sessionId,commands[1].sessionId);
  // This mutation reproduces the former JS/C# mismatch rather than duplicating
  // the C# rule in a mock: production Apply must reject same-session rearming.

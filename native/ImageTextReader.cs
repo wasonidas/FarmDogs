@@ -128,6 +128,11 @@ internal static class ImageTextReader
                 await AddRegion(engine,decoder,lines,passes,"hud_health",.9525,.938,.0195,.032,3,32);
                 if(!lines.Any(line=>line.pass.StartsWith("hud_health",StringComparison.Ordinal)&&System.Text.RegularExpressions.Regex.IsMatch(line.text.Trim(),"^\\d{1,3}$")))
                     await AddRegion(engine,decoder,lines,passes,"hud_health_pixels",.9525,.938,.0195,.032,4,32,false,true);
+                // Sunlight can wash out the outlined compass. Keep three HUD
+                // anchors: read the complete lower-left CONTROL label only when
+                // hands and health are already visible and compass OCR failed.
+                if(!HasCompassReading(lines,decoder.PixelWidth,decoder.PixelHeight)&&HasHandsReading(lines)&&HasHealthReading(lines,decoder.PixelWidth,decoder.PixelHeight))
+                    await AddRegion(engine,decoder,lines,passes,"hud_control",.015,.944,.14,.035,5,32,false,true);
                 string digest;
                 using (var hasher = SHA256.Create())
                 using (var file = File.OpenRead(fileInfo.FullName)) digest = BitConverter.ToString(hasher.ComputeHash(file)).Replace("-", "").ToLowerInvariant();
@@ -162,6 +167,10 @@ internal static class ImageTextReader
     }
     private static bool HasHandsReading(List<ReadLine> lines)
     {return lines.Any(line=>line.pass.StartsWith("hud_hands",StringComparison.Ordinal)&&new[]{"FISTS","PUÑOS","PUNOS"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase)));}
+    private static bool HasCompassReading(List<ReadLine> lines,uint width,uint height)
+    {return lines.Any(line=>System.Text.RegularExpressions.Regex.IsMatch(line.text.Trim(),"^\\|?\\s*[0-9]{1,3}\\s+[NEWS]{1,2}$",System.Text.RegularExpressions.RegexOptions.IgnoreCase)&&line.words.Length>0&&line.words.Min(word=>word.x)>width*.25&&line.words.Min(word=>word.x)<width*.75&&line.words.Min(word=>word.y)<height*.08);}
+    private static bool HasHealthReading(List<ReadLine> lines,uint width,uint height)
+    {return lines.Any(line=>line.words.Any(word=>System.Text.RegularExpressions.Regex.IsMatch(word.text,"^[0-9]{1,3}$")&&Int32.Parse(word.text)>0&&Int32.Parse(word.text)<=100&&word.x>width*.90&&word.y>height*.90));}
     private static async Task AddRegion(OcrEngine engine,BitmapDecoder decoder,List<ReadLine> lines,List<ReadPass> passes,string name,double left,double top,double width,double height,uint scale,uint padding=0,bool contrast=false,bool nearest=false,bool grayText=false)
     {
         uint x=(uint)Math.Floor(decoder.PixelWidth*left),y=(uint)Math.Floor(decoder.PixelHeight*top);

@@ -1,0 +1,58 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2559,
+  "height": 1434,
+  "captureFreshnessVerified": false,
+  "source": {
+    "sha256": "924a7923df7ee8e092e6a69cf55e165158e45cc895f26db01226a11f6d2ea2c8",
+    "capturedAt": null
+  },
+  "lines": [
+    {
+      "text": "FISTS",
+      "pass": "hud_hands",
+      "words": [
+        {
+          "text": "FISTS",
+          "x": 2473,
+          "y": 1213.6666666666667,
+          "width": 39,
+          "height": 11.666666666666515
+        }
+      ]
+    },
+    {
+      "text": "100",
+      "pass": "hud_health",
+      "words": [
+        {
+          "text": "100",
+          "x": 2440.6666666666665,
+          "y": 1361.6666666666667,
+          "width": 29.333333333333485,
+          "height": 14.666666666666515
+        }
+      ]
+    },
+    {
+      "text": "CONTROL: MANTICORE",
+      "pass": "hud_control",
+      "words": [
+        {
+          "text": "CONTROL:",
+          "x": 52,
+          "y": 1366,
+          "width": 78,
+          "height": 11
+        },
+        {
+          "text": "MANTICORE",
+          "x": 139,
+          "y": 1366,
+          "width": 90,
+          "height": 11
+        }
+      ]
+    }
+  ]
+}

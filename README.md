@@ -1,18 +1,20 @@
-# FarmDogs
+<img src="public/farmdogs-ai-mark.png" width="72" height="72" alt="Emblema de FarmDogs Launcher">
 
-**Servidores, seeding, equipo y VIP de Wardogs en una aplicación para Windows.**
+# FarmDogs Launcher
 
-FarmDogs reúne los cinco servidores de Wardogs Spain, entrada automática por ID, selección de equipo y movimiento temporal anti-AFK. Funciona en tu PC y guarda allí su configuración. Es un proyecto independiente, sin afiliación con Wardogs ni Wardogs Spain.
+**Jugar, seedear, elegir equipo y consultar tu VIP de Wardogs desde Windows.**
+
+FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automática por ID, presencia de tu clan, selección de equipo y movimiento temporal anti-AFK. Funciona en tu PC y guarda allí su configuración. Tiene identidad visual propia: un perro tecnológico y tipografía Rajdhani Bold. Es un proyecto independiente, sin afiliación con Wardogs ni Wardogs Spain.
 
 [Descargar el portable](https://github.com/wasonidas/FarmDogs/releases/latest) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-Esta guía corresponde a **FarmDogs 0.4.0, versión beta**. La entrada automática hasta movimiento se ha comprobado en un servidor de Wardogs Spain en espera de jugadores. Consulta el estado y los límites de la prueba más abajo.
+**FarmDogs Launcher 0.5.0** añade presencia del clan en los servidores, una interfaz renovada y mejoras en cola, reconocimiento del personaje y avisos. Puedes entrar con un equipo aleatorio, elegir el color de tu clan o preparar seeding. Consulta las comprobaciones y los límites de la versión más abajo.
 
 ## Descargar y abrir
 
 Para usar FarmDogs no necesitas compilar ni instalar Node.js.
 
-1. Abre las [versiones publicadas](https://github.com/wasonidas/FarmDogs/releases), elige la que quieras instalar y descarga **FarmDogs-portable.zip** en sus archivos adjuntos.
+1. Abre la [última versión publicada](https://github.com/wasonidas/FarmDogs/releases/latest) y descarga **FarmDogs-portable.zip** en sus archivos adjuntos. Las versiones preliminares, si existen, aparecen en [Versiones](https://github.com/wasonidas/FarmDogs/releases).
 2. Extrae **toda la carpeta** en una ubicación donde puedas guardar archivos.
 3. Abre **FarmDogs.exe**.
 
@@ -22,7 +24,7 @@ Necesitas Windows 10/11 x64, el runtime Microsoft Edge WebView2, reconocimiento 
 
 ### Actualizar sin perder tus ajustes
 
-**Desde 0.3.0:** la primera actualización a 0.4.0 es manual. Cierra FarmDogs, extrae toda la versión nueva en otra carpeta y pasa tu carpeta `data` a esa carpeta antes de abrirla. Ahí se guardan los ajustes y el perfil de cuenta. No compartas esa carpeta con el clan: cada persona debe utilizar sus propios datos.
+**Desde 0.3.0:** la primera actualización a una versión con actualizador es manual. Cierra FarmDogs Launcher, extrae toda la versión nueva en otra carpeta y pasa tu carpeta `data` a esa carpeta antes de abrirla. Ahí se guardan los ajustes y el perfil de cuenta. No compartas esa carpeta con el clan: cada persona debe utilizar sus propios datos.
 
 **Desde 0.4.0:** la tarjeta **Actualizaciones** permite dejar marcada **Actualizar automáticamente**, usar **Buscar actualización** o pulsar **Instalar y reabrir**. FarmDogs consulta únicamente las versiones estables de `wasonidas/FarmDogs`, descarga el portable y comprueba su SHA-256, las rutas y el manifiesto de archivos.
 
@@ -35,10 +37,10 @@ La instalación espera a que no haya entrada, movimiento, autoclic, búsqueda, p
 | Función | Para qué sirve | ¿Requiere conectar Steam a FarmDogs? |
 | --- | --- | --- |
 | **Anti-AFK** | Movimiento temporal para una ausencia breve en tu partida actual. | No |
-| **Entrar** | Elegir servidor y equipo; abrir Wardogs, entrar por ID y esperar al despliegue. | No |
-| **Seedear** | Completar la entrada y preparar movimiento ahora, a una hora o al detectar actividad. | No para la cadena de entrada; sí para consultar presencia privada y premios |
-| **Elegir equipo** | Intentar entrar automáticamente en azul, rojo o verde. | No |
-| **Mi VIP** | Consultar cuenta, progreso y premios pendientes. | Sí |
+| **JUGAR** | Ver servidores y clan; elegir destino/equipo y completar la entrada por ID. | No para entrar; sí para identificar tu clan |
+| **SEEDING** | Completar la entrada y preparar movimiento ahora, a una hora o al detectar actividad. | No para la cadena de entrada; sí para consultar presencia privada y premios |
+| **EQUIPO** | Intentar entrar automáticamente en azul, rojo o verde. | No |
+| **MI VIP** | Consultar cuenta, progreso y premios pendientes. | Sí |
 
 **Anti-AFK** permanece visible encima de las cuatro pestañas. La conexión de Steam mencionada en la tabla es la de la cuenta web de FarmDogs. Para abrir el juego se necesita Steam instalado y una sesión recordada válida. **Steam y Wardogs pueden estar cerrados**: FarmDogs solicita su apertura y continúa la entrada cuando reconoce el juego. Si Steam pide contraseña o Steam Guard, debes autenticarte tú.
 
@@ -63,26 +65,9 @@ FarmDogs espera a reconocer la interfaz del personaje desplegado y alterna pasos
 
 Este modo no abre el juego, redespliega ni reconecta al personaje. Tampoco comprueba seeding ni concede por sí mismo días VIP.
 
-## Elegir equipo automáticamente
+## JUGAR: servidor, clan y entrada automática
 
-1. Abre **Elegir equipo**, selecciona **azul, rojo o verde** y pulsa **Esperar equipo**.
-2. Entra al servidor desde Wardogs y deja el juego delante.
-3. Cuando aparezca el selector de facciones, FarmDogs reconocerá la tarjeta elegida y empezará a clicar.
-4. Al leer **DESPLEGANDO**, se desactiva por completo.
-
-No necesitas teclas de inicio, colocar el cursor ni guardar coordenadas. El intervalo entre clics se puede ajustar entre **20 y 2000 ms**.
-
-Una vez reconocida la tarjeta, el clic continúa aunque el color se apague por equilibrio de equipos o desaparezca el selector. **ENTRANDO**, un cambio de color o la aparición del HUD no sustituyen la confirmación **DESPLEGANDO**.
-
-Antes de adquirir la tarjeta puedes alternar entre FarmDogs y el juego. Una vez clicando, perder el foco, cambiar la ventana o su tamaño, pulsar una tecla modificadora o un error cancela el intento. Para repetir, pulsa **Esperar equipo** otra vez. **Cancelar** y **F8** también terminan la espera o los clics.
-
-Cambiar color o velocidad durante la espera la cancela antes de aplicar los nuevos ajustes. Esta pestaña sirve cuando tú completas la entrada al servidor. En **Entrar** o **Seedear**, la cadena automática coordina el mismo selector y espera su desarme antes de entregar el control al movimiento. No actives dos automatismos por separado.
-
-## Entrar y seedear
-
-### Elegir un servidor
-
-En **Entrar** verás los cinco servidores de Wardogs Spain y su población, consultada cada 30 segundos.
+En **JUGAR** verás los cinco servidores de Wardogs Spain y su población, consultada cada 30 segundos.
 
 1. Elige servidor y **Equipo**: **Aleatorio · primero disponible**, azul, rojo o verde.
 2. Pulsa **Entrar automáticamente** y deja **Wardogs en primer plano**.
@@ -90,7 +75,7 @@ En **Entrar** verás los cinco servidores de Wardogs Spain y su población, cons
 
 FarmDogs reconoce las pantallas del juego, abre la entrada por ID, escribe el destino, busca el servidor y comprueba su confirmación antes de conectar. Después intenta entrar en el equipo elegido hasta leer **DESPLEGANDO** y espera un HUD reciente del personaje desplegado. Abrir el juego, escribir el ID o ver el selector no bastan para declarar la entrada completada.
 
-**Aleatorio · primero disponible** elige al azar entre los equipos que estén disponibles en el selector reconocido. Es útil si quieres entrar cuanto antes y no necesitas coincidir con tu clan. Si eliges un color concreto, mantiene los intentos sobre ese equipo hasta DESPLEGANDO o una parada.
+**Aleatorio · primero disponible** elige al azar entre los equipos que estén disponibles en el selector reconocido. Es útil si quieres entrar cuanto antes y no necesitas coincidir con tu clan. Si eliges un color concreto, mantiene los intentos sobre ese equipo hasta DESPLEGANDO o una parada. No cambia de color por su cuenta para acelerar la entrada.
 
 El botón **Desplegar** del menú principal aparece gris mientras carga y todavía no acepta clics. FarmDogs espera a reconocerlo a pleno color antes de pulsarlo. En el selector de equipos mantiene el clic continuo aunque el color del equipo esté apagado por equilibrio.
 
@@ -98,13 +83,31 @@ Al comenzar intenta poner Wardogs delante **una sola vez** y continúa desde su 
 
 Mientras avanza, la app muestra un aviso grande: **FarmDogs está trabajando. No necesitas tocar nada**, junto al paso actual. Las cargas pueden tardar: espera a que reconozca la siguiente pantalla y deja Wardogs delante. **F8** o **Detener entrada** siguen disponibles durante la espera.
 
-Puedes empezar con Steam y el juego cerrados, o desde los menús de entrada de Wardogs. Si ya estás desplegado y solo quieres movimiento, usa Anti-AFK o la confirmación manual de Seedear. Durante la cadena, una pantalla no reconocida queda en espera; un error de servidor, reinicio o regreso a un menú tras confirmar el destino detiene el intento. No hay reconexión automática. **Detener entrada** y **F8** cancelan sin volver a intentarlo solos.
+Puedes empezar con Steam y el juego cerrados, o desde los menús de entrada de Wardogs. Si ya estás desplegado y solo quieres movimiento, usa Anti-AFK o la confirmación manual de SEEDING. Durante la cadena, una pantalla no reconocida queda en espera; un error de servidor, reinicio o regreso a un menú tras confirmar el destino detiene el intento. No hay reconexión automática. **Detener entrada** y **F8** cancelan sin volver a intentarlo solos.
 
 Si la instalación no dispone del controlador de entrada, el botón muestra **Abrir Wardogs y copiar ID**. En ese modo completa tú la entrada y el despliegue. Si no se puede copiar el ID, sigue visible para copiarlo manualmente.
 
-### Preparar una sesión de seeding
+### Cuando el servidor está lleno
 
-Elige servidor en **Entrar**, después abre **Seedear**. En **Equipo al entrar** deja **Aleatorio · primero disponible (recomendado)** o elige el color de tu clan. Ajusta la duración y cómo comenzar:
+FarmDogs reconoce la cola del servidor y espera plaza sin repetir la búsqueda ni abandonar la cola por su cuenta. Al entrar, continúa con el equipo elegido. **La cola consume la duración máxima de tu sesión**, igual que las cargas, la selección de equipo y el movimiento. Ajusta ese tiempo antes de empezar: no se añade otro plazo al llegar al selector. Al agotarse, la automatización termina.
+
+La parada del autoclic al leer **DESPLEGANDO** y el estado **Entrada completada** son pasos distintos. Para completar la entrada, FarmDogs también debe reconocer el HUD del personaje desplegado. El movimiento de SEEDING espera después sus propias condiciones.
+
+### Ver dónde está tu clan
+
+Conecta Steam desde **MI VIP** para identificar el clan registrado en tu cuenta de Wardogs Spain. Después, cada servidor muestra un piloto y el número de miembros reportados:
+
+- **Verde:** la fuente reciente informa de al menos un miembro del clan en ese servidor.
+- **Cero miembros:** una lectura válida no informa de miembros allí.
+- **Sin datos, lectura caducada o sin comprobar:** no se conoce el recuento; no equivale a cero.
+
+Al dejar el cursor sobre el indicador verás el clan y el reparto azul/rojo/verde, cuando estén disponibles. La asociación con tu clan procede de la lectura privada autorizada de tu cuenta; los recuentos proceden del endpoint público de ese clan. La web los actualiza aproximadamente **cada minuto**, por lo que pueden llevar retraso. **Puedes estar incluido en el recuento**: no se presenta como número de compañeros distintos de ti. La app no conserva nombres ni SteamID de los integrantes del listado público.
+
+No requiere Discord, una clave API de Steam ni permisos para administrar el clan. Si falta información de asociación, FarmDogs muestra estado desconocido; solo una respuesta explícita sin clan permite mostrar **Sin clan vinculado**.
+
+## SEEDING: entrada y movimiento programables
+
+Elige servidor en **JUGAR**, después abre **SEEDING**. En **Equipo al entrar** deja **Aleatorio · primero disponible (recomendado)** o elige el color de tu clan. Ajusta la duración y cómo comenzar:
 
 - **Ahora:** pulsa **Entrar y seedear** para completar entrada, equipo y despliegue, y preparar el movimiento.
 - **A una hora:** programa fecha y hora de Madrid. Con **Activar también el movimiento automático**, la entrada entrega el control a seeding; sin marcarlo, termina después del despliegue.
@@ -122,6 +125,21 @@ La duración incluye búsqueda, entrada, espera y movimiento. Las programaciones
 
 El movimiento se pausa al abrir menús, perder el foco o no reconocer el HUD; solo reanuda con una captura válida nueva. El autoclic ya iniciado se cancela si pierde el foco. F8 o Detener cancelan la cadena y sus controles, sin rearmado automático.
 
+## EQUIPO: entrar en el color de tu clan
+
+1. Abre **EQUIPO**, selecciona **azul, rojo o verde** y pulsa **Esperar equipo**.
+2. Entra al servidor desde Wardogs y deja el juego delante.
+3. Cuando aparezca el selector de facciones, FarmDogs reconoce la tarjeta elegida y empieza a clicar.
+4. Al leer **DESPLEGANDO**, detiene y desarma el autoclic.
+
+No necesitas teclas de inicio, colocar el cursor ni guardar coordenadas. El intervalo entre clics se puede ajustar entre **20 y 2000 ms**.
+
+Una vez reconocida la tarjeta, el clic continúa aunque el color se apague por equilibrio de equipos o desaparezca el selector. **ENTRANDO**, un cambio de color o la aparición del HUD no sustituyen la confirmación **DESPLEGANDO**.
+
+Antes de adquirir la tarjeta puedes alternar entre FarmDogs y el juego. Una vez clicando, perder el foco, cambiar la ventana o su tamaño, pulsar una tecla modificadora o un error cancela el intento. Para repetir, pulsa **Esperar equipo** otra vez. **Cancelar** y **F8** también terminan la espera o los clics.
+
+Cambiar color o velocidad durante la espera la cancela antes de aplicar los nuevos ajustes. Esta pestaña sirve cuando tú completas la entrada al servidor. En **JUGAR** o **SEEDING**, la cadena automática coordina el mismo selector y espera su desarme antes de entregar el control al movimiento. No actives dos automatismos por separado.
+
 ## Avisos grandes y sonido
 
 FarmDogs avisa cuando una acción necesita **Wardogs en primer plano**. La ventana de aviso es grande, funciona con FarmDogs minimizada y no cambia la ventana activa. Se oculta al volver al juego. Distingue falta de foco de una pantalla o un HUD que no se reconoce.
@@ -133,9 +151,9 @@ Si la selección de equipo se cancela por perder el foco, el aviso explica que d
 
 Los avisos automáticos se deduplican y tienen un intervalo mínimo entre sonidos. No cambian el volumen del juego. Para recibir el aviso fuera del navegador, utiliza **FarmDogs.exe**.
 
-## Mi VIP y la cuenta de Steam
+## MI VIP: cuenta de Steam y premios
 
-Conecta Steam desde **Mi VIP** para consultar estado VIP, progreso y premios. El inicio de sesión se realiza en la web oficial dentro del perfil WebView2 de la aplicación. No necesitas una clave API de Steam ni copiar cookies desde otro navegador.
+Conecta Steam desde **MI VIP** para consultar estado VIP, progreso, premios y asociación con tu clan. El inicio de sesión se realiza en la web oficial dentro del perfil WebView2 de la aplicación. Puedes **Ocultar y seguir leyendo** sin mantener visible esa ventana; **Detener lectura** desconecta el lector y conserva la sesión web. No necesitas una clave API de Steam ni copiar cookies desde otro navegador.
 
 La protección **Cobrar antes de caducar** espera a que Wardogs publique la **fecha final de cobro** y actúa con la antelación guardada, 15 minutos por defecto. No cobra el premio de la semana en curso solo por activarla. Necesita el PC y FarmDogs abiertos y una lectura autorizada de la cuenta. Un resultado incierto no se repite automáticamente.
 
@@ -153,9 +171,12 @@ FarmDogs no gasta WSP ni compra VIP. Las reglas del servidor pueden cambiar; la 
 | Wardogs se abre detrás de otra ventana | Vuelve al juego. FarmDogs solo intenta activarlo una vez al inicio y respeta tus cambios de ventana posteriores. |
 | Steam solicita inicio de sesión | Completa tú la autenticación. FarmDogs no introduce credenciales ni códigos de Steam Guard. |
 | Entrada detenida por un error | Revisa el motivo y vuelve a iniciarla desde la app. No reconecta ni repite búsquedas de resultado incierto. |
+| Lleva tiempo en cola | Revisa la posición y el fin de sesión. La cola consume la duración máxima que elegiste. |
+| El autoclic terminó pero sigue Esperando despliegue | DESPLEGANDO ya detuvo los clics; falta reconocer el HUD. Mantén manos vacías, menús cerrados y el juego delante. |
 | Un botón está bloqueado | Detén el otro automatismo: movimiento, selector y programación no se ejecutan a la vez. |
 | No se oye el aviso | Comprueba Avisos con sonido y Probar aviso; usa la ventana de escritorio. |
 | No aparece VIP o progreso reciente | Revisa la conexión de la cuenta en Mi VIP. |
+| No aparece el piloto verde del clan | Revisa la lectura Steam y el estado del indicador. Un dato caducado o desconocido no equivale a ausencia de compañeros. |
 | Actualización pendiente | Termina o cancela automatismos y programaciones. La copia de desarrollo no se actualiza automáticamente. |
 
 Si la aplicación muestra un error persistente, puedes [abrir una incidencia](https://github.com/wasonidas/FarmDogs/issues). Describe qué estabas haciendo y tu versión; evita adjuntar tu carpeta `data` o lecturas privadas de la cuenta.
@@ -164,15 +185,17 @@ Si la aplicación muestra un error persistente, puedes [abrir una incidencia](ht
 
 La configuración, el perfil de cuenta y los registros se guardan en `data`, junto a la aplicación. Esa carpeta está excluida del repositorio y del ZIP distribuido. Cada instalación crea sus propios datos; los paquetes publicados no incluyen sesiones, cookies, cuentas ni capturas personales.
 
-El servicio local escucha en `127.0.0.1:24243`. FarmDogs consulta las fuentes de Wardogs Spain para población y, con tu sesión autorizada, cuenta y premios. El actualizador consulta GitHub y conserva temporalmente la descarga y su respaldo fuera de la carpeta de instalación. Los componentes nativos reconocen elementos visuales y envían pulsaciones y clics normales; no modifican el juego ni leen su memoria.
+El servicio local escucha en `127.0.0.1:24243`. FarmDogs consulta las fuentes de Wardogs Spain para población, presencia pública del clan y, con tu sesión autorizada, cuenta y premios. La identidad de clan que sale de la ventana de cuenta se limita a conectado, SteamID propio y slug/tag/nombre del clan; no transmite permisos de gestión ni atributos extra de ese endpoint. El actualizador consulta GitHub y conserva temporalmente la descarga y su respaldo fuera de la carpeta de instalación. Los componentes nativos reconocen elementos visuales y envían pulsaciones y clics normales; no modifican el juego ni leen su memoria.
 
 ## Estado de la versión
 
-La **beta 0.4.0** supera **418 pruebas de fuente**. En una prueba real iniciada desde la interfaz, con Steam y Wardogs cerrados, completó entrada por ID al servidor #3, eligió azul mediante Aleatorio, detuvo el autoclic tras DESPLEGANDO, reconoció el HUD y comenzó movimiento. Se comprobó desplazamiento lateral real y **F8 detuvo la sesión sin rearmarla**.
+La **0.5.0 supera 471 pruebas de fuente**. Se comprobó la asociación de un clan real mediante la cuenta Steam autorizada y su consulta de presencia. En una prueba real con el servidor #1 lleno, la app esperó aproximadamente dos minutos de cola, entró en el equipo **verde** elegido y detuvo el autoclic tras DESPLEGANDO. Ese resultado acredita **cola → equipo fijo → parada de clics**.
 
-La prueba fue en **espera de jugadores, con un jugador**, usando umbral de prueba de 1 jugador y pasos cada 5 segundos. Los valores normales de seeding siguen siendo **20 jugadores y 60 segundos**. Esto verifica la cadena de entrada y movimiento; siguen pendientes la permanencia prolongada en una partida activa, los cambios de ronda y un premio VIP nuevo verificado.
+La corrección para HUD luminoso se comprobó offline sobre **dos capturas de referencia**. Cuando no se lee la brújula, exige otras anclas completas del personaje antes de reconocerlo. Esa comprobación de imágenes no sustituye una prueba continua de movimiento en partida; el autoclic detenido tampoco equivale por sí solo a Entrada completada.
 
-El actualizador pasó comprobaciones de paquetes y una instalación aislada de prueba con su instalador real. Falta comprobar un ciclo de actualización entre Releases en una instalación de usuario. No hay redespliegue ni reconexión automática tras desconexión. La beta no garantiza evitar cualquier expulsión ni obtener VIP.
+La cadena desde Steam/juego cerrados hasta equipo aleatorio, HUD, movimiento lateral real y F8 tiene una prueba real en warmup con un jugador y ajustes de prueba de 1 jugador/5 s. Los defaults de seeding siguen siendo **20 jugadores y 60 segundos**. Siguen pendientes la permanencia prolongada en partida activa, los cambios de ronda y un premio VIP nuevo verificado.
+
+El actualizador pasó comprobaciones de paquetes y una instalación aislada de prueba con su instalador real. Falta comprobar un ciclo de actualización entre Releases en una instalación de usuario. No hay redespliegue ni reconexión automática tras desconexión. La app no garantiza evitar cualquier expulsión ni obtener VIP.
 
 ## Compilar desde el código
 
@@ -216,4 +239,4 @@ Los binarios generados, datos locales y paquetes no forman parte de las fuentes.
 
 ## Licencia
 
-El código propio de FarmDogs se distribuye bajo la [licencia MIT](LICENSE). Node.js y WebView2 conservan sus propias licencias: el portable incluye la de Node en `bin/runtime/LICENSE` y las de WebView2 en `licenses`.
+El código propio de FarmDogs Launcher se distribuye bajo la [licencia MIT](LICENSE). El emblema del perro tecnológico forma parte de su identidad propia. La tipografía Rajdhani Bold se distribuye con su [SIL Open Font License 1.1](public/OFL-Rajdhani.txt), junto al archivo de fuente local. Node.js y WebView2 conservan sus propias licencias: el portable incluye la de Node en `bin/runtime/LICENSE` y las de WebView2 en `licenses`.
