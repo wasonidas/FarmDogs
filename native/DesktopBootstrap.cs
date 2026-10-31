@@ -104,7 +104,9 @@ internal static class DesktopBootstrap
     internal static async Task<bool> EnsureObserver(string root,string node,string baseUrl)
     {
         var address=new Uri(baseUrl);if(address.Scheme!="http"||address.Host!="127.0.0.1"||address.UserInfo.Length!=0||address.AbsolutePath!="/")throw new InvalidOperationException("Solo se admite el servicio local.");
-        using(var client=new HttpClient(new HttpClientHandler {UseProxy=false,UseCookies=false,AllowAutoRedirect=false}) {Timeout=TimeSpan.FromMilliseconds(1500),MaxResponseContentBufferSize=1048576})
+        // Allow a cold local service and Windows connection refusal to finish.
+        // A timeout remains an uncertain port; only ConnectionRefused permits starting.
+        using(var client=new HttpClient(new HttpClientHandler {UseProxy=false,UseCookies=false,AllowAutoRedirect=false}) {Timeout=TimeSpan.FromMilliseconds(5000),MaxResponseContentBufferSize=1048576})
         {
             return await EnsureCore(()=>ProbeService(client,baseUrl),()=>StartObserver(root,node,address.Port),10000,()=>Task.Delay(200)).ConfigureAwait(false);
         }

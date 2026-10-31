@@ -56,7 +56,8 @@ internal static class DesktopBootstrapTests
         var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();int port=((IPEndPoint)listener.LocalEndpoint).Port;listener.Stop();
         string url="http://127.0.0.1:"+port;bool started=false;
         Directory.CreateDirectory(Path.Combine(root,"src"));
-        File.WriteAllText(Path.Combine(root,"src","server.cjs"),"const http=require('node:http');const server=http.createServer((q,r)=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify({appId:'wardogs-seeding-local-v1'}));if(q.url==='/test-stop')server.close(()=>process.exit(0));});server.listen(Number(process.env.WARDOGS_PORT),'127.0.0.1');");
+        // A real loopback response slower than 1500ms must survive a cold start.
+        File.WriteAllText(Path.Combine(root,"src","server.cjs"),"const http=require('node:http');let cold=true;const server=http.createServer((q,r)=>{const reply=()=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify({appId:'wardogs-seeding-local-v1'}));if(q.url==='/test-stop')server.close(()=>process.exit(0));};if(q.url==='/api/state'&&cold){cold=false;setTimeout(reply,2000);}else reply();});server.listen(Number(process.env.WARDOGS_PORT),'127.0.0.1');");
         try
         {
             started=DesktopBootstrap.EnsureObserver(root,node,url).GetAwaiter().GetResult();Check(started,"No inició el servicio aislado.");
