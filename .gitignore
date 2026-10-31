@@ -1,0 +1,13 @@
+research/__pycache__/
+research/brave-bridge-state.json
+research/brave-bridge.stop
+data/
+research/2026-10-29/
+research/20??-??-??/
+bin/
+research/*.json
+*.tmp
+planning/*.json
+/WardogsSeeding.exe
+/FarmDogs.exe
+/dist/

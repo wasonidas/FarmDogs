@@ -1,0 +1,62 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "captureFreshnessVerified": false,
+  "source": {
+    "sha256": "03a3b5aff5763fc3216e288fb5e6a3bb300521b4b72b3b425f7654c417bd500a",
+    "capturedAt": null
+  },
+  "lines": [
+    {
+      "text": "JUGAR",
+      "words": [
+        {
+          "text": "JUGAR",
+          "x": 229,
+          "y": 30,
+          "width": 75,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "DESPLEGAR",
+      "words": [
+        {
+          "text": "DESPLEGAR",
+          "x": 176,
+          "y": 1040,
+          "width": 246,
+          "height": 27
+        }
+      ]
+    },
+    {
+      "text": "NAVEGADOR DEL SERVIDOR",
+      "words": [
+        {
+          "text": "NAVEGADOR",
+          "x": 158,
+          "y": 1085,
+          "width": 121,
+          "height": 11
+        },
+        {
+          "text": "DEL",
+          "x": 292,
+          "y": 1085,
+          "width": 36,
+          "height": 11
+        },
+        {
+          "text": "SERVIDOR",
+          "x": 340,
+          "y": 1085,
+          "width": 99,
+          "height": 11
+        }
+      ]
+    }
+  ]
+}

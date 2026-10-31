@@ -1,0 +1,88 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "lines": [
+    {
+      "text": "ESC",
+      "words": [
+        {
+          "text": "ESC",
+          "x": 68,
+          "y": 1363,
+          "width": 24,
+          "height": 10
+        }
+      ]
+    },
+    {
+      "text": "ABANDONAR PARTIDA",
+      "words": [
+        {
+          "text": "ABANDONAR",
+          "x": 117,
+          "y": 1363,
+          "width": 118,
+          "height": 15
+        },
+        {
+          "text": "PARTIDA",
+          "x": 241,
+          "y": 1363,
+          "width": 80,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "TAB",
+      "words": [
+        {
+          "text": "TAB",
+          "x": 345,
+          "y": 1363,
+          "width": 25,
+          "height": 10
+        }
+      ]
+    },
+    {
+      "text": "MARCADOR",
+      "words": [
+        {
+          "text": "MARCADOR",
+          "x": 397,
+          "y": 1363,
+          "width": 104,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "// SELECCIONAR FACCIÓN",
+      "words": [
+        {
+          "text": "//",
+          "x": 988.5,
+          "y": 571.5,
+          "width": 23,
+          "height": 20
+        },
+        {
+          "text": "SELECCIONAR",
+          "x": 1021,
+          "y": 571.5,
+          "width": 173,
+          "height": 20
+        },
+        {
+          "text": "FACCIÓN",
+          "x": 1203.5,
+          "y": 567,
+          "width": 107.5,
+          "height": 24.5
+        }
+      ]
+    }
+  ]
+}

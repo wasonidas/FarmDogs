@@ -1,0 +1,62 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "captureFreshnessVerified": false,
+  "source": {
+    "sha256": "18be2f0aa49e970238bf8b591706c9617f7ed14df5b92d6c49d6b806d1a322f4",
+    "capturedAt": null
+  },
+  "lines": [
+    {
+      "text": "| 270 W",
+      "words": [
+        {
+          "text": "|",
+          "x": 1211,
+          "y": 40,
+          "width": 2,
+          "height": 16
+        },
+        {
+          "text": "270",
+          "x": 1231,
+          "y": 39,
+          "width": 32,
+          "height": 16
+        },
+        {
+          "text": "W",
+          "x": 1274,
+          "y": 39,
+          "width": 16,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "FISTS",
+      "words": [
+        {
+          "text": "FISTS",
+          "x": 2486,
+          "y": 1179,
+          "width": 40,
+          "height": 13
+        }
+      ]
+    },
+    {
+      "text": "100",
+      "words": [
+        {
+          "text": "100",
+          "x": 2459,
+          "y": 1328,
+          "width": 29,
+          "height": 16
+        }
+      ]
+    }
+  ]
+}

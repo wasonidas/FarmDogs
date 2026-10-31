@@ -1,0 +1,79 @@
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+
+namespace WardogsSeeding {
+ public sealed class TeamClickerNative : ITeamClickerPlatform,ITeamClickerButtonInput {
+  [StructLayout(LayoutKind.Sequential)] struct RECT {public int Left,Top,Right,Bottom;}
+  [StructLayout(LayoutKind.Sequential)] struct POINT {public int X,Y;public POINT(int x,int y){X=x;Y=y;}}
+  [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT {public int dx,dy;public uint mouseData,flags,time;public UIntPtr extra;}
+  [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT {public ushort vk,scan;public uint flags,time;public UIntPtr extra;}
+  [StructLayout(LayoutKind.Explicit)] struct UNION {[FieldOffset(0)] public MOUSEINPUT mouse;[FieldOffset(0)] public KEYBDINPUT keyboard;}
+  [StructLayout(LayoutKind.Sequential)] struct INPUT {public uint type;public UNION data;}
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+  [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h,out RECT rect);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h,ref POINT p);
+  [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+  [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint n,INPUT[] inputs,int size);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  public static bool KeyDown(int key) {return (GetAsyncKeyState(key)&0x8000)!=0;}
+  public bool ModifiersDown(){return KeyDown(0x10)||KeyDown(0x11)||KeyDown(0x12)||KeyDown(0x5b)||KeyDown(0x5c);}
+  public bool ServiceAlive(int pid) {try{using(var p=Process.GetProcessById(pid))return !p.HasExited;}catch{return false;}}
+  public TeamClickerFrame ForegroundGame() {
+   try {
+    IntPtr window=GetForegroundWindow();uint pid;GetWindowThreadProcessId(window,out pid);
+    if(window==IntPtr.Zero||pid==0)return null;
+    using(var process=Process.GetProcessById((int)pid))if(process.HasExited||process.ProcessName!="WardogsClient-Win64-Shipping")return null;
+    RECT rect;if(!GetClientRect(window,out rect)||rect.Right<320||rect.Bottom<200||rect.Right>8000||rect.Bottom>8000)return null;
+    return new TeamClickerFrame {Pid=(int)pid,Window=window.ToInt64(),Width=rect.Right-rect.Left,Height=rect.Bottom-rect.Top};
+   }catch{return null;}
+  }
+  bool Same(TeamClickerFrame frame) {
+   var current=ForegroundGame();return current!=null&&frame!=null&&current.Pid==frame.Pid&&current.Window==frame.Window&&current.Width==frame.Width&&current.Height==frame.Height;
+  }
+  POINT Origin(TeamClickerFrame frame) {POINT origin=new POINT();if(!Same(frame)||!ClientToScreen(new IntPtr(frame.Window),ref origin))throw new InvalidOperationException("Wardogs ha perdido el foco.");return origin;}
+  bool PointBelongs(TeamClickerFrame frame,POINT point) {
+   uint pid;var hit=WindowFromPoint(point);GetWindowThreadProcessId(hit,out pid);return hit!=IntPtr.Zero&&pid==frame.Pid&&Same(frame);
+  }
+  public TeamClickerTarget CaptureTarget(TeamClickerFrame frame,DateTime now,string selectedTeam) {
+   POINT origin=Origin(frame);var timer=Stopwatch.StartNew();
+   using(var bitmap=new Bitmap(frame.Width,frame.Height,PixelFormat.Format32bppArgb)){
+    using(var graphics=Graphics.FromImage(bitmap))graphics.CopyFromScreen(origin.X,origin.Y,0,0,new Size(frame.Width,frame.Height),CopyPixelOperation.SourceCopy);
+    POINT copied=Origin(frame);if(copied.X!=origin.X||copied.Y!=origin.Y)throw new InvalidOperationException("La ventana ha cambiado durante el reconocimiento.");
+    TeamClickerTarget target;
+    if(!TeamClickerSelectorFrame.TryRecognize(bitmap,selectedTeam,now,out target))throw new InvalidOperationException("No se reconocen las tarjetas del selector de faccion actual.");
+    POINT after=Origin(frame);
+    if(after.X!=origin.X||after.Y!=origin.Y||timer.ElapsedMilliseconds>2000||!PointBelongs(frame,new POINT(origin.X+target.x,origin.Y+target.y)))throw new InvalidOperationException("No se puede verificar el selector actual.");
+    return target;
+   }
+  }
+  int[] Sample(TeamClickerFrame frame,TeamClickerTarget target) {
+   POINT origin=Origin(frame);int[] pixels=new int[45];
+   if(!PointBelongs(frame,new POINT(origin.X+target.x,origin.Y+target.y)))throw new InvalidOperationException("El boton esta tapado por otra ventana.");
+   using(var bitmap=new Bitmap(64,32,PixelFormat.Format32bppArgb))using(var graphics=Graphics.FromImage(bitmap)) {
+    graphics.CopyFromScreen(origin.X+target.patchLeft,origin.Y+target.patchTop,0,0,new Size(64,32),CopyPixelOperation.SourceCopy);
+    for(int y=0;y<5;y++)for(int x=0;x<9;x++)pixels[y*9+x]=bitmap.GetPixel(2+x*7,2+y*7).ToArgb()&0xffffff;
+   }
+   POINT after=Origin(frame);if(after.X!=origin.X||after.Y!=origin.Y)throw new InvalidOperationException("La ventana del juego se ha movido.");return pixels;
+  }
+  public bool PatchMatches(TeamClickerFrame frame,TeamClickerTarget target){return target.Valid()&&TeamClickerPatch.Matches(target.signature,Sample(frame,target));}
+  static void Mouse(uint flags) {
+   INPUT input=new INPUT();input.type=0;input.data.mouse.flags=flags;
+   if(SendInput(1,new[]{input},Marshal.SizeOf(typeof(INPUT)))!=1)throw new InvalidOperationException("Windows no ha aceptado el clic ("+Marshal.GetLastWin32Error()+").");
+  }
+  public void Button(bool down){Mouse(down?0x0002u:0x0004u);}
+  public void Click(TeamClickerFrame frame,TeamClickerTarget target) {
+   POINT origin=Origin(frame),point=new POINT(origin.X+target.x,origin.Y+target.y);
+   if(ModifiersDown()||!PointBelongs(frame,point))throw new InvalidOperationException("El juego no esta listo para recibir el clic.");
+   if(!SetCursorPos(point.X,point.Y))throw new InvalidOperationException("No se pudo situar el cursor sobre el equipo.");
+   if(ModifiersDown()||!PointBelongs(frame,point))throw new InvalidOperationException("El juego ha perdido el foco antes del clic.");
+   // Always attempt button-up, including a rejected/partial down or focus change.
+   TeamClickerButton.Click(this);
+  }
+ }
+}

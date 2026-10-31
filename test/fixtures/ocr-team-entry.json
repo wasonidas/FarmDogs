@@ -1,0 +1,131 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "lines": [
+    {
+      "text": "ESC",
+      "words": [
+        {
+          "text": "ESC",
+          "x": 68,
+          "y": 1363,
+          "width": 24,
+          "height": 10
+        }
+      ]
+    },
+    {
+      "text": "ABANDONAR PARTIDA",
+      "words": [
+        {
+          "text": "ABANDONAR",
+          "x": 117,
+          "y": 1363,
+          "width": 118,
+          "height": 15
+        },
+        {
+          "text": "PARTIDA",
+          "x": 241,
+          "y": 1363,
+          "width": 80,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "TAB",
+      "words": [
+        {
+          "text": "TAB",
+          "x": 345,
+          "y": 1363,
+          "width": 25,
+          "height": 10
+        }
+      ]
+    },
+    {
+      "text": "MARCADOR",
+      "words": [
+        {
+          "text": "MARCADOR",
+          "x": 397,
+          "y": 1363,
+          "width": 104,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "// ENTRANDO",
+      "words": [
+        {
+          "text": "//",
+          "x": 921,
+          "y": 655.5,
+          "width": 38.5,
+          "height": 32
+        },
+        {
+          "text": "ENTRANDO",
+          "x": 982.5,
+          "y": 655.5,
+          "width": 247,
+          "height": 32
+        }
+      ]
+    },
+    {
+      "text": "CONTRATO ACEPTADO",
+      "words": [
+        {
+          "text": "CONTRATO",
+          "x": 921,
+          "y": 719,
+          "width": 77,
+          "height": 11
+        },
+        {
+          "text": "ACEPTADO",
+          "x": 1002.5,
+          "y": 719,
+          "width": 76.5,
+          "height": 11
+        }
+      ]
+    },
+    {
+      "text": "LA FACCIÓN...",
+      "words": [
+        {
+          "text": "LA",
+          "x": 1297,
+          "y": 655.5,
+          "width": 54,
+          "height": 32
+        },
+        {
+          "text": "FACCIÓN...",
+          "x": 1372,
+          "y": 645.5,
+          "width": 243.5,
+          "height": 42
+        }
+      ]
+    },
+    {
+      "text": "ESPERA//",
+      "words": [
+        {
+          "text": "ESPERA//",
+          "x": 1569,
+          "y": 775.5,
+          "width": 70,
+          "height": 11.5
+        }
+      ]
+    }
+  ]
+}

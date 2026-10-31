@@ -1,0 +1,204 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "captureFreshnessVerified": false,
+  "source": {
+    "sha256": "68457d869f8e33415dac490f572eac8bbcca4a1d48236457f3409e668a95afe7",
+    "capturedAt": null
+  },
+  "lines": [
+    {
+      "text": "i",
+      "words": [
+        {
+          "text": "i",
+          "x": 903,
+          "y": 546,
+          "width": 7,
+          "height": 31
+        }
+      ]
+    },
+    {
+      "text": "//INFORMACIÓN",
+      "words": [
+        {
+          "text": "//INFORMACIÓN",
+          "x": 950,
+          "y": 527,
+          "width": 117,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "¿UNIRSE AL SERVIDOR DEL JUEGO?",
+      "words": [
+        {
+          "text": "¿UNIRSE",
+          "x": 950,
+          "y": 559,
+          "width": 120,
+          "height": 29
+        },
+        {
+          "text": "AL",
+          "x": 1077,
+          "y": 559,
+          "width": 38,
+          "height": 23
+        },
+        {
+          "text": "SERVIDOR",
+          "x": 1122,
+          "y": 559,
+          "width": 141,
+          "height": 23
+        },
+        {
+          "text": "DEL",
+          "x": 1271,
+          "y": 559,
+          "width": 53,
+          "height": 23
+        },
+        {
+          "text": "JUEGO?",
+          "x": 1330,
+          "y": 559,
+          "width": 111,
+          "height": 23
+        }
+      ]
+    },
+    {
+      "text": "# 02 [ESP] Wardogsspain.com",
+      "words": [
+        {
+          "text": "#",
+          "x": 820,
+          "y": 660,
+          "width": 12,
+          "height": 14
+        },
+        {
+          "text": "02",
+          "x": 837,
+          "y": 659,
+          "width": 25,
+          "height": 15
+        },
+        {
+          "text": "[ESP]",
+          "x": 872,
+          "y": 657,
+          "width": 65,
+          "height": 20
+        },
+        {
+          "text": "Wardogsspain.com",
+          "x": 947,
+          "y": 659,
+          "width": 221,
+          "height": 19
+        }
+      ]
+    },
+    {
+      "text": "blNERO PERMANENTE/EXP IÑFÀNtÉkW",
+      "words": [
+        {
+          "text": "blNERO",
+          "x": 819,
+          "y": 681,
+          "width": 70,
+          "height": 21
+        },
+        {
+          "text": "PERMANENTE/EXP",
+          "x": 896,
+          "y": 686,
+          "width": 169,
+          "height": 15
+        },
+        {
+          "text": "IÑFÀNtÉkW",
+          "x": 1248,
+          "y": 681,
+          "width": 110,
+          "height": 21
+        }
+      ]
+    },
+    {
+      "text": "CANCELAR",
+      "words": [
+        {
+          "text": "CANCELAR",
+          "x": 1126,
+          "y": 816,
+          "width": 138,
+          "height": 18
+        }
+      ]
+    },
+    {
+      "text": "0/100",
+      "words": [
+        {
+          "text": "0/100",
+          "x": 1465,
+          "y": 672,
+          "width": 62,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "32",
+      "words": [
+        {
+          "text": "32",
+          "x": 1669,
+          "y": 672,
+          "width": 24,
+          "height": 15
+        }
+      ]
+    },
+    {
+      "text": "UNIRSE A LA PARTIDA",
+      "words": [
+        {
+          "text": "UNIRSE",
+          "x": 1439,
+          "y": 816,
+          "width": 93,
+          "height": 18
+        },
+        {
+          "text": "A",
+          "x": 1545,
+          "y": 816,
+          "width": 14,
+          "height": 18
+        },
+        {
+          "text": "LA",
+          "x": 1572,
+          "y": 816,
+          "width": 30,
+          "height": 18
+        },
+        {
+          "text": "PARTIDA",
+          "x": 1614,
+          "y": 816,
+          "width": 111,
+          "height": 18
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "captureFreshnessVerified": false,
+  "source": {
+    "sha256": "9344bf7670ebb93b8ac4ed74ed77a10032eaaed6a16273cff935360040f6720d",
+    "capturedAt": null
+  },
+  "lines": [
+    {
+      "text": "EXPULSADO",
+      "words": [
+        {
+          "text": "EXPULSADO",
+          "x": 1013,
+          "y": 510,
+          "width": 264,
+          "height": 35
+        }
+      ]
+    },
+    {
+      "text": "PRECAUCIÓN:",
+      "words": [
+        {
+          "text": "PRECAUCIÓN:",
+          "x": 1030,
+          "y": 585,
+          "width": 138,
+          "height": 20
+        }
+      ]
+    },
+    {
+      "text": "Se te ha desconectado del servidor por",
+      "words": [
+        {
+          "text": "Se",
+          "x": 1030,
+          "y": 651,
+          "width": 24,
+          "height": 16
+        },
+        {
+          "text": "te",
+          "x": 1060,
+          "y": 652,
+          "width": 19,
+          "height": 15
+        },
+        {
+          "text": "ha",
+          "x": 1086,
+          "y": 651,
+          "width": 22,
+          "height": 16
+        },
+        {
+          "text": "desconectado",
+          "x": 1115,
+          "y": 651,
+          "width": 141,
+          "height": 16
+        },
+        {
+          "text": "del",
+          "x": 1263,
+          "y": 651,
+          "width": 28,
+          "height": 16
+        },
+        {
+          "text": "servidor",
+          "x": 1298,
+          "y": 651,
+          "width": 82,
+          "height": 16
+        },
+        {
+          "text": "por",
+          "x": 1387,
+          "y": 655,
+          "width": 33,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "text": "inactividad.",
+      "words": [
+        {
+          "text": "inactividad.",
+          "x": 1030,
+          "y": 679,
+          "width": 115,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "text": "CONTINUAR",
+      "words": [
+        {
+          "text": "CONTINUAR",
+          "x": 1163,
+          "y": 901,
+          "width": 143,
+          "height": 16
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "captureFreshnessVerified": false,
+  "source": {
+    "sha256": "c0a1f674c2f1e6ca7715d22a54f5f40ffeca655b8d1c835567e5c023834ea74f",
+    "capturedAt": null
+  },
+  "lines": [
+    {
+      "text": "> ERROR",
+      "words": [
+        {
+          "text": ">",
+          "x": 1228,
+          "y": 447,
+          "width": 11,
+          "height": 11
+        },
+        {
+          "text": "ERROR",
+          "x": 1246,
+          "y": 441,
+          "width": 69,
+          "height": 18
+        }
+      ]
+    },
+    {
+      "text": "MENSAJE DEL SERVIDOR",
+      "words": [
+        {
+          "text": "MENSAJE",
+          "x": 624,
+          "y": 533,
+          "width": 277,
+          "height": 49
+        },
+        {
+          "text": "DEL",
+          "x": 919,
+          "y": 534,
+          "width": 110,
+          "height": 47
+        },
+        {
+          "text": "SERVIDOR",
+          "x": 1044,
+          "y": 533,
+          "width": 288,
+          "height": 49
+        }
+      ]
+    },
+    {
+      "text": "CÓDIGO DE ERROR:",
+      "words": [
+        {
+          "text": "CÓDIGO",
+          "x": 646,
+          "y": 632,
+          "width": 101,
+          "height": 28
+        },
+        {
+          "text": "DE",
+          "x": 756,
+          "y": 639,
+          "width": 34,
+          "height": 21
+        },
+        {
+          "text": "ERROR:",
+          "x": 799,
+          "y": 639,
+          "width": 100,
+          "height": 21
+        }
+      ]
+    },
+    {
+      "text": "EI servidor se está reiniciando.",
+      "words": [
+        {
+          "text": "EI",
+          "x": 647,
+          "y": 718,
+          "width": 19,
+          "height": 19
+        },
+        {
+          "text": "servidor",
+          "x": 673,
+          "y": 718,
+          "width": 94,
+          "height": 19
+        },
+        {
+          "text": "se",
+          "x": 773,
+          "y": 723,
+          "width": 25,
+          "height": 14
+        },
+        {
+          "text": "está",
+          "x": 805,
+          "y": 718,
+          "width": 48,
+          "height": 19
+        },
+        {
+          "text": "reiniciando.",
+          "x": 860,
+          "y": 718,
+          "width": 132,
+          "height": 19
+        }
+      ]
+    },
+    {
+      "text": "CONTINUAR",
+      "words": [
+        {
+          "text": "CONTINUAR",
+          "x": 1208,
+          "y": 866,
+          "width": 188,
+          "height": 22
+        }
+      ]
+    }
+  ]
+}

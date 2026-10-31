@@ -1,0 +1,40 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {createScheduledOpening}=require('../src/scheduled-opening.cjs');
+function fixture(){
+ let now=Date.parse('2026-10-30T08:00:00Z'),disk=null,eligible=true,changed=false,failSave=false,launches=0,launch=async()=>{};
+ const build=()=>createScheduledOpening({load:()=>structuredClone(disk),save:value=>{if(failSave)throw Error('Disco no disponible');disk=structuredClone(value);},now:()=>now,event:()=>{},resolveTarget:(server,id)=>{if(changed||server!==2||id!=='expected-id')throw Error('Destino cambiado');return {server,joinId:id,entryCandidate:eligible};},openGame:()=>{launches++;return launch();}});
+ return {build,advance:ms=>now+=ms,eligible:v=>eligible=v,changed:()=>changed=true,failSave:()=>failSave=true,launch:f=>launch=f,get launches(){return launches;}};
+}
+const input={server:2,expectedJoinId:'expected-id',madridStart:'2026-10-30T09:01',onlyEligible:true};
+
+test('programación: solo prepara seeding y no acepta movimiento temporal por el constructor compartido',()=>{
+ for(const value of [{purpose:'break'},{purpose:'unknown'},{seeding:{durationMinutes:5,purpose:'break',confirmedDeployed:true}},{seeding:{durationMinutes:5,purpose:'unknown'}}]){
+  const f=fixture(),s=f.build();assert.throws(()=>s.schedule({...input,...value}),/solo prepara seeding/);assert.equal(s.view(),null);assert.equal(f.launches,0);
+ }
+ const f=fixture(),s=f.build();s.schedule({...input,seeding:{durationMinutes:5,purpose:'seeding'}});assert.equal(s.view().status,'scheduled');assert.equal(s.view().seeding.startPlayers,20);
+});
+test('apertura: solicita una sola vez y no afirma conexión, incluso con ticks concurrentes',async()=>{
+ const f=fixture(),s=f.build();s.schedule(input);await s.tick();assert.equal(f.launches,0);
+ f.advance(60000);await Promise.all([s.tick(),s.tick(),s.tick()]);assert.equal(f.launches,1);assert.equal(s.view().status,'open_requested');assert.equal(s.view().connected,false);
+ await f.build().tick();assert.equal(f.launches,1);
+});
+test('apertura: cancelar, reiniciar o perder la hora no abre el juego después',async()=>{
+ for(const mode of ['cancel','restart','late']){const f=fixture();let s=f.build();s.schedule(input);if(mode==='cancel')s.cancel();if(mode==='restart')s=f.build();f.advance(mode==='late'?120001:60000);await s.tick();assert.equal(f.launches,0);assert.equal(s.view().status,{cancel:'cancelled',restart:'interrupted',late:'missed'}[mode]);}
+});
+test('apertura: vuelve a comprobar el destino y la oportunidad al ejecutarse',async()=>{
+ for(const mode of ['changed','ineligible']){const f=fixture(),s=f.build();s.schedule(input);if(mode==='changed')f.changed();else f.eligible(false);f.advance(60000);await s.tick();assert.equal(f.launches,0);assert.equal(s.view().status,'blocked');}
+ const f=fixture(),s=f.build();s.schedule({...input,onlyEligible:false});f.eligible(false);f.advance(60000);await s.tick();assert.equal(f.launches,1);
+});
+test('apertura: no duplica una solicitud ambigua ni la reanuda tras cerrar durante el lanzamiento',async()=>{
+ const f=fixture(),s=f.build();f.launch(async()=>{throw Error('Resultado desconocido');});s.schedule(input);f.advance(60000);await s.tick();assert.equal(s.view().status,'uncertain');await s.tick();assert.equal(f.launches,1);
+ const other=fixture(),p=other.build();let finish;other.launch(()=>new Promise(resolve=>finish=resolve));p.schedule(input);other.advance(60000);const pending=p.tick();assert.throws(()=>p.cancel());p.interrupt();finish();await pending;assert.equal(p.view().status,'uncertain');await other.build().tick();assert.equal(other.launches,1);
+});
+test('apertura: un guardado fallido o una fecha inválida no deja una orden oculta',async()=>{
+ const f=fixture(),s=f.build();assert.throws(()=>s.schedule({...input,madridStart:'2027-03-28T02:30'}));assert.equal(s.view(),null);f.failSave();assert.throws(()=>s.schedule(input));assert.equal(s.view(),null);f.advance(60000);await s.tick();assert.equal(f.launches,0);
+});
+test('programación: conserva los ajustes de seeding y valida antes de guardar',()=>{
+ const f=fixture(),s=f.build();assert.throws(()=>s.schedule({...input,seeding:{durationMinutes:0}}));assert.equal(s.view(),null);
+ const settings={durationMinutes:75,startPlayers:20,intervalSeconds:45,holdMs:600,server:5};s.schedule({...input,seeding:settings});settings.durationMinutes=1;
+ assert.equal(s.view().server,2);assert.deepEqual(s.view().seeding,{durationMinutes:75,startPlayers:20,intervalSeconds:45,holdMs:600});
+});

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FarmDogs · Panel avanzado</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body>
+<main>
+ <header><div><p class="eyebrow">PANEL AVANZADO</p><h1>FarmDogs</h1><p class="muted">Encuentra el momento de entrar y comprueba qué ocurre con tu cuenta.</p><a href="/mini">Abrir FarmDogs →</a></div><div class="header-actions"><div id="connection" class="pill">Conectando…</div><button id="shutdown" type="button" title="Cierra el servicio local. El juego conserva su estado.">Cerrar servicio</button></div></header>
+ <div id="notice" role="status" aria-live="polite" class="notice" hidden></div>
+ <p id="opening-summary" class="muted" hidden><span id="opening-summary-text"></span> <a href="/mini">Gestionar apertura →</a></p>
+ <section class="summary" aria-label="Resumen de seguimiento">
+  <article><span class="eyebrow">RECOMENDACIÓN</span><strong id="recommendation">—</strong><p id="recommendation-detail">Esperando una lectura reciente.</p></article>
+  <article><span class="eyebrow">TU CUENTA</span><strong id="account-state">Sin lectura</strong><p id="account-detail">La presencia se comprueba por separado de la población.</p><p id="account-condition"></p></article>
+  <article><span class="eyebrow">VIP</span><strong id="vip-state">Sin comprobar</strong><p id="vip-detail">Llegar al objetivo no confirma por sí solo un premio.</p></article>
+ </section>
+ <section aria-labelledby="servers-title"><div class="section-head"><h2 id="servers-title">Servidores</h2><span id="source-time" class="muted">Actualización cada 30 s</span></div><div id="servers" class="servers"></div></section>
+ <section class="panel" aria-labelledby="entry-title"><div class="section-head"><h2 id="entry-title">Entrar en <span id="entry-server">tu servidor</span></h2><span class="pill subtle">Entrada asistida</span></div><p class="muted">Abre Wardogs y lleva el ID del servidor al juego. La selección y el despliegue se completan dentro de Wardogs.</p><label>ID para unirse<input id="join-id" type="text" readonly value="Esperando lectura" spellcheck="false"></label><div class="actions"><button id="open-game" type="button" class="primary" disabled>Abrir Wardogs y copiar ID</button><button id="open-movement" type="button" disabled>Ajustar movimiento</button></div><p id="launch-status" class="small muted" role="status">Elige uno de los cinco servidores de arriba.</p></section>
+ <div class="columns">
+  <section class="panel" aria-labelledby="watch-title">
+   <div class="section-head"><h2 id="watch-title">Tu seguimiento</h2><span class="pill subtle">Observación</span></div>
+   <p class="muted">Este panel observa la población y muestra las lecturas de cuenta disponibles. La entrada al juego sigue siendo asistida.</p>
+   <form id="watch-form">
+    <div class="form-row"><label>Servidor<select id="selected-server" name="server"></select></label><label>Duración máxima (min)<input id="duration" name="duration" type="number" min="1" max="1440" value="120" required></label></div>
+    <label>Inicio<select id="start-mode"><option value="now">Ahora</option><option value="scheduled">Elegir hora</option></select></label>
+    <label id="scheduled-field" hidden>Fecha y hora de Madrid<input id="scheduled-at" type="datetime-local"><small>Europe/Madrid. El PC y el observador deben seguir abiertos.</small></label>
+    <div class="actions"><button id="start" type="submit" class="primary">Iniciar seguimiento</button><button id="stop" type="button" class="secondary" disabled>Detener</button></div>
+   </form>
+   <div id="watch-status" class="watch-status"><strong>Sin seguimiento activo</strong><p>Elige servidor y duración.</p></div>
+   <p class="small muted">El seguimiento de población y el control de movimiento se detienen por separado. F8 detiene el movimiento desde el juego.</p>
+  </section>
+  <section class="panel" aria-labelledby="rules-title">
+   <h2 id="rules-title">Regla del servidor</h2><p class="muted">La condición puede cambiar. Conserva aquí la regla que has contrastado y su procedencia.</p>
+   <form id="profile-form">
+    <div class="form-row"><label>Entrada con menos de<input id="entry-below" type="number" min="1" max="100" required></label><label>Condición final<select id="rule-mode"><option value="unknown">Sin verificar</option><option value="population">Llegar a una población</option><option value="timed">Permanecer tras el umbral</option></select></label></div>
+    <label id="target-field">Población objetivo<input id="target" type="number" min="1" max="100"></label>
+    <label id="hold-field" hidden>Permanencia (minutos)<input id="hold" type="number" min="1" max="1440"></label>
+    <label>Procedencia<textarea id="rule-source" maxlength="500" rows="2" required></textarea></label>
+    <label>Fecha de verificación<input id="verified-date" type="date"><small>Se conserva la fecha; guardar una edición no demuestra que el backend use esa regla.</small></label>
+    <label>Revisar el perfil cada (horas)<input id="review-hours" type="number" min="1" max="168" value="24" required><small>Es un límite local para volver a contrastar la regla, no la caducidad del seeding del servidor.</small></label>
+    <button id="save-profile" class="secondary" type="submit">Guardar perfil</button>
+   </form>
+  </section>
+ </div>
+ <section class="panel" aria-labelledby="movement-title"><div class="section-head"><h2 id="movement-title">Control de movimiento</h2><strong id="movement-state">Sin lectura reciente</strong></div><p id="movement-detail" class="muted">Abre el controlador local para consultar su estado.</p><p class="small muted">El seeding automático se inicia en la vista compacta. F8 solo detiene; F7 queda para pruebas avanzadas.</p><details><summary id="diagnostic-title">Estado de la sesión</summary><p id="diagnostic-detail" class="muted">Esperando datos.</p></details></section>
+ <section class="panel" aria-labelledby="history-title"><div class="section-head"><h2 id="history-title">Premios de tu cuenta</h2><span id="history-source" class="muted">Pendiente de conexión</span></div><p id="award-status" class="muted">El historial distingue los premios de llenado de los obtenidos por otras vías.</p><div class="table-scroll"><table><thead><tr><th>Fecha · Madrid</th><th>Origen</th><th>Servidor</th><th>Días</th></tr></thead><tbody id="history"></tbody></table></div></section>
+ <section class="panel" aria-labelledby="events-title"><h2 id="events-title">Actividad del observador</h2><ol id="events" class="events"><li>Esperando datos.</li></ol></section>
+ <footer>Lecturas antiguas o fallidas se muestran como desconocidas. El seguimiento público identifica candidatos; un VIP requiere confirmación de tu cuenta.</footer>
+</main>
+</body></html>

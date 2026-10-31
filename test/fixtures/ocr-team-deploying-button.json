@@ -1,0 +1,14 @@
+{
+  "format": "wardogs-image-text-v1",
+  "fixtureKind": "synthetic_geometry_case_not_a_live_capture",
+  "width": 2560,
+  "height": 1440,
+  "lines": [
+    {
+      "text": "DESPLEGANDO",
+      "words": [
+        {"text": "DESPLEGANDO", "x": 2150, "y": 1320, "width": 350, "height": 32}
+      ]
+    }
+  ]
+}
