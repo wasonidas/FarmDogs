@@ -30,6 +30,18 @@ test('actividad: entrega el equipo aleatorio o fijo elegido a la entrada sin ree
  for(const team of ['any','blue','red','green']){const f=fixture();f.mode.start({...input,team});assert.equal(f.mode.view().team,team);await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].session.settings.team,team);}
  const f=fixture();assert.throws(()=>f.mode.start({...input,team:'orange'}));assert.equal(f.mode.view(),null);
 });
+
+test('actividad: valida, persiste y propaga el foco inicial junto al presupuesto sin modificar ajustes ni destino',async()=>{
+ for(const focus of [undefined,'driver','desktop']){
+  const f=fixture();const started=f.mode.start({...input,...(focus===undefined?{}:{initialFocus:focus})});assert.equal(started.initialFocus,focus||'driver');assert.equal(f.disk.initialFocus,focus||'driver');
+  await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].session.initialFocus,focus||'driver');assert.equal(f.prepares[0].session.sessionEndAt,started.endAt);assert.equal(f.prepares[0].target.server,2);assert.equal(f.prepares[0].target.joinId,id);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:20,intervalSeconds:60,holdMs:500});assert.equal(f.build().view().initialFocus,focus||'driver');
+ }
+ for(const invalid of [null,'','Desktop','other',true,0,{}]){const f=fixture();assert.throws(()=>f.mode.start({...input,initialFocus:invalid}),/foco inicial/);assert.equal(f.mode.view(),null);assert.equal(f.disk,null);assert.equal(f.prepares.length,0);}
+});
+
+test('actividad: un callback de preparación cancelado no cambia el foco ni el estado del siguiente trabajo',async()=>{
+ const f=fixture();let release;f.prepare(()=>new Promise(resolve=>release=resolve));const before=f.mode.start({...input,initialFocus:'desktop'});await f.mode.tick();f.advance(30000);f.sample();const pending=f.mode.tick();assert.equal(f.mode.view().status,'launching');f.mode.stop();const next=f.mode.start({...input,initialFocus:'driver'});assert.notEqual(next.id,before.id);assert.equal(f.prepares[0].isCurrent(),false);release();await pending;assert.deepEqual(f.mode.view(),next);
+});
 test('actividad: repetir el mismo timestamp no confirma actividad ni arregla una muestra contradictoria',async()=>{
  const f=fixture();f.mode.start(input);await f.mode.tick();await f.mode.tick();assert.equal(f.prepares.length,0);
  f.rows([row(2,5)]);await f.mode.tick();assert.equal(f.mode.view().samples[0].consecutiveSamples,0);

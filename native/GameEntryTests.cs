@@ -158,15 +158,17 @@ internal static class GameEntryTests
     }
     private sealed class FakeFocus : IEntryFocusPlatform
     {
-        internal bool Stop,Alive=true,IsValid=true,IsForeground,Accept=true,StopAfterFind,StopAfterRestore;
-        internal int FocusCalls,RestoreCalls;internal EntryFocusWindow[] Items=new EntryFocusWindow[0];
+        internal bool Stop,Alive=true,IsValid=true,IsForeground,Accept=true,StopAfterFind,StopAfterRestore,SameInput=true,ChangeInputAfterRestore;
+        internal int FocusCalls,RestoreCalls,WaitCalls,ActivateAfterWait,StopAfterWait,InputAfterWait,InvalidAfterWait;internal EntryFocusWindow[] Items=new EntryFocusWindow[0];
         public bool StopRequested(){return Stop;}
         public bool ServiceAlive(){return Alive;}
         public EntryFocusWindow[] Windows(){if(StopAfterFind)Stop=true;return Items;}
         public bool Valid(EntryFocusWindow window){return IsValid;}
         public bool Foreground(EntryFocusWindow window){return IsForeground;}
-        public void Restore(EntryFocusWindow window){RestoreCalls++;if(StopAfterRestore)Stop=true;}
-        public bool Focus(EntryFocusWindow window){FocusCalls++;IsForeground=Accept;return Accept;}
+        public void Restore(EntryFocusWindow window){RestoreCalls++;if(StopAfterRestore)Stop=true;if(ChangeInputAfterRestore)SameInput=false;}
+        public bool Focus(EntryFocusWindow window){FocusCalls++;IsForeground=Accept&&ActivateAfterWait==0;return Accept;}
+        public bool InputUnchanged(){return SameInput;}
+        public void Wait(int milliseconds){Check(milliseconds==25,"Initial-focus observation wait expanded");WaitCalls++;if(ActivateAfterWait>0&&WaitCalls>=ActivateAfterWait)IsForeground=true;if(StopAfterWait>0&&WaitCalls>=StopAfterWait)Stop=true;if(InputAfterWait>0&&WaitCalls>=InputAfterWait)SameInput=false;if(InvalidAfterWait>0&&WaitCalls>=InvalidAfterWait)IsValid=false;}
     }
     private static EntryFocusWindow FocusWindow(bool minimized=false){return new EntryFocusWindow {Pid=123,Handle=456,ProcessName="WardogsClient-Win64-Shipping",Visible=!minimized,Minimized=minimized};}
     private static void FocusPolicy()
@@ -184,6 +186,14 @@ internal static class GameEntryTests
         fake=new FakeFocus {Items=new[]{FocusWindow(true)},StopAfterRestore=true};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="operator_stop"&&fake.FocusCalls==0&&fake.RestoreCalls==1,"F8 after restore was ignored");
         fake=new FakeFocus {Items=new[]{FocusWindow()},Alive=false};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="service_closed"&&fake.FocusCalls==0,"Dead observer could focus game");
         fake=new FakeFocus {Items=new[]{FocusWindow()},IsValid=false};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="game_window_changed"&&fake.FocusCalls==0,"Changed game window was focused");
+        fake=new FakeFocus {Items=new[]{FocusWindow()},ActivateAfterWait=3};result=GameEntryFocusPolicy.Run(fake);Check(result.Focused&&result.ActivationAccepted==true&&fake.FocusCalls==1&&fake.WaitCalls==3,"Asynchronous accepted activation was rejected or retried");
+        fake=new FakeFocus {Items=new[]{FocusWindow()},ActivateAfterWait=99};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.ActivationAccepted==true&&result.Reason=="activation_not_observed"&&fake.FocusCalls==1&&fake.WaitCalls==20,"Accepted activation did not stop observing at500ms");
+        fake=new FakeFocus {Items=new[]{FocusWindow()},Accept=false};result=GameEntryFocusPolicy.Run(fake);Check(result.ActivationAccepted==false&&result.Reason=="foreground_refused"&&fake.FocusCalls==1&&fake.WaitCalls==0,"Refused Win32 activation was hidden or retried");
+        fake=new FakeFocus {Items=new[]{FocusWindow()},SameInput=false};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="operator_input"&&fake.FocusCalls==0,"Input since entry start did not revoke focus permission");
+        fake=new FakeFocus {Items=new[]{FocusWindow(true)},ChangeInputAfterRestore=true};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="operator_input"&&fake.FocusCalls==0&&fake.RestoreCalls==1,"Input while restoring did not revoke activation");
+        fake=new FakeFocus {Items=new[]{FocusWindow()},ActivateAfterWait=3,StopAfterWait=1};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="operator_stop"&&fake.FocusCalls==1&&fake.WaitCalls==1,"F8 during accepted activation observation was ignored");
+        fake=new FakeFocus {Items=new[]{FocusWindow()},ActivateAfterWait=3,InputAfterWait=1};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="operator_input"&&fake.FocusCalls==1&&fake.WaitCalls==1,"User input during accepted activation observation was ignored");
+        fake=new FakeFocus {Items=new[]{FocusWindow()},ActivateAfterWait=3,InvalidAfterWait=1};result=GameEntryFocusPolicy.Run(fake);Check(!result.Focused&&result.Reason=="game_window_changed"&&fake.FocusCalls==1&&fake.WaitCalls==1,"Changed HWND during accepted activation observation was ignored");
     }
     private static Bitmap ControlImage(Color fill,bool text=false,bool outline=false)
     {

@@ -9,14 +9,14 @@ const joinId='0665a9c0-80b7-4f32-ad47-f36b70367f10';
 const request={server:1,expectedJoinId:joinId,team:'red',durationMinutes:5,startPlayers:20,intervalSeconds:30,holdMs:400};
 async function fixture(t,{players=25,sourceConfigured=true,sourceName='[ESP] wardogsspain.com | #1'}={}){
  const dir=await fsp.mkdtemp(path.join(os.tmpdir(),'farmdogs-entry-api-'));
- let utc=Date.parse('2026-10-31T15:00:00Z'),mono=0,driverState=null,population=players;
+ let utc=Date.parse('2026-10-31T15:00:00Z'),mono=0,driverState=null,population=players,gameLaunch=async()=>{};
  const calls=[];
  const entryDriver={available:()=>true,view:()=>driverState?{...driverState,at:new Date(utc).toISOString(),capturedAt:new Date(utc).toISOString()}:null,blocking:()=>false,
   start:async input=>{calls.push('entry');driverState={sessionId:input.id,server:input.server,joinId:input.joinId,phase:'navigating',chainConfirmed:false,gamePid:1234,gameWindow:5678,frameId:'55555555-5555-4555-8555-555555555555'};},
   tick:async()=>{},checkReady:async ownerId=>driverState?.sessionId===ownerId,stop:({ownerId})=>{if(driverState?.sessionId===ownerId)calls.push('entry-stop');}
  };
  const service=createObserver({port:0,dataDir:dir,utcNow:()=>utc,monoNow:()=>mono,accountProvider:()=>({available:false}),entryDriver,
-  launcher:{availability:()=>({game:true,movement:true,automaticMovement:true,automaticEntry:true}),openGame:async()=>calls.push('game'),openMovementBackground:async()=>calls.push('movement'),openMovement:async()=>{}},
+  launcher:{availability:()=>({game:true,movement:true,automaticMovement:true,automaticEntry:true}),openGame:async()=>{calls.push('game');await gameLaunch();},openMovementBackground:async()=>calls.push('movement'),openMovement:async()=>{}},
   screenReader:{view:()=>({status:'verified_capture',scene:'gameplay_hud',gameForeground:true,gamePid:1234,gameWindow:5678,frameId:'77777777-7777-4777-8777-777777777777',capturedAt:new Date(utc).toISOString()}),refresh:async()=>{},stop:()=>{},busy:false},
   teamClickerOptions:{capabilityCheck:()=>true,isProcessAlive:()=>true,reader:{view:()=>({status:'verified_capture',scene:'deploying',entryConfirmed:true,gameForeground:true,gamePid:1234,gameWindow:5678,frameId:'88888888-8888-4888-8888-888888888888',capturedAt:new Date(utc).toISOString()}),refresh:async()=>{},stop:()=>{},busy:false},spawnProcess:()=>{calls.push('team');const child=new EventEmitter();child.unref=()=>{};queueMicrotask(()=>child.emit('spawn'));return child;}},
   fetchImpl:async url=>{assert.equal(url,'https://api.wardogsspain.com/api/portal/public/wardogs-servers');return Response.json({configured:sourceConfigured,fetchedAt:utc,servers:[{id:1,num:1,name:sourceName,joinId,players:population,maxPlayers:100,online:true,configured:true,sedeoActivo:true,sedeo:{tope:20,esperaMin:30,cobroN:50}}]});}
@@ -26,7 +26,7 @@ async function fixture(t,{players=25,sourceConfigured=true,sourceName='[ESP] war
  const state=async()=>fetch(url+'/api/state').then(r=>r.json());
  const post=async(route,input={},extra={})=>{const s=await state();return fetch(url+route,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Token':s.token,...extra},body:JSON.stringify(input)});};
  function nativeTeam(extra={}){const command=JSON.parse(fs.readFileSync(path.join(dir,'team-clicker-command.json'),'utf8'));fs.writeFileSync(path.join(dir,'team-clicker-state.json'),JSON.stringify({format:'wardogs-team-clicker-state-v1',at:new Date(utc).toISOString(),pid:9994,sessionId:command.sessionId,armed:false,active:false,running:false,gamePid:1234,gameWindow:5678,targets:{},...extra}));}
- return {dir,service,state,post,calls,phase(value,extra={}){driverState={...driverState,phase:value,chainConfirmed:true,...extra};},advance(ms){utc+=ms;mono+=ms;},players(value){population=value;},
+ return {dir,service,state,post,calls,game:fn=>gameLaunch=fn,phase(value,extra={}){driverState={...driverState,phase:value,chainConfirmed:true,...extra};},advance(ms){utc+=ms;mono+=ms;},players(value){population=value;},
   nativeTeam,
   async completeTeam(){
    const attemptId='66666666-6666-4666-8666-666666666666';nativeTeam({armed:true,active:true,running:true,count:2,attemptId,attemptStartedAt:new Date(utc-1).toISOString()});await service.tick();await new Promise(resolve=>setImmediate(resolve));
@@ -38,7 +38,7 @@ async function fixture(t,{players=25,sourceConfigured=true,sourceName='[ESP] war
 }
 
 test('API entrada: protege destino y atestación, y no empieza movimiento al abrir el juego',async t=>{
- const f=await fixture(t);assert.equal((await f.state()).capabilities.automaticEntry,true);
+ const f=await fixture(t);const capabilities=(await f.state()).capabilities;assert.equal(capabilities.automaticEntry,true);assert.equal(capabilities.deferredEntryFocus,true);
  assert.equal((await f.post('/api/entry/start',request,{'X-Session-Token':'bad'})).status,403);
  assert.equal((await f.post('/api/entry/start',request,{Origin:'https://untrusted.example'})).status,403);
  for(const extra of [{expectedJoinId:'bad'},{presenceMode:'entry'},{trustedEntry:{}},{entryProof:{}},{team:'purple'}])assert.equal((await f.post('/api/entry/start',{...request,...extra})).status,400);
@@ -86,4 +86,63 @@ test('API entrada: Detener actividad no cancela una entrada manual que no le per
  const f=await fixture(t);await f.post('/api/entry/start',request);const before=(await f.state()).entry;
  await f.post('/api/activity/stop');const after=(await f.state()).entry;assert.equal(after.id,before.id);assert.equal(after.status,before.status);
  await f.post('/api/entry/stop');assert.equal((await f.state()).entry.status,'cancelled');
+});
+
+test('API entrada: programación y actividad conservan foco desktop y exponen origen ligado al trabajo y entrada exactos',async t=>{
+ const f=await fixture(t,{players:5});assert.equal((await f.state()).entryOrigin,null);
+ const scheduled=await f.post('/api/opening/schedule',{...request,madridStart:'2026-10-31T16:01',onlyEligible:false,initialFocus:'desktop'});assert.equal(scheduled.status,200);const job=(await f.state()).opening;assert.equal(job.initialFocus,'desktop');
+ f.advance(60000);await f.service.refresh();await f.service.tick();let s=await f.state();assert.equal(s.entry.initialFocus,'desktop');assert.deepEqual(s.entryOrigin,{kind:'scheduled',ownerId:job.id,entryId:s.entry.id});assert.equal(s.entry.server,job.server);assert.equal(s.entry.joinId,job.joinId);assert.equal(s.entry.createdAt,'2026-10-31T15:01:00.000Z');
+ await f.post('/api/entry/stop',{expectedSessionId:s.entry.id});
+ const watching=await f.post('/api/activity/start',{durationMinutes:5,serverNumbers:[1],team:'green',initialFocus:'desktop'});assert.equal(watching.status,200);const activity=(await f.state()).activity;assert.equal(activity.initialFocus,'desktop');
+ await f.service.tick();f.advance(30000);await f.service.refresh();await f.service.tick();s=await f.state();assert.equal(s.entry.initialFocus,'desktop');assert.deepEqual(s.entryOrigin,{kind:'activity',ownerId:activity.id,entryId:s.entry.id});assert.equal(s.entry.server,s.activity.selectedServer);assert.equal(s.entry.joinId,s.activity.selectedJoinId);assert.equal(s.entry.endAt,s.activity.endAt);
+});
+
+test('API trabajos: initialFocus inválido no crea programación ni vigilancia',async t=>{
+ const f=await fixture(t,{players:5});
+ for(const focus of [null,'other',false]){
+  assert.equal((await f.post('/api/opening/schedule',{...request,madridStart:'2026-10-31T16:01',onlyEligible:false,initialFocus:focus})).status,400);
+  assert.equal((await f.post('/api/activity/start',{durationMinutes:5,initialFocus:focus})).status,400);
+ }
+ const s=await f.state();assert.equal(s.opening,null);assert.equal(s.activity,null);assert.equal(s.entryOrigin,null);assert.deepEqual(f.calls,[]);
+});
+
+test('API trabajos: cancelaciones dirigidas rechazan IDs antiguos sin afectar el trabajo actual y mantienen la API legacy',async t=>{
+ const f=await fixture(t,{players:5}),schedule={...request,madridStart:'2026-10-31T16:01',onlyEligible:false};
+ await f.post('/api/opening/schedule',schedule);let before=(await f.state()).opening;
+ assert.equal((await f.post('/api/opening/cancel',{expectedJobId:'other'})).status,400);assert.deepEqual((await f.state()).opening,before);assert.equal((await f.post('/api/opening/cancel',{expectedJobId:before.id})).status,200);
+ await f.post('/api/opening/schedule',schedule);const next=(await f.state()).opening;assert.notEqual(next.id,before.id);assert.equal((await f.post('/api/opening/cancel',{expectedJobId:before.id})).status,400);assert.deepEqual((await f.state()).opening,next);assert.equal((await f.post('/api/opening/cancel')).status,200);
+ await f.post('/api/activity/start',{durationMinutes:5});before=(await f.state()).activity;
+ assert.equal((await f.post('/api/activity/stop',{expectedJobId:'other'})).status,400);assert.deepEqual((await f.state()).activity,before);assert.equal((await f.post('/api/activity/stop',{expectedJobId:before.id})).status,200);
+ await f.post('/api/activity/start',{durationMinutes:5});const current=(await f.state()).activity;assert.notEqual(current.id,before.id);assert.equal((await f.post('/api/activity/stop',{expectedJobId:before.id})).status,400);assert.deepEqual((await f.state()).activity,current);assert.equal((await f.post('/api/activity/stop')).status,200);
+});
+
+test('API programación: F8 dirigido durante lanzamiento revoca su entrada y un callback tardío no cambia el siguiente trabajo',async t=>{
+ const f=await fixture(t,{players:5});let release,entered;const ready=new Promise(resolve=>entered=resolve);f.game(()=>{entered();return new Promise(resolve=>release=resolve);});
+ await f.post('/api/opening/schedule',{...request,madridStart:'2026-10-31T16:01',onlyEligible:false,initialFocus:'desktop'});const job=(await f.state()).opening;f.advance(60000);await f.service.refresh();const pending=f.service.tick();await ready;
+ try{
+  let s=await f.state();assert.equal(s.opening.status,'launching');assert.equal(s.entryOrigin.ownerId,job.id);assert.equal(s.entry.status,'opening');
+  assert.equal((await f.post('/api/opening/cancel',{expectedJobId:'other'})).status,400);assert.equal((await f.state()).entry.status,'opening');assert.equal((await f.post('/api/opening/cancel')).status,400,'cancel legacy no concede nuevas facultades durante lanzamiento');
+  assert.equal((await f.post('/api/opening/cancel',{expectedJobId:job.id})).status,200);s=await f.state();assert.equal(s.opening.status,'cancelled');assert.equal(s.entry.status,'cancelled');
+  assert.equal((await f.post('/api/opening/schedule',{...request,madridStart:'2026-10-31T16:02',onlyEligible:false,initialFocus:'driver'})).status,200);const next=(await f.state()).opening;release();await pending;s=await f.state();assert.deepEqual(s.opening,next);assert.equal(s.entry.status,'cancelled');assert.equal(f.calls.filter(c=>c==='game').length,1);
+ }finally{release?.();await pending;}
+});
+
+test('API programación: cancelar su ID detiene el seeding entregado pero nunca una nueva entrada manual ajena',async t=>{
+ const f=await fixture(t);f.nativeMovement();await f.post('/api/opening/schedule',{...request,madridStart:'2026-10-31T16:01',onlyEligible:false,initialFocus:'desktop',seeding:{durationMinutes:5}});const job=(await f.state()).opening;
+ f.advance(60000);await f.service.refresh();f.nativeMovement();await f.service.tick();f.phase('team_selector');await f.service.tick();await f.completeTeam();let s=await f.state();assert.equal(s.entry.status,'completed');assert.equal(s.autoSeeding.status,'starting_movement');
+ assert.equal((await f.post('/api/opening/cancel',{expectedJobId:'other'})).status,400);assert.equal((await f.state()).autoSeeding.status,'starting_movement');assert.equal((await f.post('/api/opening/cancel',{expectedJobId:job.id})).status,200);s=await f.state();assert.equal(s.entry.status,'cancelled');assert.equal(s.autoSeeding.status,'cancelled');
+ await f.post('/api/entry/start',{...request,seeding:false});const manual=(await f.state()).entry;assert.deepEqual((await f.state()).entryOrigin,{kind:'manual',ownerId:null,entryId:manual.id});
+ assert.equal((await f.post('/api/opening/cancel',{expectedJobId:job.id})).status,200);s=await f.state();assert.equal(s.entry.id,manual.id);assert.equal(s.entry.status,manual.status);assert.equal(s.entryOrigin.kind,'manual');
+});
+
+test('API actividad: parar su ID cancela el seeding entregado y no afecta una nueva entrada manual',async t=>{
+ const f=await fixture(t,{players:5});f.nativeMovement();await f.post('/api/activity/start',{durationMinutes:5,serverNumbers:[1],team:'red',initialFocus:'desktop'});const job=(await f.state()).activity;
+ await f.service.tick();f.advance(30000);await f.service.refresh();f.nativeMovement();await f.service.tick();f.phase('team_selector');await f.service.tick();await f.completeTeam();let s=await f.state();assert.equal(s.entry.status,'completed');assert.equal(s.autoSeeding.status,'waiting_match');assert.deepEqual(s.entryOrigin,{kind:'activity',ownerId:job.id,entryId:s.entry.id});
+ assert.equal((await f.post('/api/activity/stop',{expectedJobId:'other'})).status,400);assert.equal((await f.state()).autoSeeding.status,'waiting_match');assert.equal((await f.post('/api/activity/stop',{expectedJobId:job.id})).status,200);s=await f.state();assert.equal(s.entry.status,'cancelled');assert.equal(s.autoSeeding.status,'cancelled');
+ await f.post('/api/entry/start',{...request,seeding:false});const manual=(await f.state()).entry;assert.equal((await f.post('/api/activity/stop',{expectedJobId:job.id})).status,200);s=await f.state();assert.equal(s.entry.id,manual.id);assert.equal(s.entry.status,manual.status);assert.equal(s.entryOrigin.kind,'manual');
+});
+
+test('API origen: una entrada rechazada antes de crear UUID no reasigna el origen de la entrada anterior',async t=>{
+ const f=await fixture(t);await f.post('/api/opening/schedule',{...request,madridStart:'2026-10-31T16:01',onlyEligible:false,initialFocus:'desktop'});f.advance(60000);await f.service.refresh();await f.service.tick();await f.post('/api/entry/stop');const before=await f.state();assert.equal(before.entryOrigin.kind,'scheduled');
+ assert.equal((await f.post('/api/entry/start',{...request,team:'invalid'})).status,400);const after=await f.state();assert.deepEqual(after.entryOrigin,before.entryOrigin);assert.equal(after.entry.id,before.entry.id);assert.equal(after.entry.status,before.entry.status);
 });

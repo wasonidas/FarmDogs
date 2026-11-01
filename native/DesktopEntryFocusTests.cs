@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -32,6 +33,73 @@ internal static class DesktopEntryFocusTests
    stop.Arm(Join);stop.Bind(Join,Nonce).GetAwaiter().GetResult();stop.Request(Session).GetAwaiter().GetResult();Check(handler.Posts==1,"An old key stopped a new session");handler.Expected=Nonce;stop.Request(Join).GetAwaiter().GetResult();Check(handler.Gets==2&&handler.Posts==2,"Bound F8 did not stop own session");
   }
  }
+ private static DesktopEntryJobFocusPolicy Deferred(bool bind=true,string kind="scheduled")
+ {var p=new DesktopEntryJobFocusPolicy();Check(p.Arm(Nonce,kind,kind=="scheduled"?1:0,kind=="scheduled"?Join:null,true,100,0),"Deferred arm failed");if(bind)p.Bind(Nonce,kind,Join);return p;}
+ private static DesktopEntryJobSnapshot DeferredSample(string kind="scheduled")
+ {var entry=Sample();entry.CreatedAt=now.AddSeconds(-1);return new DesktopEntryJobSnapshot {Root=Root,At=now,OriginKind=kind,OriginOwnerId=Join,OriginEntryId=Session,Job=new DesktopEntryJobSample {Id=Join,Status=kind=="scheduled"?"open_requested":"launching",FocusMode="desktop",Server=1,JoinId=Join},Entry=entry,InputAtStart=100,WatchStartedAt=now.AddMilliseconds(-500),TargetVerified=true};}
+ private static string DeferredTick(DesktopEntryJobFocusPolicy policy,DesktopEntryJobSnapshot sample=null,double mono=200,uint input=100,bool game=false,bool target=true)
+ {return policy.Tick(mono,input,game,true,sample??DeferredSample(),target,now,Root,now.AddSeconds(-2));}
+ private static void DeferredPolicy()
+ {
+  var p=new DesktopEntryJobFocusPolicy();Check(!p.Arm(Nonce,"scheduled",1,Join,false,100,0),"Background scheduled click armed");Check(!p.Arm(Nonce,"other",1,Join,true,100,0),"Unknown job kind armed");Check(!p.Arm(Nonce,"scheduled",0,Join,true,100,0),"Bad scheduled target armed");Check(!p.Arm(Nonce,"activity",1,Join,true,100,0),"Activity adopted invented target");
+  p=Deferred(false);Check(DeferredTick(p)=="wait","Unbound job activated");p.Bind(Nonce,"activity",Join);Check(DeferredTick(p,mono:250)=="wait","Wrong kind bound");p.Bind(Session,"scheduled",Join);Check(DeferredTick(p,mono:300)=="wait","Wrong nonce bound");p.Bind(Nonce,"scheduled",Join);Check(DeferredTick(p,mono:400)=="activate","Matching scheduled entry did not activate");p.Result(false);Check(p.Status=="refused"&&DeferredTick(p,mono:500)=="none","Refused deferred activation retried");
+  p=Deferred();Check(DeferredTick(p,game:true)=="none"&&p.Status=="already_foreground","Already foreground scheduled game was reactivated");
+  p=Deferred(kind:"activity");Check(DeferredTick(p,DeferredSample("activity"))=="activate","Activity entry did not bind its chosen official target");p.Result(true);Check(DeferredTick(p,DeferredSample("activity"),mono:400)=="none","Activity success rearmed");
+  p=Deferred();var waiting=DeferredSample();waiting.At=now.AddHours(-1);waiting.Entry=null;waiting.OriginEntryId=null;waiting.Job.Status="scheduled";Check(p.Tick(1000,200,false,true,waiting,false,now.AddHours(-1),Root,now.AddHours(-1))=="wait","Input an hour before due revoked schedule");var due=DeferredSample();due.InputAtStart=200;Check(DeferredTick(p,due,mono:3601000,input:200)=="activate","Using PC before due invalidated later baseline");
+  p=Deferred();var startup=DeferredSample();startup.InputAtStart=200;Check(p.Tick(200,200,false,true,startup,true,now,Root,now.AddMilliseconds(-500))=="revoked","Input during cold startup before watcher was missed");
+  p=Deferred();var beforeDue=DeferredSample();beforeDue.InputAtStart=200;Check(p.Tick(200,200,false,true,beforeDue,true,now,Root,beforeDue.Entry.CreatedAt.AddMilliseconds(-1))=="activate","A late API response misdated input before the due time");
+  p=Deferred();Check(p.Tick(200,100,false,true,DeferredSample(),true,now,Root,null)=="wait","Uncertain input timestamp authorized focus");
+  Check(DesktopEntryFocus.InputDate(UInt32.MaxValue-5,5,now)==now.AddMilliseconds(-11),"Input age failed tick wrap");Check(!DesktopEntryFocus.InputDate(101,100,now).HasValue,"Future input stamp was accepted");Check(!DesktopEntryFocus.InputDate(0,0x80000000,now).HasValue,"Ambiguous half-wrap input age accepted");Check(!DesktopEntryFocus.InputDate(100,100,DateTime.SpecifyKind(now,DateTimeKind.Unspecified)).HasValue,"Unspecified clock accepted for input date");
+  p=Deferred();Check(DeferredTick(p,input:101)=="revoked","New input during entry did not revoke");Check(DeferredTick(p,mono:400)=="none","Human input revocation rearmed");
+  p=Deferred();Check(DeferredTick(p,target:false)=="wait","Missing target activated");Check(DeferredTick(p,mono:180000)=="expired","Initial entry focus outlived180s");
+  p=Deferred(false);Check(DeferredTick(p,mono:30000)=="expired","Unconfirmed job click outlived bind limit");
+  p=Deferred();DeferredTick(p,target:false);Check(DeferredTick(p,mono:100)=="revoked","Deferred monotonic rollback ignored");
+  foreach(var kind in new[]{"root","snapshot_old","snapshot_future","job","driver","target","entryRoot","entry_server","entry_join","entry_stop","entry_end","entry_created","baseline","baseline_before_entry","baseline_future","origin","owner","origin_entry"})
+  {p=Deferred();var s=DeferredSample();if(kind=="root")s.Root="C:\\Other";if(kind=="snapshot_old")s.At=now.AddSeconds(-2);if(kind=="snapshot_future")s.At=now.AddMilliseconds(1);if(kind=="job")s.Job.Id=Nonce;if(kind=="driver")s.Job.FocusMode="driver";if(kind=="target")s.TargetVerified=false;if(kind=="entryRoot")s.Entry.Root="C:\\Other";if(kind=="entry_server")s.Entry.Server=2;if(kind=="entry_join")s.Entry.JoinId=Nonce;if(kind=="entry_stop")s.Entry.Stopped=true;if(kind=="entry_end")s.Entry.End=now;if(kind=="entry_created")s.Entry.CreatedAt=now.AddMilliseconds(1);if(kind=="baseline")s.InputAtStart=null;if(kind=="baseline_before_entry")s.WatchStartedAt=s.Entry.CreatedAt.AddMilliseconds(-1);if(kind=="baseline_future")s.WatchStartedAt=now.AddMilliseconds(1);if(kind=="origin")s.OriginKind="manual";if(kind=="owner")s.OriginOwnerId=Nonce;if(kind=="origin_entry")s.OriginEntryId=Nonce;Check(DeferredTick(p,s)!="activate","Invalid deferred authority activated: "+kind);}
+  p=Deferred();p.Stop(Nonce);p.Bind(Nonce,"scheduled",Join);Check(p.Status=="stopped"&&DeferredTick(p)=="none","F8 before bind was overwritten");
+  p=Deferred();Check(DeferredTick(p)=="activate","Expected pending observation");p.Revoke("cancelled from UI");p.Result(true);Check(p.Status=="revoked","Late activation result overwrote UI cancellation");
+  Check(DesktopEntryFocus.OwnedWindow(22,22,11,11),"Account owned window was rejected");Check(DesktopEntryFocus.OwnedWindow(12,11,11,11),"Own child rejected");Check(!DesktopEntryFocus.OwnedWindow(22,22,33,11),"Unrelated process/window accepted as own");Check(!DesktopEntryFocus.OwnedWindow(0,0,0,11),"Null foreground accepted");
+ }
+ private sealed class JobHttp:HttpMessageHandler
+ {
+  internal string Current=Join,StateRoot=Root,Expected=Join,Kind="scheduled",Mode="desktop";internal int Gets,Posts;internal bool FailOnce,Deferred=true;
+  protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancel)
+  {
+   Check(request.RequestUri.Host=="127.0.0.1"&&request.RequestUri.Port==24243,"Job stop left local service");
+   if(request.Method==HttpMethod.Get){Gets++;if(FailOnce){FailOnce=false;throw new HttpRequestException("Fixture temporarily unavailable");}return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(DesktopProtocol.Json.Serialize(new{appId="wardogs-seeding-local-v1",installationRoot=StateRoot,token="captured-job-token",capabilities=new{deferredEntryFocus=Deferred},opening=new{id=Current,initialFocus=Mode},activity=new{id=Current,initialFocus=Mode}}))};}
+   Posts++;Check(request.RequestUri.AbsolutePath==(Kind=="scheduled"?"/api/opening/cancel":"/api/activity/stop"),"Wrong job stop route");Check(String.Join("",request.Headers.GetValues("X-Session-Token"))=="captured-job-token","Job stop missed captured token");var body=DesktopProtocol.Object(DesktopProtocol.Json.DeserializeObject(await request.Content.ReadAsStringAsync()));Check(DesktopProtocol.Text(body,"expectedJobId")==Expected,"Late stop targeted replacement job");return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("{}")};
+  }
+ }
+ private static void DeferredStopBridge()
+ {
+  var oldManualHttp=new TaskCompletionSource<int>();bool jobLatched=false;var both=DesktopEntryStopDispatch.Both(()=>oldManualHttp.Task,()=>{jobLatched=true;return Task.FromResult(0);});Check(jobLatched&&!both.IsCompleted,"An old manual HTTP call delayed the deferred F8 latch");oldManualHttp.SetResult(0);both.GetAwaiter().GetResult();
+  using(var handler=new JobHttp())using(var client=new HttpClient(handler))
+  {
+   var stopping=new DesktopEntryJobStop(async(kind,id)=>{await DesktopProtocol.StopOwnJob(client,Root,kind,id);});stopping.Arm(Nonce,"scheduled");stopping.Request(Nonce).GetAwaiter().GetResult();Check(handler.Posts==0&&handler.Gets==0&&stopping.Pending,"F8 before bind was lost or guessed a job");stopping.Bind(Nonce,"activity",Join).GetAwaiter().GetResult();Check(handler.Posts==0,"Wrong job kind bound stop");stopping.Bind(Nonce,"scheduled",Join).GetAwaiter().GetResult();Check(handler.Posts==1&&!stopping.Pending,"Bind did not deliver pending F8");stopping.Request(Nonce).GetAwaiter().GetResult();stopping.Retry().GetAwaiter().GetResult();Check(handler.Posts==1,"Duplicate key/events duplicated HTTP stop");
+   stopping.Arm(Session,"activity");handler.Kind="activity";handler.Current=Session;handler.Expected=Session;stopping.Bind(Session,"activity",Session).GetAwaiter().GetResult();stopping.Request(Session).GetAwaiter().GetResult();Check(handler.Posts==2,"Bound activity F8 failed");
+   var late=new DesktopEntryJobStop(async(kind,id)=>{await DesktopProtocol.StopOwnJob(client,Root,kind,id);});late.Arm(Nonce,"scheduled");late.Request(Nonce).GetAwaiter().GetResult();late.Arm(Session,"activity");handler.Current=Join;handler.Expected=Join;handler.Kind="scheduled";late.Bind(Nonce,"scheduled",Join).GetAwaiter().GetResult();Check(handler.Posts==3,"New arm lost older pending stop");
+   var replaced=new DesktopEntryJobStop(async(kind,id)=>{await DesktopProtocol.StopOwnJob(client,Root,kind,id);});replaced.Arm(Nonce,"scheduled");replaced.Request(Nonce).GetAwaiter().GetResult();handler.Current=Session;replaced.Bind(Nonce,"scheduled",Join).GetAwaiter().GetResult();Check(handler.Posts==3&&!replaced.Pending,"Replacement job received stale F8");
+   var retry=new DesktopEntryJobStop(async(kind,id)=>{await DesktopProtocol.StopOwnJob(client,Root,kind,id);});retry.Arm(Nonce,"scheduled");retry.Bind(Nonce,"scheduled",Join).GetAwaiter().GetResult();handler.Current=Join;handler.FailOnce=true;bool failed=false;try{retry.Request(Nonce).GetAwaiter().GetResult();}catch(HttpRequestException){failed=true;}Check(failed&&retry.Pending,"Transient failure erased F8 latch");retry.Retry().GetAwaiter().GetResult();Check(handler.Posts==4&&!retry.Pending,"F8 was not retried for same owner");
+   handler.StateRoot="C:\\Other";failed=false;try{DesktopProtocol.StopOwnJob(client,Root,"scheduled",Join).GetAwaiter().GetResult();}catch(InvalidOperationException){failed=true;}Check(failed&&handler.Posts==4,"Cross-installation stop sent HTTP mutation");
+   handler.StateRoot=Root;handler.Deferred=false;failed=false;try{DesktopProtocol.StopOwnJob(client,Root,"scheduled",Join).GetAwaiter().GetResult();}catch(InvalidOperationException){failed=true;}Check(failed&&handler.Posts==4,"Legacy API received an unenforced owner guard");handler.Deferred=true;handler.Mode="driver";failed=false;try{DesktopProtocol.StopOwnJob(client,Root,"scheduled",Join).GetAwaiter().GetResult();}catch(InvalidOperationException){failed=true;}Check(failed&&handler.Posts==4,"Driver job received unrelated host stop");
+  }
+ }
+ private static void WatchBaseline()
+ {
+  string root=Path.Combine(Path.GetTempPath(),"farmdogs-deferred-watch-"+Guid.NewGuid().ToString("N")),data=Path.Combine(root,"data");Directory.CreateDirectory(data);string file=Path.Combine(data,"entry-watch-"+Session+".json");
+  try{
+   File.WriteAllText(Path.Combine(data,"service.json"),DesktopProtocol.Json.Serialize(new{pid=1234,startedAt=now.AddMinutes(-1).ToString("o")}));
+   Func<Dictionary<string,object>> watch=()=>new Dictionary<string,object>{{"format","farmdogs-entry-watch-v1"},{"sessionId",Session},{"servicePid",1234},{"status","watching"},{"at",now.ToString("o")},{"startedAt",now.AddMilliseconds(-500).ToString("o")},{"endAt",now.AddMinutes(2).ToString("o")},{"inputAtStart",4294967295L}};
+   var sample=DeferredSample();sample.Root=root;sample.Entry.Root=root;File.WriteAllText(file,DesktopProtocol.Json.Serialize(watch()));DesktopEntryWatchBaseline.Apply(sample,root,now);Check(sample.InputAtStart==UInt32.MaxValue,"Real watcher JSON uint baseline not decoded");
+   foreach(var key in new[]{"format","sessionId","servicePid","status","at","startedAt","endAt","inputAtStart"}){var bad=watch();if(key=="format")bad[key]="other";if(key=="sessionId")bad[key]=Nonce;if(key=="servicePid")bad[key]=999;if(key=="status")bad[key]="cancelled";if(key=="at")bad[key]=now.AddSeconds(-4).ToString("o");if(key=="startedAt")bad[key]=now.AddMinutes(-2).ToString("o");if(key=="endAt")bad[key]=now.ToString("o");if(key=="inputAtStart")bad[key]="100";File.WriteAllText(file,DesktopProtocol.Json.Serialize(bad));sample.InputAtStart=100;DesktopEntryWatchBaseline.Apply(sample,root,now);Check(!sample.InputAtStart.HasValue,"Invalid watcher retained input authority: "+key);}
+   File.WriteAllText(file,DesktopProtocol.Json.Serialize(watch()));File.WriteAllText(file+".stop","");DesktopEntryWatchBaseline.Apply(sample,root,now);Check(!sample.InputAtStart.HasValue,"Stopped watcher authorized focus");File.Delete(file+".stop");File.WriteAllText(file,"{");DesktopEntryWatchBaseline.Apply(sample,root,now);Check(!sample.InputAtStart.HasValue,"Malformed watcher authorized focus");
+  }finally{if(Path.GetDirectoryName(Path.GetFullPath(root))!=Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)||!Path.GetFileName(root).StartsWith("farmdogs-deferred-watch-"))throw new Exception("Unsafe fixture cleanup");Directory.Delete(root,true);}
+ }
+ private static void ParseDeferredState()
+ {
+  var raw=DesktopProtocol.Object(DesktopProtocol.Json.DeserializeObject(DesktopProtocol.Json.Serialize(new{appId="wardogs-seeding-local-v1",installationRoot=Root,now=now.ToString("o"),capabilities=new{deferredEntryFocus=true},opening=new{id=Join,status="launching",initialFocus="desktop",server=1,joinId=Join},entryOrigin=new{kind="scheduled",ownerId=Join,entryId=Session},entry=new{id=Session,status="waiting_game",initialFocus="desktop",server=1,joinId=Join,createdAt=now.AddSeconds(-1).ToString("o"),endAt=now.AddMinutes(2).ToString("o"),operatorStopped=false},servers=new[]{new{number=1,joinId=Join,trusted=true,online=true}}})));
+  var parsed=DesktopEntryFocus.ParseJobState(raw,"scheduled");Check(parsed.TargetVerified&&parsed.Job.Id==Join&&parsed.Entry.SessionId==Session&&parsed.OriginKind=="scheduled","Actual API JSON shape failed host contract");var rows=(object[])raw["servers"];var server=DesktopProtocol.Object(rows[0]);server["trusted"]=false;Check(!DesktopEntryFocus.ParseJobState(raw,"scheduled").TargetVerified,"Untrusted public target authorized host focus");server["trusted"]=true;server["online"]=false;Check(!DesktopEntryFocus.ParseJobState(raw,"scheduled").TargetVerified,"Offline target authorized host focus");server["online"]=true;server["joinId"]=Nonce;Check(!DesktopEntryFocus.ParseJobState(raw,"scheduled").TargetVerified,"Different official UUID authorized focus");raw.Remove("capabilities");Check(DesktopEntryFocus.ParseJobState(raw,"scheduled")==null,"Legacy API armed deferred focus");raw["appId"]="other";Check(DesktopEntryFocus.ParseJobState(raw,"scheduled")==null,"Wrong app identity parsed");
+ }
  public static int Main(){try{
   var p=new DesktopEntryFocusPolicy();Check(!p.Arm(Nonce,1,Join,false,100,0),"Background click armed");Check(!p.Arm("bad",1,Join,true,100,0),"Bad nonce armed");Check(!p.Arm(Nonce,0,Join,true,100,0),"Bad server armed");
   p=Armed(false);Check(Tick(p)=="wait","Unbound activated");p.Bind("other",Session);Check(Tick(p,mono:300)=="wait","Wrong nonce bound");p.Bind(Nonce,Session);Check(Tick(p,mono:400)=="activate","Matching bound click did not activate");p.Result(false);Check(p.Status=="refused"&&!p.Pending,"Refusal remains armed");Check(Tick(p,mono:500)=="none","Refusal retried");
@@ -43,6 +111,6 @@ internal static class DesktopEntryFocusTests
   p=Armed();Check(p.Tick(200,100,true,false,false,true,null,false,now,Root,false)=="wait"&&p.Pending,"Context guard required session prematurely");Check(p.Tick(400,100,true,false,false,true,null,true,now,Root)=="cancelled","Missing final session accepted");
   p=Armed();var wrongMode=Sample();wrongMode.FocusMode="driver";Check(Tick(p,wrongMode)=="cancelled","Driver-owned session accepted");
   p=Armed();p.Cancel("manual");Check(Tick(p)=="none","Explicit cancel rearmed");Check(DesktopEntryFocusPolicy.SameRoot("c:/fixture/farmdogs/",Root),"Equivalent root failed");
-  StopBridge();Console.WriteLine(checks+" comprobaciones de foco inicial por clic; sin ventanas, procesos, audio ni entradas.");return 0;
+  StopBridge();DeferredPolicy();DeferredStopBridge();WatchBaseline();ParseDeferredState();Console.WriteLine(checks+" comprobaciones de foco inicial y tareas diferidas; sin ventanas, procesos, audio ni entradas.");return 0;
  }catch(Exception error){Console.Error.WriteLine(error);return 1;}}
 }

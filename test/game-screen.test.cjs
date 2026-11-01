@@ -7,6 +7,7 @@ const restart=require('./fixtures/ocr-restart-modal.json');
 const main=require('./fixtures/ocr-main-menu.json');
 const hud=require('./fixtures/ocr-gameplay-hud.json');
 const controlHud=require('./fixtures/ocr-hud-faction-control.json');
+const compactHud=require('./fixtures/ocr-hud-compact-heading.json');
 const {normalizeScreen}=require('../src/screen-reader.cjs');
 const path=require('node:path');
 test('pantalla: distingue los tres diálogos observados sin autorizar entradas desde una imagen',()=>{
@@ -18,6 +19,48 @@ test('pantalla: reconoce tres anclas del HUD y rechaza una superposición de men
  assert.equal(classifyGameScreen(hud).phase,'gameplay_hud');assert.equal(classifyGameScreen(hud).inputAllowed,false);
  const missing=structuredClone(hud);missing.lines.pop();assert.equal(classifyGameScreen(missing).phase,'unknown');
  for(const text of ['CONTINUAR','ESCRIBE UN MENSAJE']){const overlay=structuredClone(hud);overlay.lines.push({text,words:[{text,x:800,y:600,width:200,height:20}]});assert.equal(classifyGameScreen(overlay).phase,'unknown');}
+});
+
+test('pantalla: la brújula compacta observada y la espaciada aceptan solo rumbos 0–359 y ocho direcciones literales',()=>{
+ const result=classifyGameScreen(compactHud);assert.equal(result.phase,'gameplay_hud');assert.equal(result.inputAllowed,false);assert.equal(result.activeMatchVerified,false);
+ assert.equal(compactHud.source.capturedAt,null);assert.equal(compactHud.source.path,undefined);assert.match(compactHud.source.sha256,/^[0-9a-f]{64}$/);
+ assert.equal(compactHud.lines.length,3);assert.equal(compactHud.lines.find(row=>row.pass==='hud_compass').text,'064NE');
+ for(const direction of ['N','NE','E','SE','S','SW','W','NW'])for(const heading of [0,1,9,64,99,100,270,359])for(const separator of ['',' ']){
+  for(const prefix of ['','| ']){
+   const report=structuredClone(compactHud);report.lines.find(row=>row.pass==='hud_compass').text=prefix+String(heading).padStart(3,'0')+separator+direction;
+   assert.equal(classifyGameScreen(report).phase,'gameplay_hud',report.lines[0].text);
+  }
+ }
+});
+
+test('pantalla: brújula compacta no admite letras aproximadas, direcciones inventadas ni rumbos fuera del círculo',()=>{
+ for(const label of ['','064','NE','-1NE','360NE','999NE','0064NE','64.0NE','064NN','064EE','064WW','064SS','064EN','064ES','064WS','064SN','064NNE','064NEWS','064N E','O64NE','064 NE EXTRA','EXTRA 064NE','1 0 064NE','064NE 075E']){
+  const report=structuredClone(compactHud);report.lines.find(row=>row.pass==='hud_compass').text=label;
+  assert.equal(classifyGameScreen(report).phase,'unknown',label);
+ }
+});
+
+test('pantalla: brújula compacta mantiene tres anclas, región única y bloqueos de interfaz',()=>{
+ for(const missing of ['hud_compass','hud_hands_detail','hud_health']){
+  const report=structuredClone(compactHud);report.lines=report.lines.filter(row=>row.pass!==missing);assert.equal(classifyGameScreen(report).phase,'unknown',missing);
+ }
+ for(const [x,y] of [[100,40],[1248,500]]){
+  const report=structuredClone(compactHud);for(const word of report.lines.find(row=>row.pass==='hud_compass').words){word.x=x;word.y=y;}
+  assert.equal(classifyGameScreen(report).phase,'unknown');
+ }
+ const duplicate=structuredClone(compactHud);duplicate.lines.push(structuredClone(duplicate.lines[0]));assert.equal(classifyGameScreen(duplicate).phase,'unknown');
+ for(const text of ['// SELECCIONAR FACCIÓN','ESCRIBE UN MENSAJE','COMPRAR','CARGANDO','LOADING...','DESPLEGANDO','ENTRANDO']){
+  const report=structuredClone(compactHud);report.lines.push({text,words:[{text,x:800,y:500,width:350,height:25}]});assert.equal(classifyGameScreen(report).phase,'unknown',text);
+ }
+});
+
+test('pantalla: reconocer brújula compacta en archivo no confirma frescura ni permite entradas',()=>{
+ const now=Date.parse('2026-11-01T03:09:57Z'),directory=path.resolve('inert-compact-hud-frame'),id='11111111-1111-4111-8111-111111111111';
+ const source={...compactHud.source,kind:'foreground_game',captureMethod:'foreground_client_screen_copy',frameId:id,gamePid:123,window:456,path:path.join(directory,'game-frame-'+id+'.png'),capturedAt:new Date(now-100).toISOString(),captureFinishedAt:new Date(now-80).toISOString()};
+ assert.equal(normalizeScreen(compactHud,now,directory).status,'unknown');
+ assert.equal(normalizeScreen({...compactHud,source},now,directory).scene,'gameplay_hud');
+ assert.equal(normalizeScreen({...compactHud,source:{...source,capturedAt:new Date(now-6000).toISOString(),captureFinishedAt:new Date(now-5980).toISOString()}},now,directory).status,'unknown');
+ assert.equal(normalizeScreen({...compactHud,source:{...source,kind:'file'}},now,directory).status,'unknown');
 });
 
 test('pantalla: el HUD soleado conserva tres anclas con CONTROL completo en su región, sin permiso desde una imagen',()=>{

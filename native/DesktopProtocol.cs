@@ -47,4 +47,29 @@ internal static class DesktopProtocol
             }
         }
     }
+    public static async Task StopOwnJob(HttpClient client,string root,string kind,string ownerId)
+    {
+        Guid parsed;if((kind!="scheduled"&&kind!="activity")||!Guid.TryParseExact(ownerId,"D",out parsed))throw new InvalidOperationException("Tarea de parada no valida.");
+        var parser=new JavaScriptSerializer {MaxJsonLength=524288};Dictionary<string,object> state;
+        using(var response=await client.GetAsync(LocalBase+"/api/state"))
+        {
+            response.EnsureSuccessStatusCode();state=Object(parser.DeserializeObject(await response.Content.ReadAsStringAsync()));
+        }
+        if(Text(state,"appId")!="wardogs-seeding-local-v1"||!SameInstallation(Text(state,"installationRoot"),root))throw new InvalidOperationException("La parada no pertenece a esta instalacion.");
+        object raw;var capabilities=state.TryGetValue("capabilities",out raw)?Object(raw):null;
+        if(capabilities==null||!capabilities.TryGetValue("deferredEntryFocus",out raw)||!(raw is bool)||!(bool)raw)throw new InvalidOperationException("El servicio no admite la parada vinculada a esta tarea.");
+        var job=state.TryGetValue(kind=="scheduled"?"opening":"activity",out raw)?Object(raw):null;
+        if(Text(job,"id")!=ownerId)return; // A replacement job must never receive this stop.
+        if(Text(job,"initialFocus")!="desktop")throw new InvalidOperationException("La tarea no autorizo el permiso de esta ventana.");
+        var token=Text(state,"token");if(String.IsNullOrEmpty(token))throw new InvalidOperationException("No responde el servicio local.");
+        using(var request=new HttpRequestMessage(HttpMethod.Post,LocalBase+(kind=="scheduled"?"/api/opening/cancel":"/api/activity/stop")))
+        {
+            request.Headers.Add("X-Session-Token",token);request.Content=new StringContent(Json.Serialize(new{expectedJobId=ownerId}),Encoding.UTF8,"application/json");
+            using(var response=await client.SendAsync(request)){response.EnsureSuccessStatusCode();}
+        }
+    }
+    private static bool SameInstallation(string actual,string expected)
+    {
+        try{return !String.IsNullOrEmpty(actual)&&System.IO.Path.IsPathRooted(actual)&&System.IO.Path.IsPathRooted(expected)&&String.Equals(System.IO.Path.GetFullPath(actual).TrimEnd('\\','/'),System.IO.Path.GetFullPath(expected).TrimEnd('\\','/'),StringComparison.OrdinalIgnoreCase);}catch{return false;}
+    }
 }

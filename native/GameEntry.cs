@@ -316,6 +316,12 @@ internal static class GameEntryWatchPolicy
         return session;
     }
 }
+internal static class GameEntryInputBaseline
+{
+    [StructLayout(LayoutKind.Sequential)]private struct LASTINPUTINFO{public uint cbSize,dwTime;}
+    [DllImport("user32.dll")]private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+    internal static uint? Read(){var info=new LASTINPUTINFO{cbSize=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO))};return GetLastInputInfo(ref info)?(uint?)info.dwTime:null;}
+}
 internal static class GameEntryWatch
 {
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
@@ -348,8 +354,8 @@ internal static class GameEntryWatch
             GameEntryPolicy.Reject(!Directory.Exists(Path.GetDirectoryName(file))||(File.GetAttributes(Path.GetDirectoryName(file))&FileAttributes.ReparsePoint)!=0||File.Exists(file),"invalid_watch_path");
             DateTime processStarted=DateTime.MinValue;
             try{using(var process=Process.GetProcessById(servicePid))processStarted=process.StartTime.ToUniversalTime();}catch{}
-            var clock=Stopwatch.StartNew();long budget=(long)(end-started).TotalMilliseconds,lastWrite=0;
-            Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status="watching",reason=(string)null,at=started.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o")},true);
+            var clock=Stopwatch.StartNew();long budget=(long)(end-started).TotalMilliseconds,lastWrite=0;uint? inputAtStart=GameEntryInputBaseline.Read();
+            Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status="watching",reason=(string)null,at=started.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o"),inputAtStart},true);
             while(true)
             {
                 DateTime now=DateTime.UtcNow;bool stop=(GetAsyncKeyState(0x77)&0x8001)!=0;
@@ -357,7 +363,7 @@ internal static class GameEntryWatch
                 if(decision.Status!="watching"||clock.ElapsedMilliseconds-lastWrite>=1000)
                 {
                     GameEntryPolicy.Reject(!File.Exists(file)||(File.GetAttributes(file)&FileAttributes.ReparsePoint)!=0,"invalid_watch_path");
-                    Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status=decision.Status,reason=decision.Reason,at=now.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o")},false);
+                    Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status=decision.Status,reason=decision.Reason,at=now.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o"),inputAtStart},false);
                     lastWrite=clock.ElapsedMilliseconds;
                 }
                 if(decision.Status!="watching")return 0;
@@ -374,13 +380,13 @@ internal sealed class EntryFocusWindow
 }
 internal sealed class EntryFocusOutcome
 {
-    internal bool Found,Focused;internal string Reason;internal EntryFocusWindow Window;
+    internal bool Found,Focused;internal bool? ActivationAccepted;internal string Reason;internal EntryFocusWindow Window;
 }
 internal interface IEntryFocusPlatform
 {
     bool StopRequested();bool ServiceAlive();EntryFocusWindow[] Windows();
     bool Valid(EntryFocusWindow window);bool Foreground(EntryFocusWindow window);
-    void Restore(EntryFocusWindow window);bool Focus(EntryFocusWindow window);
+    void Restore(EntryFocusWindow window);bool Focus(EntryFocusWindow window);bool InputUnchanged();void Wait(int milliseconds);
 }
 internal static class GameEntryFocusPolicy
 {
@@ -396,18 +402,32 @@ internal static class GameEntryFocusPolicy
         if(platform.StopRequested())return Result(true,false,"operator_stop",selected);
         if(!platform.ServiceAlive()||!platform.Valid(selected))return Result(true,false,"game_window_changed",selected);
         if(platform.Foreground(selected))return Result(true,true,null,selected);
+        if(!platform.InputUnchanged())return Result(true,false,"operator_input",selected);
         if(selected.Minimized)
         {
             platform.Restore(selected);
             if(platform.StopRequested())return Result(true,false,"operator_stop",selected);
             if(!platform.ServiceAlive()||!platform.Valid(selected))return Result(true,false,"game_window_changed",selected);
+            if(!platform.InputUnchanged())return Result(true,false,"operator_input",selected);
         }
         // Respect Windows' foreground lock. No input synthesis, thread attachment,
         // retries or permission changes are used when the normal API refuses.
         if(platform.StopRequested())return Result(true,false,"operator_stop",selected);
         if(!platform.ServiceAlive()||!platform.Valid(selected))return Result(true,false,"game_window_changed",selected);
-        if(!platform.Foreground(selected))platform.Focus(selected);
-        bool focused=platform.Foreground(selected);return Result(true,focused,focused?null:"foreground_refused",selected);
+        if(!platform.InputUnchanged())return Result(true,false,"operator_input",selected);
+        if(platform.Foreground(selected))return Result(true,true,null,selected);
+        bool accepted=platform.Focus(selected);var result=Result(true,false,accepted?"activation_not_observed":"foreground_refused",selected);result.ActivationAccepted=accepted;
+        // Cross-input-queue activation is asynchronous. Observe the accepted
+        // request briefly, without another SetForegroundWindow or input event.
+        for(int elapsed=0;;elapsed+=25)
+        {
+            if(platform.StopRequested()){result.Reason="operator_stop";return result;}
+            if(!platform.ServiceAlive()||!platform.Valid(selected)){result.Reason="game_window_changed";return result;}
+            if(platform.Foreground(selected)){result.Focused=true;result.Reason=null;return result;}
+            if(!platform.InputUnchanged()){result.Reason="operator_input";return result;}
+            if(!accepted||elapsed>=500)return result;
+            platform.Wait(25);
+        }
     }
 }
 internal sealed class GameEntryFocusNative : IEntryFocusPlatform
@@ -422,11 +442,14 @@ internal sealed class GameEntryFocusNative : IEntryFocusPlatform
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window,int mode);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
-    private readonly int servicePid;private readonly DateTime serviceStarted,endAt;private readonly string watchFile,sessionId;
+    private readonly int servicePid;private readonly DateTime serviceStarted,endAt;private readonly string watchFile,sessionId;private readonly uint? inputAtStart;
     internal GameEntryFocusNative(int pid,string directory,string session,DateTime end)
     {
         servicePid=pid;sessionId=session;endAt=end;watchFile=Path.Combine(directory,"entry-watch-"+session+".json");
         using(var process=Process.GetProcessById(pid))serviceStarted=process.StartTime.ToUniversalTime();
+        var info=new FileInfo(watchFile);if(!info.Exists||info.Length>16384||(info.Attributes&FileAttributes.ReparsePoint)!=0)throw new EntryFailure("rejected","watcher_unavailable");
+        var report=new JavaScriptSerializer().DeserializeObject(File.ReadAllText(watchFile)) as Dictionary<string,object>;object initial;
+        if(report!=null&&report.TryGetValue("inputAtStart",out initial)&&initial!=null)inputAtStart=Convert.ToUInt32(initial,CultureInfo.InvariantCulture);
     }
     public bool StopRequested()
     {
@@ -454,6 +477,8 @@ internal sealed class GameEntryFocusNative : IEntryFocusPlatform
     public bool Foreground(EntryFocusWindow window){return Valid(window)&&GetForegroundWindow().ToInt64()==window.Handle;}
     public void Restore(EntryFocusWindow window){if(!Valid(window))throw new EntryFailure("rejected","game_window_changed");ShowWindow(new IntPtr(window.Handle),9);}
     public bool Focus(EntryFocusWindow window){return Valid(window)&&SetForegroundWindow(new IntPtr(window.Handle));}
+    public bool InputUnchanged(){uint? current=GameEntryInputBaseline.Read();return inputAtStart.HasValue&&current.HasValue&&inputAtStart.Value==current.Value;}
+    public void Wait(int milliseconds){Thread.Sleep(milliseconds);}
 }
 internal static class GameEntryFocus
 {
@@ -478,7 +503,7 @@ internal static class GameEntryFocus
         catch(EntryFailure failure){outcome.Reason=failure.Reason;}
         catch{outcome.Reason="focus_observation_failed";}
         if(!outputAllowed){Console.Error.WriteLine(outcome.Reason);return 1;}
-        try{File.WriteAllText(file,new JavaScriptSerializer().Serialize(new {format="farmdogs-entry-focus-v1",sessionId=session,at=DateTime.UtcNow.ToString("o"),found=outcome.Found,focused=outcome.Focused,gamePid=outcome.Window==null?(int?)null:outcome.Window.Pid,gameWindow=outcome.Window==null?(long?)null:outcome.Window.Handle,reason=outcome.Reason}),new UTF8Encoding(false));return 0;}
+          try{File.WriteAllText(file,new JavaScriptSerializer().Serialize(new {format="farmdogs-entry-focus-v1",sessionId=session,at=DateTime.UtcNow.ToString("o"),found=outcome.Found,focused=outcome.Focused,activationAccepted=outcome.ActivationAccepted,gamePid=outcome.Window==null?(int?)null:outcome.Window.Pid,gameWindow=outcome.Window==null?(long?)null:outcome.Window.Handle,reason=outcome.Reason}),new UTF8Encoding(false));return 0;}
         catch{Console.Error.WriteLine("focus_result_write_failed");return 1;}
     }
 }

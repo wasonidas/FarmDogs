@@ -138,6 +138,10 @@ internal sealed class DesktopWindow : Form
             else if(kind=="host_entry_focus_bind"&&!selfTest&&entryFocus!=null)await entryFocus.Bind(DesktopProtocol.Text(msg,"id"),DesktopProtocol.Text(msg,"sessionId"));
             else if(kind=="host_entry_focus_stop"&&!selfTest&&entryFocus!=null)await entryFocus.StopFromKey(DesktopProtocol.Text(msg,"id"));
             else if(kind=="host_entry_focus_cancel"&&!selfTest&&entryFocus!=null)entryFocus.Cancel(DesktopProtocol.Text(msg,"id"));
+            else if(kind=="host_entry_focus_job_arm"&&!selfTest&&entryFocus!=null){object raw;int server=msg.TryGetValue("server",out raw)&&raw is int?(int)raw:0;entryFocus.ArmJob(DesktopProtocol.Text(msg,"id"),DesktopProtocol.Text(msg,"jobKind"),server,DesktopProtocol.Text(msg,"joinId"));}
+            else if(kind=="host_entry_focus_job_bind"&&!selfTest&&entryFocus!=null)await entryFocus.BindJob(DesktopProtocol.Text(msg,"id"),DesktopProtocol.Text(msg,"jobKind"),DesktopProtocol.Text(msg,"ownerId"));
+            else if(kind=="host_entry_focus_job_stop"&&!selfTest&&entryFocus!=null)await entryFocus.StopJobFromKey(DesktopProtocol.Text(msg,"id"));
+            else if(kind=="host_entry_focus_job_cancel"&&!selfTest&&entryFocus!=null)entryFocus.CancelJob(DesktopProtocol.Text(msg,"id"));
             else if(kind=="host_focus_ready"&&!selfTest&&foregroundAlerts!=null)foregroundAlerts.Ready();
             else if(kind=="host_focus_preferences"&&!selfTest&&foregroundAlerts!=null){object enabled;if(msg!=null&&msg.TryGetValue("soundEnabled",out enabled)&&enabled is bool)foregroundAlerts.SetSound((bool)enabled);}
             else if(kind=="host_focus_preview"&&!selfTest&&foregroundAlerts!=null)foregroundAlerts.Preview();
@@ -170,8 +174,9 @@ internal sealed class DesktopWindow : Form
             if(environment==null)throw new InvalidOperationException("La app todavía se está abriendo.");
             if(authForm==null)
             {
-                authForm=new Form {Text="FarmDogs Launcher · Conectar cuenta Steam",ClientSize=new Size(1000,780),StartPosition=FormStartPosition.CenterParent};
+                authForm=new Form {Text="FarmDogs Launcher · Conectar cuenta Steam",ClientSize=new Size(1000,780),StartPosition=FormStartPosition.CenterParent,KeyPreview=true};
                 authView=new WebView2 {Dock=DockStyle.Fill};authForm.Controls.Add(authView);
+                authForm.KeyDown+=(s,e)=>{if(e.KeyCode==Keys.F8)QueueEntryStop();};authView.KeyDown+=(s,e)=>{if(e.KeyCode==Keys.F8)QueueEntryStop();};
                 var header=new Panel {Dock=DockStyle.Top,Height=65};
                 authLocation=new Label {Dock=DockStyle.Fill,AutoEllipsis=true,Text="Inicia Steam una vez. Puedes ocultar esta ventana y mantener la lectura mientras la app esté abierta."};
                 var hide=new Button {Text="Ocultar y seguir leyendo",Dock=DockStyle.Right,Width=190};hide.Click+=(s,e)=>authForm.Hide();
@@ -278,6 +283,9 @@ internal sealed class DesktopWindow : Form
     private void QueueEntryStop()
     {
         var owned=entryFocus;if(owned==null||IsDisposed||!IsHandleCreated)return;
-        BeginInvoke(new Action(async delegate{if(!exiting&&entryFocus==owned)await owned.StopFromKey();}));
+        // Capture the nonce at the key event, before another start can replace
+        // the visible permission while this BeginInvoke is queued.
+        var manual=owned.ManualNonce;var job=owned.JobNonce;
+        BeginInvoke(new Action(async delegate{if(!exiting&&entryFocus==owned)await DesktopEntryStopDispatch.Both(()=>manual==null?Task.FromResult(0):owned.StopFromKey(manual),()=>job==null?Task.FromResult(0):owned.StopJobFromKey(job));}));
     }
 }

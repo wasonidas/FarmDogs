@@ -65,7 +65,10 @@ function classifyGameScreen(report,{expectedServer=null}={}){
   });
   if(!duplicate)health.push(word);
  }
- const compass=allRows.filter(row=>/^\|?\s*\d{1,3}\s+[NEWS]{1,2}$/.test(row.text)&&row.bounds.x>report.width*.25&&row.bounds.x<report.width*.75&&row.bounds.y<report.height*.08);
+ const compass=allRows.filter(row=>{
+  const heading=row.text.match(/^\|?\s*([0-9]{1,3})\s*(?:N|NE|E|SE|S|SW|W|NW)$/);
+  return heading&&Number(heading[1])<=359&&row.bounds.x>report.width*.25&&row.bounds.x<report.width*.75&&row.bounds.y<report.height*.08;
+ });
  const control=allRows.filter(row=>/^CONTROL:\s*(?:LONESTAR|VALKYRA|MANTICORE)$/.test(row.text)&&row.bounds.x>report.width*.01&&row.bounds.x+row.bounds.width<report.width*.25&&row.bounds.y>report.height*.92&&row.bounds.y+row.bounds.height<report.height*.99);
  const third=compass.length===1||compass.length===0&&control.length===1;
  if(!blockers&&fists.length===1&&health.length===1&&third)return result('gameplay_hud',compass.length===1?'HUD de personaje con manos vacías, salud y brújula reconocido.':'HUD de personaje con manos vacías, salud y control de facción reconocido.');

@@ -5,7 +5,7 @@ const {createAutoSeeding}=require('./auto-seeding.cjs');
 const live=new Set(['watching','launching']);
 
 function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>{},limitEndAt=value=>value,automaticEntry=()=>false}){
- let job=load()||null,startedMono=null,budgetMs=null,closed=false;
+ let job=load()||null,startedMono=null,budgetMs=null,closed=false;if(job&&job.initialFocus===undefined)job={...job,initialFocus:'driver'};
  const observations=new Map();
  const emit=(kind,detail)=>{try{event(kind,detail);}catch{}};
  const active=()=>!!job&&live.has(job.status);
@@ -16,6 +16,8 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
   if(closed)throw Error('La vigilancia de actividad está cerrada.');
   if(active())throw Error('Ya hay una vigilancia por actividad activa.');
   if(input?.purpose!==undefined&&input.purpose!=='seeding'||input?.seeding?.purpose!==undefined&&input.seeding.purpose!=='seeding')throw Error('La vigilancia por actividad solo prepara seeding, no movimiento temporal.');
+  const initialFocus=input.initialFocus===undefined?'driver':input.initialFocus;
+  if(!['driver','desktop'].includes(initialFocus))throw Error('Modo de foco inicial no válido.');
   const {durationMinutes,minPlayers=1,maxEntryPlayers=19,serverNumbers=[1,2,3,4,5]}=input;
   if(!Number.isInteger(durationMinutes)||durationMinutes<1||durationMinutes>720)throw Error('Duración de 1 a 720 minutos.');
   if(!Number.isInteger(minPlayers)||!Number.isInteger(maxEntryPlayers)||minPlayers<1||maxEntryPlayers>99||minPlayers>maxEntryPlayers)throw Error('Rango de jugadores de 1 a 99, con mínimo menor o igual al máximo.');
@@ -26,7 +28,7 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
   const endAt=limitEndAt(raw.endAt),end=Date.parse(endAt);
   if(!Number.isFinite(at)||!Number.isFinite(mono)||!Number.isFinite(end)||end<=at||end>Date.parse(raw.endAt))throw Error('El límite de la vigilancia no es válido o ya ha pasado.');
   const seeding=Object.fromEntries(['startPlayers','intervalSeconds','holdMs'].map(key=>[key,raw[key]]));
-  const candidate={id:randomUUID(),status:'watching',reason:'Vigilando actividad pública; se necesitan dos lecturas recientes del mismo servidor.',createdAt:new Date(at).toISOString(),endAt:new Date(end).toISOString(),durationMinutes,minPlayers,maxEntryPlayers,serverNumbers:[...serverNumbers].sort((a,b)=>a-b),seeding,...(input.team?{team:input.team}:{}),automaticEntry:automaticEntry()===true,selectedServer:null,selectedJoinId:null,samples:[],finishedAt:null};
+  const candidate={id:randomUUID(),status:'watching',reason:'Vigilando actividad pública; se necesitan dos lecturas recientes del mismo servidor.',createdAt:new Date(at).toISOString(),endAt:new Date(end).toISOString(),durationMinutes,minPlayers,maxEntryPlayers,serverNumbers:[...serverNumbers].sort((a,b)=>a-b),seeding,...(input.team?{team:input.team}:{}),initialFocus,automaticEntry:automaticEntry()===true,selectedServer:null,selectedJoinId:null,samples:[],finishedAt:null};
   update(candidate);startedMono=mono;budgetMs=end-at;observations.clear();emit('activity_started',{id:job.id});return view();
  }
  function finish(status,reason){
@@ -79,7 +81,7 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
    const isCurrent=()=>!closed&&job?.id===id&&job.status==='launching'&&withinBudget();
    // Translate the remaining monotonic budget into a new UTC cap after clock rollback.
    const sessionEndAt=new Date(Math.min(Date.parse(job.endAt),now()+remainingMs)).toISOString();
-   await prepare(selected.target,{remainingMinutes:Math.max(1,Math.ceil(remainingMs/60000)),sessionEndAt,settings:{...structuredClone(job.seeding),...(job.team?{team:job.team}:{})}},isCurrent);
+   await prepare(selected.target,{remainingMinutes:Math.max(1,Math.ceil(remainingMs/60000)),sessionEndAt,initialFocus:job.initialFocus,settings:{...structuredClone(job.seeding),...(job.team?{team:job.team}:{})}},isCurrent);
    if(job?.id!==id||job.status!=='launching')return;
    if(!withinBudget()){finish('expired','Terminó el tiempo mientras se preparaba la entrada.');return;}
    finish('prepared',job.automaticEntry?`Entrada automática preparada en el #${selected.number}. Consulta su progreso; no se cambiará de servidor.`:`Sesión preparada en el #${selected.number}. Completa la entrada y el despliegue; no se cambia de servidor automáticamente.`);

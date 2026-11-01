@@ -24,7 +24,18 @@ internal static class ImageTextReaderGeometryTests
             Reject(()=>OcrGeometry.MapRectangle(0,0,10,10,0,0,0,0,0,100,100));
             Reject(()=>OcrGeometry.MapRectangle(0,0,10,10,Double.NaN,0,0,1,0,100,100));
             Reject(()=>OcrGeometry.MapRectangle(0,0,10,10,0,0,0,1,0,0,100));
-            Console.WriteLine(count+" comprobaciones de geometria OCR correctas; sin capturas, entradas ni red.");return 0;
+            foreach(var direction in new[]{"N","NE","E","SE","S","SW","W","NW"})foreach(int heading in new[]{0,1,9,64,99,100,270,359})foreach(var separator in new[]{""," "})
+            {
+                string label=heading.ToString("000")+separator+direction;
+                if(!ImageTextReader.IsCompassReading(label)||!ImageTextReader.IsCompassReading("| "+label))throw new Exception("Brújula literal rechazada: "+label);
+                count+=2;
+            }
+            foreach(var label in new[]{null,"","064","NE","-1NE","360NE","999NE","0064NE","64.0NE","064NN","064EE","064WW","064SS","064EN","064ES","064WS","064SN","064NNE","064NEWS","064N E","O64NE","064 NE EXTRA","EXTRA 064NE","1 0 064NE","064NE 075E"})
+            {
+                if(ImageTextReader.IsCompassReading(label))throw new Exception("Brújula no válida aceptada: "+label);
+                count++;
+            }
+            Console.WriteLine(count+" comprobaciones de geometria y brújula OCR correctas; sin capturas, entradas ni red.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error.Message);return 1;}
     }

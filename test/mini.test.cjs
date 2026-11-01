@@ -33,8 +33,84 @@ async function app({initial=sample(),clipboardFails=false,onPost,host=false}={})
  const context=vm.createContext({document,window:mockWindow,navigator:{clipboard:{writeText:async()=>{copies++;if(clipboardFails)throw Error('Portapapeles remoto ocupado');}}},console,Intl,Date,Number,Object,Set,fetch:async(route,options={})=>{const request={route,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,headers:options.headers};requests.push(request);if(request.method==='POST'&&onPost)current=await onPost(route,request.body,current)||current;return {ok:true,json:async()=>current};},setInterval:()=>0});
  vm.runInContext(script,context,{filename:'public/mini.js'});await new Promise(setImmediate);
  if(host)for(const handler of hostListeners)handler({data:{kind:'host_entry_focus_support',supported:true}});
- return {node,requests,hostMessages,hostEvent:message=>{for(const handler of hostListeners)handler({data:message});},hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},async disconnect(){current=null;await vm.runInContext('poll()',context);},posts:()=>requests.filter(request=>request.method==='POST')};
+ return {node,requests,hostMessages,hostEvent:message=>{for(const handler of hostListeners)handler({data:message});},hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},async submit(id,event={}){assert.equal(node('schedule').disabled,false);for(const handler of node(id).listeners.get('submit')||[])await handler({preventDefault(){},...event});},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},async disconnect(){current=null;await vm.runInContext('poll()',context);},posts:()=>requests.filter(request=>request.method==='POST')};
 }
+
+const focusJobId='55555555-5555-4555-8555-555555555555';
+function deferredHost(a){a.hostEvent({kind:'host_entry_focus_support',supported:true,deferred:true});}
+function automaticSample(){const s=sample();s.capabilities.automaticEntry=true;s.capabilities.deferredEntryFocus=true;return s;}
+
+test('programación: el gesto real arma antes de POST y liga el permiso al UUID del trabajo',async()=>{
+ let a;a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>{
+  assert.equal(route,'/api/opening/schedule');assert.equal(body.initialFocus,'desktop');
+  const armed=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm');assert.ok(armed);assert.equal(armed.jobKind,'scheduled');assert.equal(armed.server,1);assert.equal(armed.joinId,joinId);
+  return {...current,opening:{id:focusJobId,status:'scheduled',server:1}};
+ }});deferredHost(a);await a.submit('schedule-form',{isTrusted:true});
+ const bound=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_bind');assert.ok(bound);assert.equal(bound.jobKind,'scheduled');assert.equal(bound.ownerId,focusJobId);assert.equal(bound.id,a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm').id);
+ assert.equal(a.hostMessages.some(m=>m.kind==='host_entry_focus_arm'),false);
+});
+
+test('actividad: el permiso nativo se arma sin fijar un destino antes de las lecturas públicas',async()=>{
+ const a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>{assert.equal(route,'/api/activity/start');assert.equal(body.initialFocus,'desktop');return {...current,activity:{id:focusJobId,status:'watching'}};}});
+ deferredHost(a);await a.click('activity-start',{isTrusted:true});
+ const armed=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm'),bound=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_bind');assert.ok(armed);assert.ok(bound);assert.equal(armed.jobKind,'activity');assert.equal(armed.server,undefined);assert.equal(armed.joinId,undefined);assert.equal(bound.ownerId,focusJobId);
+});
+
+test('foco diferido: web, host legado y eventos sintéticos conservan la ruta driver',async()=>{
+ for(const options of [{host:false,trusted:true},{host:true,trusted:true},{host:true,deferred:true,trusted:false},{host:true,deferred:true,trusted:true,backend:false}]){
+  const initial=automaticSample();if(options.backend===false)delete initial.capabilities.deferredEntryFocus;const a=await app({initial,host:options.host,onPost:(route,body,current)=>{assert.equal(body.initialFocus,undefined);return {...current,activity:{id:focusJobId,status:'watching'}};}});
+  if(options.deferred)deferredHost(a);await a.click('activity-start',{isTrusted:options.trusted});assert.equal(a.hostMessages.some(m=>m.kind.startsWith('host_entry_focus_job_')),false);assert.doesNotMatch(a.node('notice-text').textContent,/F8/);assert.match(a.node('notice-text').textContent,/Detener búsqueda/);
+ }
+});
+
+test('F8 durante POST: conserva el bind tardío y no duplica el HTTP que realiza el host',async()=>{
+ let release;const pending=new Promise(resolve=>{release=resolve;});
+ const a=await app({initial:automaticSample(),host:true,onPost:async(route,body,current)=>{await pending;return {...current,opening:{id:focusJobId,status:'scheduled',server:1}};}});deferredHost(a);
+ const starting=a.submit('schedule-form',{isTrusted:true});await new Promise(setImmediate);
+ const armed=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm');assert.ok(armed);a.hostKey('F8');
+ assert.equal(a.hostMessages.filter(m=>m.kind==='host_entry_focus_job_stop'&&m.id===armed.id).length,1);
+ a.hostEvent({kind:'host_entry_focus_job_status',id:armed.id,jobKind:'scheduled',status:'stopped',reason:'Detenido con F8.'});release();await starting;
+ const bound=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_bind');assert.equal(bound.ownerId,focusJobId);assert.equal(bound.id,armed.id);assert.equal(a.posts().length,1);assert.match(a.node('notice-text').textContent,/detenida con F8/);
+});
+
+test('cancelación: los botones dirigen el POST al trabajo exacto y revocan sólo su nonce',async()=>{
+ for(const jobKind of ['scheduled','activity']){
+  const jobKey=jobKind==='scheduled'?'opening':'activity',startRoute=jobKind==='scheduled'?'/api/opening/schedule':'/api/activity/start',stopRoute=jobKind==='scheduled'?'/api/opening/cancel':'/api/activity/stop';
+  const a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>{
+   if(route===startRoute)return {...current,[jobKey]:{id:focusJobId,status:jobKind==='scheduled'?'scheduled':'watching',server:1}};
+   assert.equal(route,stopRoute);assert.equal(body.expectedJobId,focusJobId);assert.ok(a.hostMessages.some(m=>m.kind==='host_entry_focus_job_cancel'));return {...current,[jobKey]:{...current[jobKey],status:'cancelled'}};
+  }});deferredHost(a);if(jobKind==='scheduled')await a.submit('schedule-form',{isTrusted:true});else await a.click('activity-start',{isTrusted:true});
+  const armed=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm');await a.click(jobKind==='scheduled'?'cancel-opening':'activity-stop');
+  assert.equal(a.posts().length,2);assert.equal(a.hostMessages.filter(m=>m.kind==='host_entry_focus_job_cancel'&&m.id===armed.id).length,1);assert.equal(a.hostMessages.some(m=>m.kind==='host_entry_focus_job_stop'),false);
+ }
+});
+
+test('avisos diferidos: descarta UUID ajeno y rechazos atrasados cuando ya está navegando',async()=>{
+ const a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>({...current,activity:{id:focusJobId,status:'watching'}})});deferredHost(a);await a.click('activity-start',{isTrusted:true});const id=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm').id;
+ const status={kind:'host_entry_focus_job_status',id,jobKind:'activity',ownerId:focusJobId,status:'refused',reason:'Rechazo de Windows.'};
+ a.hostEvent({...status,ownerId:'otro-trabajo',reason:'NO MOSTRAR'});assert.doesNotMatch(a.node('notice-text').textContent,/NO MOSTRAR/);
+ a.hostEvent(status);assert.equal(a.node('notice-text').textContent,status.reason);
+ const next={...a.current,activity:{...a.current.activity,status:'open_requested'},entry:{id:'entry-uuid',status:'navigating'},entryOrigin:{kind:'activity',ownerId:focusJobId,entryId:'entry-uuid'}};a.update(next);assert.equal(a.node('notice').hidden,true);
+ a.hostEvent({...status,status:'revoked',reason:'NO RESUCITAR'});assert.equal(a.node('notice').hidden,true);assert.equal(a.posts().length,1);
+});
+
+test('avisos diferidos: un trabajo cancelado o sustituido invalida sus mensajes tardíos',async()=>{
+ for(const replacement of [{id:focusJobId,status:'cancelled'},{id:'otro-uuid',status:'watching'}]){
+  const a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>({...current,activity:{id:focusJobId,status:'watching'}})});deferredHost(a);await a.click('activity-start',{isTrusted:true});const id=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm').id;
+  const status={kind:'host_entry_focus_job_status',id,jobKind:'activity',ownerId:focusJobId,status:'refused',reason:'Aviso vigente.'};a.hostEvent(status);assert.equal(a.node('notice').hidden,false);a.update({...a.current,activity:replacement});assert.equal(a.node('notice').hidden,true);
+  a.hostEvent({...status,status:'revoked',reason:'AVISO OBSOLETO'});assert.equal(a.node('notice').hidden,true);assert.doesNotMatch(a.node('notice-text').textContent,/AVISO OBSOLETO/);assert.equal(a.posts().length,1);
+ }
+});
+
+test('avisos diferidos: el primer plano del juego sólo liquida el aviso ligado a su entrada',async()=>{
+ const a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>({...current,activity:{id:focusJobId,status:'watching'}})});deferredHost(a);await a.click('activity-start',{isTrusted:true});const id=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm').id;
+ const status={kind:'host_entry_focus_job_status',id,jobKind:'activity',ownerId:focusJobId,status:'refused',reason:'No está delante.'};a.hostEvent(status);
+ a.hostEvent({kind:'host_foreground_status',supported:true,known:true,gameForeground:true});assert.equal(a.node('notice').hidden,false);
+ a.update({...a.current,activity:{...a.current.activity,status:'open_requested'},entry:{id:'entry-uuid',status:'waiting_game'},entryOrigin:{kind:'activity',ownerId:focusJobId,entryId:'entry-uuid'}});
+ a.hostEvent({kind:'host_foreground_status',supported:true,known:false,gameForeground:true});assert.equal(a.node('notice').hidden,false);
+ a.hostEvent({kind:'host_foreground_status',supported:true,known:true,gameForeground:true});assert.equal(a.node('notice').hidden,true);a.hostEvent({...status,status:'revoked',reason:'TARDÍO'});assert.equal(a.node('notice').hidden,true);
+ a.hostKey('F8');assert.equal(a.hostMessages.filter(m=>m.kind==='host_entry_focus_job_stop').length,1);
+});
 
 test('componentes: un controlador incoherente explica el bloqueo sin anunciar una actualización ficticia',async()=>{
  const initial=sample();initial.localTools.automaticMovement=false;

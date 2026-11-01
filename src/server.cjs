@@ -58,7 +58,7 @@ const opening=createScheduledOpening({load:()=>readJson(path.join(DATA,'opening-
  openGame:async(target,job,isCurrent)=>{
   if(entryAvailable()){
    if(job.seeding&&publicViews().find(s=>s.number===target.server)?.seedingActive!==true)throw Error('El servidor indica seeding desactivado.');
-   await beginEntry(target,{...(job.seeding||{durationMinutes:Math.min(config.durationMinutes,720)}),team:job.team},!!job.seeding,null,isCurrent,{kind:'schedule',ownerId:job.id});return;
+   await beginEntry(target,{...(job.seeding||{durationMinutes:Math.min(config.durationMinutes,720)}),team:job.team,initialFocus:job.initialFocus},!!job.seeding,null,isCurrent,{kind:'scheduled',ownerId:job.id});return;
   }
   teamClicker.stop('La programación ha preparado una sesión de seeding.');
   let preparedId=null;
@@ -79,8 +79,9 @@ async function beginEntry(target,settings={},seeding=true,endAt=null,isCurrent=(
  if(!entryAvailable())throw Error('Compila o instala el controlador de entrada automática antes de usar esta función.');
  if(!isCurrent())return null;
  const choice=teamClicker.view(),defaultTeam=seeding&&choice.automaticAnyTeamAvailable===true?'any':choice.team;
+ const previousEntryId=entry.view()?.id;
  const pending=entry.start({server:target.server,joinId:target.joinId,team:settings.team||defaultTeam,seeding,durationMinutes:settings.durationMinutes??config.durationMinutes,startPlayers:settings.startPlayers??20,intervalSeconds:settings.intervalSeconds??60,holdMs:settings.holdMs??500,initialFocus:settings.initialFocus??'driver'},{endAt});
- entryOrigin={...origin,entryId:entry.view()?.id};
+ const pendingEntryId=entry.view()?.id;if(pendingEntryId&&pendingEntryId!==previousEntryId)entryOrigin={kind:origin.kind,ownerId:origin.ownerId||null,entryId:pendingEntryId};
  const prepared=await pending;
  if(!isCurrent()){if(entry.view()?.id===prepared.id)entry.stop('La programación se canceló antes de completar la entrada.');return prepared;}
  lastLaunch={...target,kind:'automatic_entry',requestedAt:isoNow(),status:'entry_requested',entryId:prepared.id};
@@ -96,7 +97,7 @@ const activity=createActivityMode({load:()=>readJson(path.join(DATA,'activity-mo
   if(!isCurrent())return;
   if(entryAvailable()){
    config={...config,selectedServer:fresh.server};atomicJson(configFile,config);
-   await beginEntry(fresh,{durationMinutes:budget.remainingMinutes,...budget.settings},true,budget.sessionEndAt,isCurrent,{kind:'activity',ownerId:activity.view()?.id});return;
+   await beginEntry(fresh,{durationMinutes:budget.remainingMinutes,...budget.settings,initialFocus:budget.initialFocus},true,budget.sessionEndAt,isCurrent,{kind:'activity',ownerId:activity.view()?.id});return;
   }
   const prepared=await automatic.start({server:fresh.server,durationMinutes:budget.remainingMinutes,...budget.settings,purpose:'seeding'},{endAt:budget.sessionEndAt});
   activityMovementId=prepared.id;
@@ -197,7 +198,7 @@ function state(){
  const seedingContinuity=Object.fromEntries(views.map(server=>[server.number,isAdmittedSeedingContinuation(server,account)]));
  const diagnostics=Object.fromEntries([1,2,3,4,5].map(selectedServer=>[selectedServer,sessionDiagnostics({config:{selectedServer},account,movement:motion,screen:autoSeeding?.screen},{now:utcNow()})]));
  const occupancy=updateBusy(),update={...updater.view(),installBlocked:occupancy.busy,installBlockedReason:occupancy.reason,shutdownRequested:updateShutdownRequested,shutdownId:updateShutdownId,shutdownRequestedAt:updateShutdownRequestedAt};
- return {appId:'wardogs-seeding-local-v1',installationRoot:ROOT,version:require('../package.json').version,capabilities:{standaloneMovement:true,automaticEntry:entryAvailable(),appUpdates:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,clanPresence:clanPresence.view(),recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools:launcher.availability(),lastLaunch,opening:opening.view(),autoSeeding,entry:entry.view(),activity:activity.view(),rewards:rewardProtection.view(),teamClicker:teamClicker.view(),diagnostics,update};
+ return {appId:'wardogs-seeding-local-v1',installationRoot:ROOT,version:require('../package.json').version,capabilities:{standaloneMovement:true,automaticEntry:entryAvailable(),deferredEntryFocus:true,appUpdates:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,clanPresence:clanPresence.view(),recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools:launcher.availability(),lastLaunch,opening:opening.view(),autoSeeding,entry:entry.view(),entryOrigin:entryOrigin&&entryOrigin.entryId===entry.view()?.id?{...entryOrigin}:null,activity:activity.view(),rewards:rewardProtection.view(),teamClicker:teamClicker.view(),diagnostics,update};
 }
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 async function body(req){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>65536)throw Error('Solicitud demasiado grande.');}return JSON.parse(text||'{}');}
@@ -264,6 +265,7 @@ const server=http.createServer(async(req,res)=>{
     send(res,200,state());return;
    }
    if(route==='/api/activity/stop'){
+    if(input.expectedJobId!==undefined&&input.expectedJobId!==activity.view()?.id)throw Error('La vigilancia cambió; no se detuvo otro trabajo.');
     const ownedEntry=entryOrigin?.kind==='activity'&&entryOrigin.entryId===entry.view()?.id&&entryOrigin.ownerId===activity.view()?.id;
     stopActivity();if(ownedEntry)entry.stop('Vigilancia detenida por el usuario.');
     if(automatic.view()?.id===activityMovementId)automatic.stop();send(res,200,state());return;
@@ -316,7 +318,11 @@ const server=http.createServer(async(req,res)=>{
     if(config.selectedServer!==input.server){config={...config,selectedServer:input.server};atomicJson(configFile,config);event('config_saved');}
     send(res,200,state());return;
    }
-   if(route==='/api/opening/cancel'){opening.cancel();send(res,200,state());return;}
+   if(route==='/api/opening/cancel'){
+    const job=opening.view();opening.cancel(input);
+    if(input.expectedJobId!==undefined&&entryOrigin?.kind==='scheduled'&&entryOrigin.ownerId===job?.id&&entryOrigin.entryId===entry.view()?.id)entry.stop('Programación detenida por el usuario.');
+    send(res,200,state());return;
+   }
    if(route==='/api/open/game'){
     if(entry.active())throw Error('Ya hay una entrada automática activa.');
     if(activity.active())throw Error('Detén la vigilancia por actividad antes de abrir manualmente.');

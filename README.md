@@ -8,7 +8,7 @@ FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automát
 
 [Descargar el portable](https://github.com/wasonidas/FarmDogs/releases/latest) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-**FarmDogs Launcher 0.5.1** corrige los componentes incoherentes tras actualizar, cierra el controlador oculto al salir y cancela la preparación pendiente con F8. La serie 0.5 añade presencia del clan en los servidores, una interfaz renovada y mejoras en cola, reconocimiento del personaje y avisos. Puedes entrar con un equipo aleatorio, elegir el color de tu clan o preparar seeding. Consulta las comprobaciones y los límites de la versión más abajo.
+**FarmDogs Launcher 0.5.2** mejora la entrada programada y por actividad, el reconocimiento del personaje y la cancelación por F8. Conserva las correcciones de componentes y cierre de la 0.5.1, la presencia del clan y el equipo aleatorio o elegido. Consulta las comprobaciones y los límites de la versión más abajo.
 
 ## Descargar y abrir
 
@@ -121,6 +121,8 @@ El equipo de Seedear se conserva para Ahora, A una hora y Al haber actividad. Ca
 
 Si se cierran nuevas admisiones, pero la cuenta y el servidor siguen confirmando tu ciclo, aparece **Continuar seeding**. La sesión puede continuar sin abrir otra vez el juego.
 
+La programación y la búsqueda iniciadas desde el launcher pueden activar el juego una sola vez al comenzar la entrada. El permiso queda ligado al trabajo y a su destino; una intervención nueva fuera del juego durante el arranque lo revoca. Si Windows no cede el foco, FarmDogs avisa para volver al juego. Para cancelar una espera programada o por actividad, usa su botón Cancelar/Detener; F8 cancela los controles cuando la entrada ya está en marcha.
+
 La duración incluye búsqueda, entrada, espera y movimiento. Las programaciones necesitan el PC despierto, FarmDogs abierto y una sesión de Steam válida recordada; al entrar, Wardogs debe estar en primer plano. Se interrumpen al reiniciar y no ejecutan una hora perdida por más de un minuto. La búsqueda por actividad no lee mensajes de Discord ni acredita las ventajas de responder a una llamada del staff.
 
 El movimiento se pausa al abrir menús, perder el foco o no reconocer el HUD; solo reanuda con una captura válida nueva. El autoclic ya iniciado se cancela si pierde el foco. F8 o Detener cancelan la cadena y sus controles, sin rearmado automático.
@@ -190,13 +192,17 @@ El servicio local escucha en `127.0.0.1:24243`. FarmDogs consulta las fuentes de
 
 ## Estado de la versión
 
-La **0.5.1 supera 483 pruebas de fuente**. El cierre normal solicita la salida del controlador oculto; F8 cancela también el inicio pendiente y no se arma movimiento si no se pudo registrar su parada. Los componentes ausentes o incoherentes se explican junto a la acción, sin anunciar una actualización inexistente. Se comprobó la asociación de un clan real mediante la cuenta Steam autorizada y su consulta de presencia. En una prueba real con el servidor #1 lleno, la app esperó aproximadamente dos minutos de cola, entró en el equipo **verde** elegido y detuvo el autoclic tras DESPLEGANDO. Ese resultado acredita **cola → equipo fijo → parada de clics**.
+La **0.5.2 supera 507 pruebas de fuente** e incorpora pruebas dirigidas de permiso de foco diferido, F8 durante solicitudes pendientes, cancelación del trabajo exacto y brújula compacta. Estas comprobaciones de código no sustituyen las pruebas reales descritas a continuación.
+
+La 0.5.2 completó una programación real desde el launcher con Steam y el juego cerrados: abrió ambos, entró al servidor #1, eligió aleatorio/verde, reconoció el HUD con brújula `064NE` y preparó seeding sin activación manual del juego. Con un jugador esperó correctamente el umbral de 20. F8 canceló esa preparación. En otra prueba, Anti-AFK independiente movió al personaje con cuatro pasos A/D de 500 ms cada 30 s y se detuvo al terminar los dos minutos; el desplazamiento se comprobó visualmente, sin vehículos ni movimiento manual. Fueron pruebas en warmup, no de permanencia en una partida activa.
+
+La **0.5.1 superó 483 pruebas de fuente**. El cierre normal solicita la salida del controlador oculto; F8 cancela también el inicio pendiente y no se arma movimiento si no se pudo registrar su parada. Los componentes ausentes o incoherentes se explican junto a la acción, sin anunciar una actualización inexistente. Se comprobó la asociación de un clan real mediante la cuenta Steam autorizada y su consulta de presencia. En una prueba real con el servidor #1 lleno, la app esperó aproximadamente dos minutos de cola, entró en el equipo **verde** elegido y detuvo el autoclic tras DESPLEGANDO. Ese resultado acredita **cola → equipo fijo → parada de clics**.
 
 La corrección para HUD luminoso se comprobó offline sobre **dos capturas de referencia**. Cuando no se lee la brújula, exige otras anclas completas del personaje antes de reconocerlo. Esa comprobación de imágenes no sustituye una prueba continua de movimiento en partida; el autoclic detenido tampoco equivale por sí solo a Entrada completada.
 
 La cadena desde Steam/juego cerrados hasta equipo aleatorio, HUD, movimiento lateral real y F8 tiene una prueba real en warmup con un jugador y ajustes de prueba de 1 jugador/5 s. Los defaults de seeding siguen siendo **20 jugadores y 60 segundos**. Siguen pendientes la permanencia prolongada en partida activa, los cambios de ronda y un premio VIP nuevo verificado.
 
-El actualizador pasó comprobaciones de paquetes y una instalación aislada de prueba con su instalador real. Falta comprobar un ciclo de actualización entre Releases en una instalación de usuario. No hay redespliegue ni reconexión automática tras desconexión. La app no garantiza evitar cualquier expulsión ni obtener VIP.
+El actualizador pasó comprobaciones de paquetes, una instalación aislada y el ciclo real **0.5.0 → 0.5.1** desde GitHub en la instalación de usuario: instaló, reabrió y conservó el perfil autorizado. También se comprobó el cierre normal de la app y del controlador oculto sin terminación forzada. No hay redespliegue ni reconexión automática tras desconexión. La app no garantiza evitar cualquier expulsión ni obtener VIP.
 
 ## Compilar desde el código
 

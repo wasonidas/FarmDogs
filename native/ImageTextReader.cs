@@ -167,8 +167,14 @@ internal static class ImageTextReader
     }
     private static bool HasHandsReading(List<ReadLine> lines)
     {return lines.Any(line=>line.pass.StartsWith("hud_hands",StringComparison.Ordinal)&&new[]{"FISTS","PUÑOS","PUNOS"}.Any(label=>String.Equals(line.text.Trim(),label,StringComparison.OrdinalIgnoreCase)));}
+    internal static bool IsCompassReading(string text)
+    {
+        if(String.IsNullOrWhiteSpace(text))return false;
+        var heading=System.Text.RegularExpressions.Regex.Match(text.Trim(),"^\\|?\\s*([0-9]{1,3})\\s*(?:N|NE|E|SE|S|SW|W|NW)$",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return heading.Success&&Int32.Parse(heading.Groups[1].Value)<=359;
+    }
     private static bool HasCompassReading(List<ReadLine> lines,uint width,uint height)
-    {return lines.Any(line=>System.Text.RegularExpressions.Regex.IsMatch(line.text.Trim(),"^\\|?\\s*[0-9]{1,3}\\s+[NEWS]{1,2}$",System.Text.RegularExpressions.RegexOptions.IgnoreCase)&&line.words.Length>0&&line.words.Min(word=>word.x)>width*.25&&line.words.Min(word=>word.x)<width*.75&&line.words.Min(word=>word.y)<height*.08);}
+    {return lines.Any(line=>IsCompassReading(line.text)&&line.words.Length>0&&line.words.Min(word=>word.x)>width*.25&&line.words.Min(word=>word.x)<width*.75&&line.words.Min(word=>word.y)<height*.08);}
     private static bool HasHealthReading(List<ReadLine> lines,uint width,uint height)
     {return lines.Any(line=>line.words.Any(word=>System.Text.RegularExpressions.Regex.IsMatch(word.text,"^[0-9]{1,3}$")&&Int32.Parse(word.text)>0&&Int32.Parse(word.text)<=100&&word.x>width*.90&&word.y>height*.90));}
     private static async Task AddRegion(OcrEngine engine,BitmapDecoder decoder,List<ReadLine> lines,List<ReadPass> passes,string name,double left,double top,double width,double height,uint scale,uint padding=0,bool contrast=false,bool nearest=false,bool grayText=false)

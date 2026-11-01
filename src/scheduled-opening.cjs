@@ -4,7 +4,7 @@ const {madridToUtc}=require('./domain.cjs');
 const {createAutoSeeding}=require('./auto-seeding.cjs');
 // A persisted intent precedes the external launch. A restart never repeats it.
 function createScheduledOpening({load,save,now,resolveTarget,openGame,event}){
- let job=load()||null;
+ let job=load()||null;if(job&&job.initialFocus===undefined)job={...job,initialFocus:'driver'};
  const update=next=>{save(next);job=next;};
  if(job&&['scheduled','launching'].includes(job.status)){
   update({...job,status:job.status==='launching'?'uncertain':'interrupted',finishedAt:new Date(now()).toISOString(),reason:'El servicio se reinició. Revisa el juego y programa otra apertura.'});
@@ -13,6 +13,8 @@ function createScheduledOpening({load,save,now,resolveTarget,openGame,event}){
  function schedule(input){
   if(job&&['scheduled','launching'].includes(job.status))throw Error('Ya hay una apertura programada. Cancélala antes de cambiarla.');
   if(input?.purpose!==undefined&&input.purpose!=='seeding'||input?.seeding?.purpose!==undefined&&input.seeding.purpose!=='seeding')throw Error('La programación solo prepara seeding, no movimiento temporal.');
+  const initialFocus=input.initialFocus===undefined?'driver':input.initialFocus;
+  if(!['driver','desktop'].includes(initialFocus))throw Error('Modo de foco inicial no válido.');
   if(typeof input.onlyEligible!=='boolean')throw Error('Indica si solo quieres abrir ante una oportunidad de seeding.');
   const scheduledAt=madridToUtc(input.madridStart),delay=Date.parse(scheduledAt)-now();
   if(delay<=0||delay>366*86400000)throw Error('Elige una hora futura dentro del próximo año.');
@@ -25,12 +27,14 @@ function createScheduledOpening({load,save,now,resolveTarget,openGame,event}){
    seeding=Object.fromEntries(['durationMinutes','startPlayers','intervalSeconds','holdMs'].map(key=>[key,validated[key]]));
   }
   const automaticEntry=target.automaticEntry===true;
-  update({id:randomUUID(),server:target.server,joinId:target.joinId,...(input.team?{team:input.team}:{}),automaticEntry,scheduledAt,onlyEligible:input.onlyEligible,seeding,status:'scheduled',createdAt:new Date(now()).toISOString(),reason:automaticEntry?'Esperando la hora para completar la entrada automática'+(seeding?' y preparar seeding.':'.'):seeding?'Esperando la hora para preparar seeding. La entrada sigue asistida.':'Esperando la hora de apertura. La entrada al servidor es asistida.',connected:false});
+  update({id:randomUUID(),server:target.server,joinId:target.joinId,...(input.team?{team:input.team}:{}),initialFocus,automaticEntry,scheduledAt,onlyEligible:input.onlyEligible,seeding,status:'scheduled',createdAt:new Date(now()).toISOString(),reason:automaticEntry?'Esperando la hora para completar la entrada automática'+(seeding?' y preparar seeding.':'.'):seeding?'Esperando la hora para preparar seeding. La entrada sigue asistida.':'Esperando la hora de apertura. La entrada al servidor es asistida.',connected:false});
   event('opening_scheduled',{server:job.server});return view();
  }
- function cancel(){
-  if(job?.status==='launching')throw Error('La apertura ya se está solicitando; comprueba el juego.');
-  if(job?.status==='scheduled'){update({...job,status:'cancelled',finishedAt:new Date(now()).toISOString(),reason:'Apertura cancelada.'});event('opening_cancelled',{server:job.server});}
+ function cancel(input={}){
+  const targeted=input.expectedJobId!==undefined;
+  if(targeted&&input.expectedJobId!==job?.id)throw Error('La programación cambió; no se canceló otro trabajo.');
+  if(job?.status==='launching'&&!targeted)throw Error('La apertura ya se está solicitando; comprueba el juego.');
+  if(job?.status==='scheduled'||targeted&&['launching','open_requested'].includes(job?.status)){update({...job,status:'cancelled',finishedAt:new Date(now()).toISOString(),reason:'Apertura cancelada.'});event('opening_cancelled',{server:job.server});}
   return view();
  }
  function interrupt(){
