@@ -21,6 +21,7 @@ function lines(screen){
   case 'hud':return[line('FISTS',1190,630,65,15),line('100',1200,680,40),line('263 W',600,20,70)];
   case 'queue':return[line('EN COLA',400,260,250),line('CANCELAR',400,420,100)];
   case 'browser_queue':{const fixture=require('./fixtures/ocr-browser-queue.json');return fixture.lines.map(row=>({...row,words:row.words.map(word=>({...word,x:word.x*1280/fixture.width,y:word.y*720/fixture.height,width:word.width*1280/fixture.width,height:word.height*720/fixture.height}))}));}
+  case 'restart':case 'afk':{const fixture=require('./fixtures/'+(screen==='restart'?'ocr-restart-modal.json':'ocr-afk-modal.json'));return fixture.lines.map(row=>({...row,words:row.words.map(word=>({...word,x:word.x*1280/fixture.width,y:word.y*720/fixture.height,width:word.width*1280/fixture.width,height:word.height*720/fixture.height}))}));}
   default:return[];
  }
 }
@@ -30,7 +31,7 @@ async function fixture(t){
  await fsp.mkdir(path.join(root,'bin'));await fsp.mkdir(dataDir);
  const helper=path.join(root,'bin','WardogsEntry.exe'),helperBytes=Buffer.from('inert native fixture');
  await fsp.writeFile(helper,helperBytes);await fsp.writeFile(path.join(root,'bin','WardogsImageText.exe'),'inert reader fixture');
- const cap={format:'farmdogs-entry-capabilities-v1',automaticEntry:true,oneShot:true,stopWatcher:true,initialFocus:true,mainDeployGate:true,splashKeyStart:true,absolutePointer:true,maxActionMilliseconds:3000,sha256:createHash('sha256').update(helperBytes).digest('hex')};
+ const cap={format:'farmdogs-entry-capabilities-v1',automaticEntry:true,oneShot:true,stopWatcher:true,initialFocus:true,mainDeployGate:true,splashKeyStart:true,absolutePointer:true,restartRecovery:true,maxActionMilliseconds:3000,sha256:createHash('sha256').update(helperBytes).digest('hex')};
  await fsp.writeFile(path.join(root,'bin','entry-capabilities.json'),JSON.stringify(cap));
  let utc=Date.parse('2026-10-31T15:00:00Z'),mono=100,screen='main',mutate=null,nativeHook=null,readerHook=null,focusHook=null,targetHook=null,fixedFrame=null,pid=123,window=456;
  const calls=[],children=[],events=[],targetReads=[];let latestRaw=null;
@@ -50,7 +51,7 @@ async function fixture(t){
    if(focusHook)report=await focusHook(report)??report;await fsp.writeFile(args[1],JSON.stringify(report));return{};
   }
   assert.equal(args[0],'--execute');
-  const command=JSON.parse(await fsp.readFile(args[1],'utf8')),key=command.kind==='replace_join_id'?'type_join_id':({splash:'splash_continue',main:'main_deploy',categories:'community',browser:'join_by_id',form:'lookup',prefilled:'lookup',confirmation:'confirm_join'}[screen]||'unknown');
+  const command=JSON.parse(await fsp.readFile(args[1],'utf8')),key=command.kind==='replace_join_id'?'type_join_id':({splash:'splash_continue',main:'main_deploy',categories:'community',browser:'join_by_id',form:'lookup',prefilled:'lookup',confirmation:'confirm_join',restart:'restart_continue'}[screen]||'unknown');
   calls.push({key,command,args,options});
   let result={format:'farmdogs-entry-result-v1',id:command.id,sessionId:command.sessionId,success:true,status:'completed',reason:null,at:new Date(utc).toISOString()};
   if(nativeHook)result=await nativeHook({command,key,result})??result;
@@ -73,6 +74,45 @@ async function fixture(t){
 }
 async function searched(f){await f.driver.start(f.input);await f.step('form');await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id','lookup']);}
 async function confirmed(f){await searched(f);await f.step('confirmation');assert.equal(f.driver.view().chainConfirmed,true);}
+function recoveryInput(f){return {...f.input,initialFocus:'none',recovery:{id:randomUUID(),rootEntryId:randomUUID(),previousEntryId:randomUUID(),seedingId:randomUUID(),gamePid:123,gameWindow:456,detectedAt:new Date(f.utc-100).toISOString(),frameId:randomUUID(),endAt:f.input.endAt}};}
+
+test('recuperación: permiso interno válido prepara plan propio y confirma reinicio una sola vez sin foco',async t=>{
+ const f=await fixture(t),input=recoveryInput(f);await f.driver.start(input);assert.equal(f.driver.recoveryAvailable(),true);
+ const plan=JSON.parse(await fsp.readFile(path.join(f.dataDir,'entry-recovery-'+f.input.id+'.json'),'utf8'));assert.equal(plan.recoveryId,input.recovery.id);assert.equal(plan.entryId,f.input.id);assert.equal(plan.root,f.root);assert.equal(plan.servicePid,process.pid);assert.equal(plan.endAt,f.input.endAt);
+ await f.step('restart');const command=f.actions()[0].command;assert.equal(command.control,'restart_continue');assert.equal(command.kind,'click');assert.equal(command.recoveryId,input.recovery.id);assert.ok(command.restartMessageBounds);assert.ok(command.restartHeaderBounds);assert.equal(f.driver.view().chainConfirmed,false);
+ await f.step('restart');assert.equal(f.driver.view().phase,'error');assert.equal(f.actions().length,1);assert.equal(f.calls.some(c=>c.focus),false);
+});
+
+test('recuperación: después de ACK exige una cadena nueva completa, sin heredar prueba ni enfocar',async t=>{
+ const f=await fixture(t);await f.driver.start(recoveryInput(f));await f.step('restart');for(const screen of ['main','categories','browser','form','form','confirmation','team','deploying','hud'])await f.step(screen);assert.equal(f.driver.view().phase,'gameplay_hud');assert.equal(f.driver.view().chainConfirmed,true);assert.deepEqual(f.actions().map(c=>c.key),['restart_continue','main_deploy','community','join_by_id','type_join_id','lookup','confirm_join']);assert.equal(f.calls.some(c=>c.focus),false);
+});
+
+test('recuperación: modal sustituido por menú, selector o HUD aborta; unknown espera sin inputs',async t=>{
+ for(const screen of ['main','splash','categories','browser','team','hud']){const f=await fixture(t);await f.driver.start(recoveryInput(f));await f.step(screen);assert.equal(f.driver.view().phase,'error',screen);assert.equal(f.actions().length,0,screen);}
+ const waiting=await fixture(t);await waiting.driver.start(recoveryInput(waiting));await waiting.step('unknown');assert.equal(waiting.driver.view().phase,'waiting_game');assert.equal(waiting.actions().length,0);await waiting.step('restart');assert.equal(waiting.actions().length,1);
+});
+
+test('recuperación: sin capacidad, permiso, PID/HWND, fuente nueva o plazo válido no confirma el modal',async t=>{
+ const old=await fixture(t);await fsp.writeFile(path.join(old.root,'bin','entry-capabilities.json'),JSON.stringify({...old.cap,restartRecovery:false}));assert.equal(old.driver.available(),true);assert.equal(old.driver.recoveryAvailable(),false);await assert.rejects(old.driver.start(recoveryInput(old)),/no permite recuperar/);
+ const missing=await fixture(t);await assert.rejects(missing.driver.start({...missing.input,initialFocus:'none'}),/foco/);
+ for(const alter of [input=>input.recovery.detectedAt='invalid',input=>input.recovery.endAt=new Date(Date.parse(input.endAt)+1000).toISOString(),input=>input.recovery.previousEntryId=input.id]){const f=await fixture(t),input=recoveryInput(f);alter(input);await assert.rejects(f.driver.start(input),/Permiso interno/);assert.equal(f.actions().length,0);}
+ for(const mode of ['window','source','afk','deadline']){const f=await fixture(t),input=recoveryInput(f);await f.driver.start(input);if(mode==='window')f.binding(123,457);if(mode==='source')f.target(target=>({...target,sourceAt:input.recovery.detectedAt}));if(mode==='deadline')f.advance(15*60000);await f.step(mode==='afk'?'afk':'restart');assert.equal(f.actions().length,0);assert.equal(f.driver.view().phase,'error');}
+});
+
+test('recuperación: resultado incierto, F8 y stop concurrente nunca repiten ni rearman el ACK',async t=>{
+ const uncertain=await fixture(t);uncertain.native(({result})=>({...result,success:false,status:'rejected',reason:'stale_restart_modal'}));await uncertain.driver.start(recoveryInput(uncertain));await uncertain.step('restart');await uncertain.step('restart');assert.equal(uncertain.driver.view().phase,'error');assert.equal(uncertain.actions().length,1);
+ const stopped=await fixture(t);await stopped.driver.start(recoveryInput(stopped));stopped.read(()=>stopped.heartbeat({status:'cancelled',reason:'operator_stop'}));await stopped.step('restart');assert.equal(stopped.driver.view().phase,'cancelled');assert.equal(stopped.actions().length,0);
+ const cancelled=await fixture(t),pending=defer();cancelled.native(async({result})=>{await pending.promise;return result;});await cancelled.driver.start(recoveryInput(cancelled));const action=cancelled.step('restart');while(!cancelled.actions().length)await new Promise(r=>setImmediate(r));const stop=cancelled.driver.stop({ownerId:cancelled.input.id});pending.resolve();await Promise.all([action,stop]);await cancelled.step('restart');assert.equal(cancelled.actions().length,1);assert.equal(cancelled.driver.view().stopped,true);assert.equal(cancelled.driver.view().chainConfirmed,false);
+});
+
+test('contrato recuperación JS→C#: valida el JSON original y el plan nativo sin ejecutar entradas',async t=>{
+ if(process.platform!=='win32'){t.skip('El contrato C# se compila en Windows.');return;}
+ const f=await fixture(t),probe=path.join(f.root,'bin','GameEntryContractProbe.exe'),compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
+ execFileSync(compiler,['/nologo','/nowarn:0649','/codepage:65001','/langversion:5','/platform:x64','/target:exe','/main:GameEntryContractProbe','/r:System.Drawing.dll','/r:System.Web.Extensions.dll','/out:'+probe,...['GameWindow.cs','EntryControlVisual.cs','GameEntry.cs','GameEntryContractProbe.cs'].map(name=>path.resolve('native',name))],{windowsHide:true,timeout:30000});
+ const input=recoveryInput(f);await f.driver.start(input);const planFile=path.join(f.dataDir,'entry-recovery-'+f.input.id+'.json'),originalPlan=await fsp.readFile(planFile);f.advance(14*60000);assert.equal(await f.driver.checkReady(f.input.id),true);assert.equal(f.actions().length,0);await f.step('restart');const action=f.actions()[0],original=await fsp.readFile(action.args[1]);assert.ok(Date.parse(action.command.issuedAt)-Date.parse(input.recovery.detectedAt)>13*60000);assert.deepEqual(await fsp.readFile(planFile),originalPlan,'La espera no debe renovar el motivo ni el presupuesto del permiso.');assert.equal(action.command.endAt,input.endAt);
+ const args=[action.args[1],f.dataDir,action.command.issuedAt],options={cwd:f.root,windowsHide:true,encoding:'utf8',timeout:30000};assert.equal(JSON.parse(execFileSync(probe,args,options)).valid,true);assert.deepEqual(await fsp.readFile(action.args[1]),original);
+ const file=path.join(f.dataDir,'entry-recovery-'+f.input.id+'.json'),plan=JSON.parse(await fsp.readFile(file,'utf8'));plan.gameWindow=457;await fsp.writeFile(file,JSON.stringify(plan));assert.throws(()=>execFileSync(probe,args,options),error=>/invalid_recovery_plan/.test(error.stdout));
+});
 
 test('entrada nativa: exige inyectar el catálogo público que confirma el destino',()=>{
  assert.throws(()=>createGameEntry({root:os.tmpdir(),dataDir:os.tmpdir()}),/lector del destino público reciente/);

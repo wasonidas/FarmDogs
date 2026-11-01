@@ -123,11 +123,13 @@ internal static class ImageTextReader
                 await AddRegion(engine,decoder,lines,passes,"hud_compass",.485,.020,.030,.027,3);
                 await AddRegion(handsEngine,decoder,lines,passes,"hud_hands",.90,.80,.095,.095,3);
                 if(!HasHandsReading(lines))await AddRegion(handsEngine,decoder,lines,passes,"hud_hands_detail",.9625,.834,.0215,.029,5,32);
+                if(!HasHandsReading(lines))await AddRegion(handsEngine,decoder,lines,passes,"hud_hands_tight",2468d/2560,1210d/1440,50d/2560,20d/1440,8,32);
                 if(!HasHandsReading(lines))await AddRegion(handsEngine,decoder,lines,passes,"hud_hands_pixels",.94,.825,.055,.045,4,0,false,true);
                 if(!HasHandsReading(lines))await AddRegion(handsEngine,decoder,lines,passes,"hud_hands_contrast",.9625,.834,.0215,.029,4,32,true);
                 await AddRegion(engine,decoder,lines,passes,"hud_health",.9525,.938,.0195,.032,3,32);
                 if(!lines.Any(line=>line.pass.StartsWith("hud_health",StringComparison.Ordinal)&&System.Text.RegularExpressions.Regex.IsMatch(line.text.Trim(),"^\\d{1,3}$")))
                     await AddRegion(engine,decoder,lines,passes,"hud_health_pixels",.9525,.938,.0195,.032,4,32,false,true);
+                if(!HasHealthReading(lines,decoder.PixelWidth,decoder.PixelHeight))await AddRegion(engine,decoder,lines,passes,"hud_health_tight",2440d/2560,1357d/1440,35d/2560,25d/1440,6,32);
                 // Sunlight can wash out the outlined compass. Keep three HUD
                 // anchors: read the complete lower-left CONTROL label only when
                 // hands and health are already visible and compass OCR failed.

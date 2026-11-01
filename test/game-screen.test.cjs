@@ -8,8 +8,48 @@ const main=require('./fixtures/ocr-main-menu.json');
 const hud=require('./fixtures/ocr-gameplay-hud.json');
 const controlHud=require('./fixtures/ocr-hud-faction-control.json');
 const compactHud=require('./fixtures/ocr-hud-compact-heading.json');
+const tightHandsHud=require('./fixtures/ocr-hud-tight-hands.json');
+const tightHealthHud=require('./fixtures/ocr-hud-tight-health.json');
 const {normalizeScreen}=require('../src/screen-reader.cjs');
 const path=require('node:path');
+
+test('pantalla: el OCR real de salud estrecha conserva valor literal, tres anclas y ambigüedad',()=>{
+ const result=classifyGameScreen(tightHealthHud);assert.equal(result.phase,'gameplay_hud');assert.equal(result.inputAllowed,false);assert.equal(result.activeMatchVerified,false);
+ const health=tightHealthHud.lines.find(row=>row.pass==='hud_health_tight');assert.equal(health.words.length,1);assert.equal(health.words[0].text,'100');
+ for(const value of [',100','700','0','101','I00','100%']){const raw=structuredClone(tightHealthHud),row=raw.lines.find(line=>line.pass==='hud_health_tight');row.text=value;row.words[0].text=value;assert.equal(classifyGameScreen(raw).phase,'unknown',value);}
+ for(const pass of ['hud_compass','hud_hands','hud_health_tight']){const raw=structuredClone(tightHealthHud);raw.lines=raw.lines.filter(row=>row.pass!==pass);assert.equal(classifyGameScreen(raw).phase,'unknown',pass);}
+ const ambiguous=structuredClone(tightHealthHud);ambiguous.lines.push({text:'50',words:[{text:'50',x:2480,y:1400,width:25,height:15}]});assert.equal(classifyGameScreen(ambiguous).phase,'unknown');
+ for(const text of ['SELECCIONAR FACCION','CARGANDO','DESPLEGANDO','ESCRIBE UN MENSAJE']){const raw=structuredClone(tightHealthHud);raw.lines.push({text,words:[{text,x:900,y:500,width:350,height:25}]});assert.equal(classifyGameScreen(raw).phase,'unknown',text);}
+});
+
+test('pantalla: salud reconocida en archivo no concede autoridad de captura ni renueva fechas',()=>{
+ assert.equal(tightHealthHud.source.kind,'file');assert.equal(tightHealthHud.source.capturedAt,null);assert.equal(tightHealthHud.source.path,undefined);assert.equal(tightHealthHud.captureFreshnessVerified,false);assert.match(tightHealthHud.source.sha256,/^[a-f0-9]{64}$/);
+ const directory=path.resolve('inert-tight-health-frame'),now=Date.parse('2026-11-01T09:01:41Z');assert.equal(normalizeScreen(tightHealthHud,now,directory).status,'unknown');
+ const forged=structuredClone(tightHealthHud);forged.captureFreshnessVerified=true;forged.source.capturedAt=new Date(now-100).toISOString();forged.source.captureFinishedAt=new Date(now-50).toISOString();assert.equal(normalizeScreen(forged,now,directory).status,'unknown');
+});
+
+test('pantalla: el fallback real de manos mantiene FISTS literal, tres anclas y bloqueos',()=>{
+ const result=classifyGameScreen(tightHandsHud);assert.equal(result.phase,'gameplay_hud');assert.equal(result.inputAllowed,false);assert.equal(result.activeMatchVerified,false);
+ assert.equal(tightHandsHud.lines.filter(row=>row.text==='FISTS').length,1);
+ for(const pass of ['hud_hands_tight','hud_compass','hud_health']){const raw=structuredClone(tightHandsHud);raw.lines=raw.lines.filter(row=>row.pass!==pass);assert.equal(classifyGameScreen(raw).phase,'unknown',pass);}
+ for(const label of ['FISTSñ','FISTSà','FISTsn','FIST$','F I S T S']){const raw=structuredClone(tightHandsHud),hands=raw.lines.find(row=>row.pass==='hud_hands_tight');hands.text=label;hands.words[0].text=label;assert.equal(classifyGameScreen(raw).phase,'unknown',label);}
+ for(const label of ['// SELECCIONAR FACCIÓN','ESCRIBE UN MENSAJE','CARGANDO','DESPLEGANDO']){const raw=structuredClone(tightHandsHud);raw.lines.push({text:label,words:[{text:label,x:900,y:500,width:350,height:25}]});assert.equal(classifyGameScreen(raw).phase,'unknown',label);}
+});
+
+test('pantalla: el OCR real del fallback desde archivo nunca acredita captura reciente',()=>{
+ assert.equal(tightHandsHud.source.kind,'file');assert.equal(tightHandsHud.source.capturedAt,null);assert.equal(tightHandsHud.source.path,undefined);assert.equal(tightHandsHud.captureFreshnessVerified,false);assert.match(tightHandsHud.source.sha256,/^[a-f0-9]{64}$/);
+ const directory=path.resolve('inert-tight-hands-frame'),now=Date.parse('2026-11-01T07:42:40Z');assert.equal(normalizeScreen(tightHandsHud,now,directory).status,'unknown');
+ const forged=structuredClone(tightHandsHud);forged.captureFreshnessVerified=true;forged.source.capturedAt=new Date(now-100).toISOString();forged.source.captureFinishedAt=new Date(now-50).toISOString();assert.equal(normalizeScreen(forged,now,directory).status,'unknown');
+});
+
+test('reinicio recuperable: sólo el modal completo observado emite restartConfirmed',()=>{
+ assert.equal(classifyGameScreen(restart).restartConfirmed,true);
+ for(const body of ['El servidor se está reiniciando.','EI servidor se está reiniciando.']){const raw=structuredClone(restart);raw.lines.find(row=>/reiniciando/.test(row.text)).text=body;assert.equal(classifyGameScreen(raw).restartConfirmed,true);}
+ for(const edit of [r=>r.lines.find(l=>/reiniciando/.test(l.text)).text='No: el servidor se está reiniciando.',r=>r.lines.find(l=>/reiniciando/.test(l.text)).text='El servidor se está reiniciando. Vuelve después.',r=>r.lines.find(l=>l.text==='MENSAJE DEL SERVIDOR').text='OTRO MENSAJE',r=>r.lines.push(structuredClone(r.lines.find(l=>l.text==='CONTINUAR'))),r=>r.lines.find(l=>/reiniciando/.test(l.text)).words.forEach(w=>w.y=1000),r=>r.lines.find(l=>l.text==='CONTINUAR').words.forEach(w=>w.x=20),r=>r.lines.push({text:'Se te ha desconectado por inactividad',words:[{text:'Se te ha desconectado por inactividad',x:650,y:760,width:500,height:20}]}),r=>r.lines.push({text:'DESPLEGANDO',words:[{text:'DESPLEGANDO',x:900,y:760,width:200,height:20}]})]){
+  const raw=structuredClone(restart);edit(raw);assert.notEqual(classifyGameScreen(raw).restartConfirmed,true);
+ }
+ assert.notEqual(classifyGameScreen(kick).restartConfirmed,true);
+});
 test('pantalla: distingue los tres diálogos observados sin autorizar entradas desde una imagen',()=>{
  for(const [report,phase] of [[lookup,'join_confirmation'],[kick,'afk_kick'],[restart,'server_restart'],[main,'main_menu']]){
   const d=classifyGameScreen(report);assert.equal(d.phase,phase);assert.equal(d.inputAllowed,false);assert.equal(d.activeMatchVerified,false);assert.ok(d.buttonCandidate.bounds.width>0);

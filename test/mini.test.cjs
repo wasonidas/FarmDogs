@@ -171,6 +171,22 @@ test('interfaz entrada: elige servidor y equipo sin portapapeles, muestra progre
  assert.equal(a.node('entry-guidance').hidden,true);
 });
 
+test('interfaz recuperación: conserva parada del hijo y bloquea otras tareas sin pedir foco ni iniciar otra entrada',async()=>{
+ const initial=automaticSample(),id='99999999-9999-4999-8999-999999999999';
+ initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',server:1,status:'error',reason:'Reinicio confirmado.'};
+ initial.entry={id,server:1,joinId,team:'green',seeding:true,status:'recovering_source',reason:'Esperando dos lecturas válidas del mismo servidor.',endAt:'2026-10-31T12:00:00Z',recovery:{id:'77777777-7777-4777-8777-777777777777'}};
+ const a=await app({initial,host:true,onPost(route,body,s){
+  assert.equal(route,'/api/entry/stop');assert.equal(body.expectedSessionId,id);
+  return {...s,entry:{...s.entry,status:'cancelled',reason:'Recuperación detenida.'}};
+ }});
+ assert.equal(a.node('entry-progress-state').textContent,'Esperando al servidor');assert.match(a.node('entry-progress-server').textContent,/Reconexión/);
+ assert.equal(a.node('entry-stage-game').dataset.state,'done');assert.equal(a.node('entry-stage-server').dataset.state,'current');
+ assert.equal(a.node('auto-status').textContent,'Recuperando seeding');assert.match(a.node('auto-detail').textContent,/dos lecturas válidas/);
+ for(const control of ['play','auto-start','activity-start','clicker-save','break-start','server-2'])assert.equal(a.node(control).disabled,true,control);
+ assert.equal(a.posts().length,0);assert.equal(a.hostMessages.some(m=>/host_entry_focus_(?:arm|job_arm|bind)/.test(m.kind)),false);
+ await a.click('entry-stop');assert.equal(a.node('entry-progress-state').textContent,'Detenido');assert.equal(a.node('play').disabled,false);assert.equal(a.posts().length,1);
+});
+
 test('interfaz entrada: seeding completo usa equipo elegido y no pide Steam ni entrada manual',async()=>{
  const initial=sample();initial.capabilities.automaticEntry=true;
  const a=await app({initial,onPost(route,body,s){assert.equal(route,'/api/seeding/start');return {...s,entry:{id:'99999999-9999-4999-8999-999999999999',server:1,team:body.team,status:'navigating',reason:'Abriendo entrada por ID.',...body,endAt:'2026-10-31T12:00:00Z'}};}});

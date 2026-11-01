@@ -4,6 +4,7 @@ const fs=require('node:fs/promises');
 const path=require('node:path');
 const os=require('node:os');
 const {createAutoSession}=require('../src/auto-session.cjs');
+const {randomUUID}=require('node:crypto');
 async function fixture(t){
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'wardogs-auto-test-'));let now=Date.parse('2026-10-30T10:00:00Z'),mono=0,starts=0;
  let inputs={movement:{available:true,armed:false,status:'stopped'},server:{number:2,trusted:true,seedingActive:true,players:19},account:{seedingFresh:true,seeding:{servidor:2,estado:'aguantando',dentro:true}}};
@@ -82,4 +83,15 @@ test('sesión temporal: pide solo movimiento, conserva propósito y agota el tie
 test('sesión temporal: reiniciar conserva una interrupción y no reactiva el controlador',async t=>{
  const f=await fixture(t);await f.manager.start({purpose:'break',durationMinutes:5,confirmedDeployed:true});const restarted=createAutoSession(f.options);t.after(()=>restarted.close());
  assert.equal(restarted.view().purpose,'break');assert.equal(restarted.view().status,'interrupted');assert.match(restarted.view().reason,/movimiento temporal/);restarted.tick();assert.equal(f.starts,1);
+});
+
+test('sesión: un reinicio positivo guarda prueba y revoca movimiento sin simular F8; Detener sigue terminal',async t=>{
+ const f=await fixture(t),entryId=randomUUID(),joinId=randomUUID();
+ const proof={entryId,server:2,joinId,gamePid:1234,gameWindow:5678,confirmedAt:new Date(f.now).toISOString()};
+ f.options.reader.view=()=>({status:'verified_capture',scene:'server_restart',restartConfirmed:true,gameForeground:true,gamePid:1234,gameWindow:5678,frameId:randomUUID(),capturedAt:new Date(f.now).toISOString()});
+ const manager=createAutoSession(f.options);t.after(()=>manager.close());await manager.start({server:2,durationMinutes:30,presenceMode:'entry'},{trustedEntry:proof});manager.tick();
+ assert.equal(manager.view().status,'error');assert.equal(manager.view().disconnect.cause,'server_restart');assert.equal(manager.view().operatorStopped,false);
+ let command=JSON.parse(await fs.readFile(path.join(f.dir,'movement-command.json'),'utf8'));assert.equal(command.kind,'stop');assert.equal(command.cancelled,false);
+ const saved=JSON.parse(await fs.readFile(path.join(f.dir,'auto-seeding-session.json'),'utf8'));assert.equal(saved.disconnect.entryId,entryId);
+ manager.stop();command=JSON.parse(await fs.readFile(path.join(f.dir,'movement-command.json'),'utf8'));assert.equal(command.cancelled,true);assert.equal(manager.view().operatorStopped,true);
 });

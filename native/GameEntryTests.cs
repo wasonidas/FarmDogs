@@ -6,6 +6,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
+using System.Diagnostics;
 
 // All executor tests use a fake platform: no windows, input, activation, or game process.
 internal static class GameEntryTests
@@ -36,14 +37,14 @@ internal static class GameEntryTests
         internal EntryWindow Window=new EntryWindow {Pid=123,Handle=456,Width=640,Height=480,OriginX=10,OriginY=20};
         internal bool Focus=true,Stop,Modifiers,Obstructed,ChangedPatch,FailClick,FailSelect,FailType,FailStart,DeployReady=true;
         internal int Clicks,Selects,Releases,Moves,Starts,StopAfterCharacters=-1;
-        internal string Characters="";internal Bitmap Frame;internal Action OnMove,OnClick,OnSelect,OnStart;internal DateTime NowValue=Now;internal long Elapsed;internal Point LastPoint;internal Rectangle LastCapture;
+        internal string Characters="";internal Bitmap Frame;internal Action OnMove,OnClick,OnSelect,OnStart;internal DateTime NowValue=Now;internal long Elapsed;internal Point LastPoint;internal Rectangle LastCapture;internal Rectangle? ChangedRegion;
         public DateTime UtcNow {get{return NowValue;}}
         public long ElapsedMilliseconds {get{return Elapsed;}}
         public bool StopRequested(){return Stop||(StopAfterCharacters>=0&&Characters.Length>=StopAfterCharacters);}
         public bool ModifiersDown(){return Modifiers;}
         public EntryWindow ForegroundGame(){return Focus?new EntryWindow {Pid=Window.Pid,Handle=Window.Handle,Width=Window.Width,Height=Window.Height,OriginX=Window.OriginX,OriginY=Window.OriginY}:null;}
         public bool PointBelongs(EntryWindow window,Point point){return !Obstructed;}
-        public Bitmap CapturePatch(EntryWindow window,Rectangle bounds){LastCapture=bounds;return ChangedPatch?new Bitmap(bounds.Width,bounds.Height):Frame.Clone(bounds,PixelFormat.Format32bppArgb);}
+        public Bitmap CapturePatch(EntryWindow window,Rectangle bounds){LastCapture=bounds;return ChangedPatch||ChangedRegion.HasValue&&ChangedRegion.Value==bounds?new Bitmap(bounds.Width,bounds.Height):Frame.Clone(bounds,PixelFormat.Format32bppArgb);}
         public bool MainDeployReady(EntryWindow window){return DeployReady;}
         public void MoveCursor(EntryWindow window,Point point){LastPoint=point;Moves++;if(OnMove!=null)OnMove();}
         public void Click(){Clicks++;if(OnClick!=null)OnClick();if(FailClick)throw new Exception("Mock input failure");}
@@ -249,10 +250,47 @@ internal static class GameEntryTests
         Reject(()=>EntryPointerGeometry.Absolute(new Point(-1921,0),desktop),"cursor_outside_desktop");
         Reject(()=>EntryPointerGeometry.Absolute(Point.Empty,new Rectangle(0,0,1,1)),"cursor_outside_desktop");
     }
+    private sealed class RecoveryFixture
+    {
+        internal string Root,Folder;internal EntryAction Command;internal EntryRecoveryPlan Plan;
+        internal string PlanFile {get{return Path.Combine(Folder,"entry-recovery-"+Session+".json");}}
+        internal string WatchFile {get{return Path.Combine(Folder,"entry-watch-"+Session+".json");}}
+        internal void Save(){File.WriteAllText(PlanFile,new JavaScriptSerializer().Serialize(Plan));}
+        internal void Watch(string status="watching",string reason=null,DateTime? at=null){File.WriteAllText(WatchFile,new JavaScriptSerializer().Serialize(new{format="farmdogs-entry-watch-v1",sessionId=Session,servicePid=Plan.servicePid,status,reason,at=(at??Now).ToString("o"),startedAt=Now.ToString("o"),endAt=Plan.endAt}));}
+        internal GameEntryRecovery Load(){return GameEntryRecovery.Load(Command,CommandPath(Folder),Now,Root);}
+    }
+    private static RecoveryFixture Recovery(string root)
+    {
+        string folder=Path.Combine(root,"recovery-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
+        var command=Command(folder);command.control="restart_continue";command.recoveryId=Guid.NewGuid().ToString();command.bounds=new EntryBounds{x=280,y=300,width=100,height=20};command.restartHeaderBounds=new EntryBounds{x=160,y=140,width=180,height=22};command.restartMessageBounds=new EntryBounds{x=160,y=220,width=200,height=20};
+        var fixture=new RecoveryFixture{Root=root,Folder=folder,Command=command,Plan=new EntryRecoveryPlan{format="farmdogs-entry-recovery-v1",recoveryId=command.recoveryId,entryId=Session,root=root,dataDirectory=folder,servicePid=Process.GetCurrentProcess().Id,rootEntryId=Id,previousEntryId=Id,seedingId=FrameId,gamePid=123,gameWindow="456",detectedAt=Now.AddSeconds(-3).ToString("o"),frameId=FrameId,endAt=command.endAt,createdAt=Now.AddSeconds(-2).ToString("o")}};fixture.Save();fixture.Watch();return fixture;
+    }
+    private static Bitmap RestartImage(EntryAction command)
+    {
+        var image=new Bitmap(640,480);using(var graphics=Graphics.FromImage(image)){graphics.Clear(Color.FromArgb(20,20,20));foreach(Rectangle box in new[]{GameEntryPolicy.Target(command),GameEntryPolicy.Region(command,command.restartHeaderBounds),GameEntryPolicy.Region(command,command.restartMessageBounds)})for(int x=box.Left+2;x<box.Right-4;x+=8)graphics.FillRectangle(Brushes.White,x,box.Top+2,3,box.Height-4);}return image;
+    }
+    private static void RestartRecovery(string root)
+    {
+        var valid=Recovery(root);GameEntryPolicy.Validate(valid.Command,CommandPath(valid.Folder),Now,root);valid.Load().Check(Now);Check(true,"Valid recovery rejected");
+        var missing=Recovery(root);File.Delete(missing.PlanFile);Reject(()=>missing.Load(),"invalid_recovery_plan");
+        foreach(Action<EntryRecoveryPlan> edit in new Action<EntryRecoveryPlan>[] {p=>p.entryId=Id,p=>p.recoveryId=Id,p=>p.root=Path.GetTempPath(),p=>p.dataDirectory=root,p=>p.gamePid++,p=>p.gameWindow="457",p=>p.previousEntryId=Session,p=>p.endAt=Now.AddMinutes(30).ToString("o"),p=>p.createdAt=Now.ToString("o"),p=>p.detectedAt=Now.AddSeconds(-10).ToString("o"),p=>p.rootEntryId="bad"}){var item=Recovery(root);edit(item.Plan);item.Save();Reject(()=>item.Load(),"invalid_recovery_plan");}
+        var wrongKind=Recovery(root);wrongKind.Command.kind="press_start";Reject(()=>GameEntryPolicy.Validate(wrongKind.Command,CommandPath(wrongKind.Folder),Now,root),"invalid_control");
+        var wrongBounds=Recovery(root);wrongBounds.Command.restartMessageBounds.y=320;Reject(()=>wrongBounds.Load(),"invalid_recovery_bounds");
+        var unscoped=Command(root);unscoped.recoveryId=Id;Reject(()=>GameEntryPolicy.Validate(unscoped,CommandPath(root),Now),"unexpected_recovery");
+        foreach(string status in new[]{"cancelled","closed"}){var item=Recovery(root);item.Watch(status,status=="cancelled"?"operator_stop":null);Reject(()=>item.Load().Check(Now),status=="cancelled"?"operator_stop":"recovery_watcher_unavailable");}
+        var stale=Recovery(root);stale.Watch(at:Now.AddSeconds(-4));Reject(()=>stale.Load().Check(Now),"recovery_watcher_unavailable");
+        foreach(string key in new[]{"sessionId","servicePid","endAt","startedAt"}){var item=Recovery(root);var json=new JavaScriptSerializer();var watch=json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(item.WatchFile));watch[key]=key=="servicePid"?(object)(item.Plan.servicePid+1):key=="sessionId"?(object)Id:key=="endAt"?(object)Now.AddHours(1).ToString("o"):Now.AddSeconds(-10).ToString("o");File.WriteAllText(item.WatchFile,json.Serialize(watch));Reject(()=>item.Load().Check(Now),"recovery_watcher_unavailable");}
+        var stopped=Recovery(root);File.WriteAllText(stopped.WatchFile+".stop","stop");Reject(()=>stopped.Load().Check(Now),"operator_stop");
+        var dead=Recovery(root);Reject(()=>dead.Load().Check(Now,(pid,started)=>false),"recovery_service_closed");
+        using(var image=RestartImage(valid.Command)){var platform=new FakePlatform{Frame=image};GameEntryRunner.Run(valid.Command,platform,image,valid.Load());Check(platform.Clicks==1&&platform.Moves==1&&platform.Releases==1,"Recovery did not send exactly one released click");var replay=new FakePlatform{Frame=image};Reject(()=>GameEntryRunner.Run(valid.Command,replay,image,valid.Load()),"replayed_recovery");Check(replay.Clicks==0&&replay.Moves==0,"A second command reused recovery authority");}
+        foreach(bool afterMove in new[]{false,true}){var item=Recovery(root);using(var image=RestartImage(item.Command)){var platform=new FakePlatform{Frame=image};if(afterMove)platform.OnMove=()=>platform.ChangedRegion=GameEntryPolicy.Region(item.Command,item.Command.restartMessageBounds);else platform.ChangedRegion=GameEntryPolicy.Region(item.Command,item.Command.restartMessageBounds);Reject(()=>GameEntryRunner.Run(item.Command,platform,image,item.Load()),"stale_restart_modal");Check(platform.Clicks==0,"A changed restart message with an unchanged CONTINUAR was clicked");}}
+        var duringMove=Recovery(root);using(var image=RestartImage(duringMove.Command)){var platform=new FakePlatform{Frame=image};platform.OnMove=()=>duringMove.Watch("cancelled","operator_stop");Reject(()=>GameEntryRunner.Run(duringMove.Command,platform,image,duringMove.Load()),"operator_stop");Check(platform.Clicks==0,"Watcher-consumed short F8 was ignored before down");}
+        var failed=Recovery(root);using(var image=RestartImage(failed.Command)){var platform=new FakePlatform{Frame=image,FailClick=true};bool threw=false;try{GameEntryRunner.Run(failed.Command,platform,image,failed.Load());}catch{threw=true;}Check(threw&&platform.Releases==1,"Recovery click failure did not release");Reject(()=>failed.Load().Claim(),"replayed_recovery");}
+    }
     public static int Main()
     {
         string root=Path.Combine(Path.GetTempPath(),"farmdogs-entry-policy-"+Guid.NewGuid().ToString("N"));
-        try{Directory.CreateDirectory(root);Policies(root);Frames(root);Executor(root);Watcher(root);FocusPolicy();ControlVisual(root);StartAndPointer(root);Console.WriteLine(checks+" game entry checks passed; fake platform only, no native input, GUI, game or clipboard.");return 0;}
+        try{Directory.CreateDirectory(root);Policies(root);Frames(root);Executor(root);Watcher(root);FocusPolicy();ControlVisual(root);StartAndPointer(root);RestartRecovery(root);Console.WriteLine(checks+" game entry checks passed; fake platform only, no native input, GUI, game or clipboard.");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{string parent=Path.GetDirectoryName(Path.GetFullPath(root));if(parent==Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)&&Path.GetFileName(root).StartsWith("farmdogs-entry-policy-"))Directory.Delete(root,true);}
     }

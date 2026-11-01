@@ -1,5 +1,6 @@
 'use strict';
 const {randomUUID}=require('node:crypto');
+const {rejectRecoveryInput}=require('./restart-recovery.cjs');
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 function validEntryBinding(proof,server){return proof&&UUID.test(proof.entryId||'')&&proof.server===server&&UUID.test(proof.joinId||'')&&Number.isInteger(proof.gamePid)&&proof.gamePid>0&&Number.isSafeInteger(proof.gameWindow)&&proof.gameWindow>0&&Number.isFinite(Date.parse(proof.confirmedAt));}
 function isAdmittedSeedingContinuation(server,account){
@@ -8,6 +9,7 @@ function isAdmittedSeedingContinuation(server,account){
  return server?.trusted===true&&Number.isInteger(server.number)&&server.number>=1&&server.number<=5&&Number.isInteger(server.players)&&server.players>=0&&server.players<=100&&server.seedingActive===false&&server.publicRule?.aguantando===true&&['lleno','no_puntua'].includes(server.publicRule.estado)&&data?.servidor===server.number&&data.estado==='aguantando'&&data.dentro===true;
 }
 function createAutoSeeding({purpose='seeding',server,durationMinutes,startPlayers=20,intervalSeconds=60,holdMs=500,presenceMode='account',confirmedServer,confirmedDeployed},now,{trustedEntry=null}={}){
+ rejectRecoveryInput(arguments[0]);
  if(!['seeding','break'].includes(purpose))throw Error('Elige una sesión de seeding o de movimiento temporal.');
  if(!Number.isInteger(durationMinutes)||durationMinutes<1||durationMinutes>720)throw Error('Duración de 1 a 720 minutos.');
  if(!Number.isInteger(intervalSeconds)||intervalSeconds<5||intervalSeconds>300||!Number.isInteger(holdMs)||holdMs<100||holdMs>2000)throw Error('Ajustes de movimiento fuera de rango.');
@@ -44,7 +46,11 @@ function advanceAutoSeeding(session,{server,account,screen,movement},now){
  if(manual&&(!Number.isInteger(session.confirmedServer)||session.confirmedServer!==session.server||!Number.isFinite(Date.parse(session.manualConfirmedAt))||session.manualConfirmedAt!==session.createdAt||Date.parse(session.manualConfirmedAt)>now))return decide('error','Falta una confirmación manual válida para este servidor.','stop');
  if(entry){
   const captureAge=now-Date.parse(screen?.capturedAt),bound=screen?.status==='verified_capture'&&screen.gameForeground===true&&screen.gamePid===session.entryProof.gamePid&&screen.gameWindow===session.entryProof.gameWindow&&Number.isFinite(captureAge)&&captureAge>=0&&captureAge<=5000;
-  if(bound&&['main_menu','join_confirmation','join_wrong_server','afk_kick','server_restart','server_message_unknown'].includes(screen.scene))return decide('error','La pantalla indica que terminó la conexión verificada. Inicia una entrada nueva.','stop');
+  if(bound&&['main_menu','join_confirmation','join_wrong_server','afk_kick','server_restart','server_message_unknown'].includes(screen.scene)){
+   const other=account?.seedingFresh===true&&Number.isInteger(account.seeding?.servidor)&&account.seeding.servidor!==session.server&&account.seeding.dentro===true;
+   if(screen.scene==='server_restart'&&screen.restartConfirmed===true&&UUID.test(screen.frameId||'')&&!other)next.disconnect={cause:'server_restart',confirmed:true,entryId:session.entryId,seedingId:session.id,server:session.server,joinId:session.entryProof.joinId,frameId:screen.frameId,capturedAt:screen.capturedAt,gamePid:screen.gamePid,gameWindow:screen.gameWindow};
+   return decide('error',next.disconnect?'Reinicio del servidor confirmado. Movimiento detenido.':'La pantalla indica que terminó la conexión verificada. Inicia una entrada nueva.','stop');
+  }
  }
  const moving=movement?.available===true&&movement.armed===true;
  if(movement?.available!==true)return decide('waiting_controller','Esperando un estado reciente del controlador.','stop');

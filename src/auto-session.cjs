@@ -36,7 +36,9 @@ function createAutoSession({root,dataDir,now,monoNow,launcher,getInputs,event,re
   const input=getInputs(current.server,current.purpose||'seeding'),screen=reader.view();const decision=advanceAutoSeeding(current,{...input,screen},now());
   const changed=current.status!==decision.session.status;current=decision.session;
   if(changed){atomicJson(file,current);event('auto_seeding_state',{purpose:current.purpose||'seeding',server:current.server,status:current.status});}
-  if(decision.command==='stop')command('stop',{},!active());
+  // A verified restart revokes the old movement lease without impersonating an
+  // operator F8. A real F8 during the recovery handoff must remain distinguishable.
+  if(decision.command==='stop')command('stop',{},!active()&&current.disconnect?.cause!=='server_restart');
   else if(['moving','starting_movement'].includes(decision.session.status))command('start',screen);
   else if(input.movement?.autoSessionId!==current.id)command('watch');
   // Loss of presence/source/controller must not blind the passive reader just

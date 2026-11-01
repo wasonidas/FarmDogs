@@ -3,7 +3,7 @@ const {classifyGameScreen}=require('./game-screen.cjs');
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const text=v=>typeof v==='string'?v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase():'';
 // Coordinates always come from this OCR frame. This function alone grants no input.
-function classifyEntryScreen(report,{server,joinId,typedJoinId=null,ownLookup=null}={}){
+function classifyEntryScreen(report,{server,joinId,typedJoinId=null,ownLookup=null,recovery=false}={}){
  const unknown={phase:'unknown',reason:'Esperando reconocer el siguiente paso de entrada.'};
  if(report?.format!=='wardogs-image-text-v1'||!Number.isInteger(report.width)||!Number.isInteger(report.height)||report.width<320||report.height<200||!Array.isArray(report.lines)||report.lines.length>1000)return unknown;
  const w=report.width,h=report.height,rows=[];
@@ -19,6 +19,7 @@ function classifyEntryScreen(report,{server,joinId,typedJoinId=null,ownLookup=nu
  const action=(phase,reason,key,row,kind='click')=>({phase,reason,action:{key,kind,bounds:row.bounds}});
  const top=b=>b.y<h*.12,left=b=>b.x<w*.42,bottom=b=>b.y>h*.55&&b.y<h*.92,center=b=>b.x>w*.2&&b.x+b.width<w*.87&&b.y>h*.15&&b.y+b.height<h*.88;
  const basic=classifyGameScreen({...report,lines:rows.map(row=>row.line)},{expectedServer:server});
+ if(recovery===true&&basic.phase==='server_restart'&&basic.restartConfirmed===true)return {phase:'restart_modal',reason:'Confirmando una sola vez el reinicio reconocido del servidor.',action:{key:'restart_continue',kind:'click',bounds:basic.restartAnchors.button,restartHeaderBounds:basic.restartAnchors.header,restartMessageBounds:basic.restartAnchors.message}};
  if(['afk_kick','server_restart','server_message_unknown','join_wrong_server'].includes(basic.phase))return {phase:'error',reason:basic.reason};
  // Only the driver can derive this context from its completed native UUID write
  // and lookup, bound to the same game window and fresh capture. A server may

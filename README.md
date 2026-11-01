@@ -8,7 +8,9 @@ FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automát
 
 [Descargar el portable](https://github.com/wasonidas/FarmDogs/releases/latest) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-**FarmDogs Launcher 0.5.2** mejora la entrada programada y por actividad, el reconocimiento del personaje y la cancelación por F8. Conserva las correcciones de componentes y cierre de la 0.5.1, la presencia del clan y el equipo aleatorio o elegido. Consulta las comprobaciones y los límites de la versión más abajo.
+**Candidato FarmDogs Launcher 0.5.3:** mejora el reconocimiento del personaje desplegado y añade una recuperación limitada tras un reinicio confirmado del servidor. La última versión estable comprobada es la **0.5.2**. La revisión R2 mantuvo una sesión 25 minutos en partida activa de Wardogs Spain, con desplazamiento A/D comprobado y sin expulsión observada; también se verificó un premio nuevo de sedeo de un día. Hubo pausas de lectura: no es una garantía de funcionamiento al 100 %. La revisión R3 añade un recorte de salud probado offline; su fiabilidad en vivo y la recuperación automática real siguen pendientes. Consulta las comprobaciones y límites más abajo.
+
+La rama `beta/0.5.3-r3` prepara **v0.5.3-beta.1** como versión de prueba. Las betas se descargan e instalan manualmente desde Releases; el actualizador de la app sólo instala versiones estables. La versión interna de este candidato es `0.5.3`.
 
 ## Descargar y abrir
 
@@ -83,7 +85,7 @@ Al comenzar intenta poner Wardogs delante **una sola vez** y continúa desde su 
 
 Mientras avanza, la app muestra un aviso grande: **FarmDogs está trabajando. No necesitas tocar nada**, junto al paso actual. Las cargas pueden tardar: espera a que reconozca la siguiente pantalla y deja Wardogs delante. **F8** o **Detener entrada** siguen disponibles durante la espera.
 
-Puedes empezar con Steam y el juego cerrados, o desde los menús de entrada de Wardogs. Si ya estás desplegado y solo quieres movimiento, usa Anti-AFK o la confirmación manual de SEEDING. Durante la cadena, una pantalla no reconocida queda en espera; un error de servidor, reinicio o regreso a un menú tras confirmar el destino detiene el intento. No hay reconexión automática. **Detener entrada** y **F8** cancelan sin volver a intentarlo solos.
+Puedes empezar con Steam y el juego cerrados, o desde los menús de entrada de Wardogs. Si ya estás desplegado y solo quieres movimiento, usa Anti-AFK o la confirmación manual de SEEDING. Durante la entrada, una pantalla no reconocida queda en espera; un error de servidor, reinicio o regreso a un menú tras confirmar el destino detiene el intento. La recuperación descrita en SEEDING se aplica sólo después de una entrada propia completada para seedear. **Detener entrada** y **F8** cancelan sin volver a intentarlo solos.
 
 Si la instalación no dispone del controlador de entrada, el botón muestra **Abrir Wardogs y copiar ID**. En ese modo completa tú la entrada y el despliegue. Si no se puede copiar el ID, sigue visible para copiarlo manualmente.
 
@@ -126,6 +128,14 @@ La programación y la búsqueda iniciadas desde el launcher pueden activar el ju
 La duración incluye búsqueda, entrada, espera y movimiento. Las programaciones necesitan el PC despierto, FarmDogs abierto y una sesión de Steam válida recordada; al entrar, Wardogs debe estar en primer plano. Se interrumpen al reiniciar y no ejecutan una hora perdida por más de un minuto. La búsqueda por actividad no lee mensajes de Discord ni acredita las ventajas de responder a una llamada del staff.
 
 El movimiento se pausa al abrir menús, perder el foco o no reconocer el HUD; solo reanuda con una captura válida nueva. El autoclic ya iniciado se cancela si pierde el foco. F8 o Detener cancelan la cadena y sus controles, sin rearmado automático.
+
+### Si el servidor se reinicia
+
+El candidato 0.5.3 puede intentar **una sola reconexión al mismo servidor** cuando un seeding iniciado por FarmDogs pierde su entrada por un reinicio confirmado. Primero detiene el movimiento y espera dos lecturas oficiales válidas, hasta 15 minutos y siempre dentro de la duración original. La tarjeta muestra **Recuperando seeding** y **Esperando al servidor**; puedes cancelarla con F8 o Detener.
+
+Sólo cierra el aviso exacto de reinicio, comprueba de nuevo el destino y repite equipo y despliegue. No vuelve a abrir Steam ni pone el juego delante por la fuerza: déjalo en primer plano para continuar. La nueva partida vuelve a esperar el umbral configurado antes de mover al personaje.
+
+No se aplica a presencia confirmada manualmente, expulsiones AFK, mensajes desconocidos, cambios de ID o tareas que hayas detenido. Cerrar y volver a abrir FarmDogs tampoco reanuda un trabajo. Esta recuperación sigue pendiente de una prueba real completa.
 
 ## EQUIPO: entrar en el color de tu clan
 
@@ -192,7 +202,7 @@ El servicio local escucha en `127.0.0.1:24243`. FarmDogs consulta las fuentes de
 
 ## Estado de la versión
 
-La **0.5.2 supera 507 pruebas de fuente** e incorpora pruebas dirigidas de permiso de foco diferido, F8 durante solicitudes pendientes, cancelación del trabajo exacto y brújula compacta. Estas comprobaciones de código no sustituyen las pruebas reales descritas a continuación.
+La **0.5.2 superó 507 pruebas de fuente** e incorporó pruebas dirigidas de permiso de foco diferido, F8 durante solicitudes pendientes, cancelación del trabajo exacto y brújula compacta. El candidato R3 superó **535 pruebas** y añade comprobaciones de reinicio exacto, parada y propiedad de la recuperación, datos desactualizados, conservación del plazo y lectura estricta de salud. Estas comprobaciones de código no sustituyen las pruebas reales descritas a continuación.
 
 La 0.5.2 completó una programación real desde el launcher con Steam y el juego cerrados: abrió ambos, entró al servidor #1, eligió aleatorio/verde, reconoció el HUD con brújula `064NE` y preparó seeding sin activación manual del juego. Con un jugador esperó correctamente el umbral de 20. F8 canceló esa preparación. En otra prueba, Anti-AFK independiente movió al personaje con cuatro pasos A/D de 500 ms cada 30 s y se detuvo al terminar los dos minutos; el desplazamiento se comprobó visualmente, sin vehículos ni movimiento manual. Fueron pruebas en warmup, no de permanencia en una partida activa.
 
@@ -202,7 +212,7 @@ La corrección para HUD luminoso se comprobó offline sobre **dos capturas de re
 
 La cadena desde Steam/juego cerrados hasta equipo aleatorio, HUD, movimiento lateral real y F8 tiene una prueba real en warmup con un jugador y ajustes de prueba de 1 jugador/5 s. Los defaults de seeding siguen siendo **20 jugadores y 60 segundos**. Siguen pendientes la permanencia prolongada en partida activa, los cambios de ronda y un premio VIP nuevo verificado.
 
-El actualizador pasó comprobaciones de paquetes, una instalación aislada y el ciclo real **0.5.0 → 0.5.1** desde GitHub en la instalación de usuario: instaló, reabrió y conservó el perfil autorizado. También se comprobó el cierre normal de la app y del controlador oculto sin terminación forzada. No hay redespliegue ni reconexión automática tras desconexión. La app no garantiza evitar cualquier expulsión ni obtener VIP.
+El actualizador pasó comprobaciones de paquetes, una instalación aislada y el ciclo real **0.5.0 → 0.5.1** desde GitHub en la instalación de usuario: instaló, reabrió y conservó el perfil autorizado. También se comprobó el cierre normal de la app y del controlador oculto sin terminación forzada. No hay redespliegue automático tras cambios de ronda; la recuperación del candidato se limita al reinicio confirmado descrito arriba. La app no garantiza evitar cualquier expulsión ni obtener VIP.
 
 ## Compilar desde el código
 

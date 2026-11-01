@@ -16,10 +16,10 @@ using System.Web.Script.Serialization;
 internal sealed class EntryBounds { public double x,y,width,height; }
 internal sealed class EntryAction
 {
-    public string format,id,sessionId,issuedAt,expiresAt,endAt,frameId,framePath,frameSha256,frameCapturedAt,kind,joinId,control;
+    public string format,id,sessionId,issuedAt,expiresAt,endAt,frameId,framePath,frameSha256,frameCapturedAt,kind,joinId,control,recoveryId;
     public double gamePid,width,height;
     public object gameWindow;
-    public EntryBounds bounds,anchorBounds;
+    public EntryBounds bounds,anchorBounds,restartHeaderBounds,restartMessageBounds;
 }
 internal sealed class EntryWindow
 {
@@ -84,14 +84,18 @@ internal static class GameEntryPolicy
         Reject(target.Top<anchor.Bottom||target.Top-anchor.Bottom>command.height*.15||target.Left<anchor.Left-command.width*.1||target.Left>anchor.Right+command.width*.1,"invalid_anchor");
         return anchor;
     }
-    internal static void Validate(EntryAction command,string commandFile,DateTime now)
+    internal static Rectangle Region(EntryAction command,EntryBounds region)
+    {
+        EntryBounds original=command.bounds;try{command.bounds=region;return Target(command);}finally{command.bounds=original;}
+    }
+    internal static void Validate(EntryAction command,string commandFile,DateTime now,string expectedRoot=null)
     {
         Reject(command==null||command.format!="farmdogs-entry-action-v1","invalid_format");
         Reject(command.id==null||!Uuid.IsMatch(command.id)||command.sessionId==null||!Uuid.IsMatch(command.sessionId)||command.frameId==null||!Uuid.IsMatch(command.frameId),"invalid_identity");
         Reject(!Integer(command.gamePid,1,Int32.MaxValue)||!Integer(command.width,320,2600)||!Integer(command.height,200,2600),"invalid_geometry");
         WindowHandle(command.gameWindow);Target(command);
         Reject(command.kind!="click"&&command.kind!="replace_join_id"&&command.kind!="press_start","invalid_action");
-        bool clickControl=command.control=="main_deploy"||command.control=="community"||command.control=="join_by_id"||command.control=="lookup"||command.control=="confirm_join";
+        bool clickControl=command.control=="main_deploy"||command.control=="community"||command.control=="join_by_id"||command.control=="lookup"||command.control=="confirm_join"||command.control=="restart_continue";
         Reject(command.control!=null&&!(clickControl&&command.kind=="click")&&!(command.control=="type_join_id"&&command.kind=="replace_join_id")&&!(command.control=="splash_continue"&&command.kind=="press_start"),"invalid_control");
         Reject(command.kind=="press_start"&&command.control!="splash_continue","invalid_control");
         if(command.kind=="press_start"){Rectangle start=Target(command);Reject(start.Left<command.width*.2||start.Right>command.width*.85||start.Top<command.height*.55||start.Bottom>command.height*.93,"invalid_control_bounds");}
@@ -107,6 +111,8 @@ internal static class GameEntryPolicy
         DateTime issued=Time(command.issuedAt),expires=Time(command.expiresAt),end=Time(command.endAt);
         Reject(issued>now||(now-issued).TotalMilliseconds>5000||expires<=now||expires<=issued||(expires-issued).TotalMilliseconds>3000||expires>end,"expired_command");
         if(command.frameCapturedAt!=null){DateTime captured=Time(command.frameCapturedAt);Reject(captured>issued||(now-captured).TotalMilliseconds>5000,"stale_frame");}
+        if(command.control=="restart_continue")GameEntryRecovery.Load(command,commandFile,now,expectedRoot);
+        else Reject(command.recoveryId!=null||command.restartHeaderBounds!=null||command.restartMessageBounds!=null,"unexpected_recovery");
     }
     internal static bool Same(EntryWindow one,EntryWindow other)
     {
@@ -127,6 +133,61 @@ internal static class GameEntryPolicy
             if((Math.Abs(current.R-refColor.R)+Math.Abs(current.G-refColor.G)+Math.Abs(current.B-refColor.B))/3.0<=55)matches++;
         }
         return anchors>=12&&matches>=anchors*.78;
+    }
+}
+internal sealed class EntryRecoveryPlan
+{
+    public string format,recoveryId,entryId,root,dataDirectory,rootEntryId,previousEntryId,seedingId,detectedAt,frameId,endAt,createdAt;
+    public int servicePid,gamePid;
+    public object gameWindow;
+}
+// A restart acknowledgement has a separate, immutable local permit. No HTTP
+// proof, generic continue action or command UUID can manufacture a second ACK.
+internal sealed class GameEntryRecovery
+{
+    private readonly EntryRecoveryPlan plan;private readonly string directory,planFile;
+    private GameEntryRecovery(EntryRecoveryPlan value,string folder,string file){plan=value;directory=folder;planFile=file;}
+    private static T Read<T>(string file)
+    {
+        var info=new FileInfo(file);GameEntryPolicy.Reject(!info.Exists||info.Length<2||info.Length>16384||(info.Attributes&FileAttributes.ReparsePoint)!=0,"invalid_recovery_plan");
+        return new JavaScriptSerializer().Deserialize<T>(File.ReadAllText(file));
+    }
+    internal static GameEntryRecovery Load(EntryAction command,string commandFile,DateTime now,string expectedRoot=null)
+    {
+        GameEntryPolicy.Reject(command.control!="restart_continue"||command.kind!="click"||command.recoveryId==null||!GameEntryPolicy.Uuid.IsMatch(command.recoveryId),"invalid_recovery_plan");
+        string directory=Path.GetDirectoryName(Path.GetFullPath(commandFile));
+        GameEntryPolicy.Reject((File.GetAttributes(directory)&FileAttributes.ReparsePoint)!=0,"invalid_recovery_plan");
+        string file=Path.Combine(directory,"entry-recovery-"+command.sessionId+".json");EntryRecoveryPlan plan;
+        try{plan=Read<EntryRecoveryPlan>(file);}catch(EntryFailure){throw;}catch{throw new EntryFailure("rejected","invalid_recovery_plan");}
+        string actualRoot=expectedRoot??Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,".."));
+        bool paths=false;try{paths=Path.IsPathRooted(plan.root)&&Path.IsPathRooted(plan.dataDirectory)&&String.Equals(Path.GetFullPath(plan.root).TrimEnd(Path.DirectorySeparatorChar),Path.GetFullPath(actualRoot).TrimEnd(Path.DirectorySeparatorChar),StringComparison.OrdinalIgnoreCase)&&String.Equals(Path.GetFullPath(plan.dataDirectory),directory,StringComparison.OrdinalIgnoreCase);}catch{}
+        GameEntryPolicy.Reject(plan==null||plan.format!="farmdogs-entry-recovery-v1"||!paths||plan.entryId!=command.sessionId||plan.recoveryId!=command.recoveryId||plan.servicePid<=0||plan.gamePid!=(int)command.gamePid||GameEntryPolicy.WindowHandle(plan.gameWindow)!=GameEntryPolicy.WindowHandle(command.gameWindow),"invalid_recovery_plan");
+        foreach(string id in new[]{plan.rootEntryId,plan.previousEntryId,plan.seedingId,plan.frameId})GameEntryPolicy.Reject(id==null||!GameEntryPolicy.Uuid.IsMatch(id),"invalid_recovery_plan");
+        GameEntryPolicy.Reject(plan.previousEntryId==plan.entryId||GameEntryPolicy.Time(plan.endAt)!=GameEntryPolicy.Time(command.endAt)||GameEntryPolicy.Time(plan.endAt)<=now,"invalid_recovery_plan");
+        DateTime created=GameEntryPolicy.Time(plan.createdAt),detected=GameEntryPolicy.Time(plan.detectedAt);
+        GameEntryPolicy.Reject(detected>created||(created-detected).TotalMilliseconds>5000||created>GameEntryPolicy.Time(command.issuedAt)||command.frameCapturedAt==null||GameEntryPolicy.Time(command.frameCapturedAt)<created,"invalid_recovery_plan");
+        Rectangle header=GameEntryPolicy.Region(command,command.restartHeaderBounds),message=GameEntryPolicy.Region(command,command.restartMessageBounds),button=GameEntryPolicy.Target(command);
+        foreach(Rectangle bounds in new[]{header,message,button})GameEntryPolicy.Reject(bounds.Left<command.width*.15||bounds.Right>command.width*.90||bounds.Top<command.height*.20||bounds.Bottom>command.height*.85,"invalid_recovery_bounds");
+        GameEntryPolicy.Reject(header.Bottom>=message.Top||message.Bottom>=button.Top,"invalid_recovery_bounds");
+        return new GameEntryRecovery(plan,directory,file);
+    }
+    internal void Check(DateTime now,Func<int,DateTime,bool> alive=null)
+    {
+        if(File.Exists(planFile+".stop")||File.Exists(Path.Combine(directory,"entry-watch-"+plan.entryId+".json.stop")))throw new EntryFailure("cancelled","operator_stop");
+        var watch=Read<Dictionary<string,object>>(Path.Combine(directory,"entry-watch-"+plan.entryId+".json"));object value;
+        Func<string,string> text=key=>watch.TryGetValue(key,out value)?value as string:null;
+        GameEntryPolicy.Reject(text("format")!="farmdogs-entry-watch-v1"||text("sessionId")!=plan.entryId||!watch.TryGetValue("servicePid",out value)||Convert.ToInt32(value,CultureInfo.InvariantCulture)!=plan.servicePid,"recovery_watcher_unavailable");
+        if(text("status")=="cancelled"&&text("reason")=="operator_stop")throw new EntryFailure("cancelled","operator_stop");
+        DateTime at=GameEntryPolicy.Time(text("at")),started=GameEntryPolicy.Time(text("startedAt"));
+        GameEntryPolicy.Reject(text("status")!="watching"||at>now||(now-at).TotalMilliseconds>3000||started<GameEntryPolicy.Time(plan.createdAt)||started>at||GameEntryPolicy.Time(text("endAt"))!=GameEntryPolicy.Time(plan.endAt)||now>=GameEntryPolicy.Time(plan.endAt),"recovery_watcher_unavailable");
+        bool serviceAlive=false;
+        try{if(alive!=null)serviceAlive=alive(plan.servicePid,started);else using(var process=Process.GetProcessById(plan.servicePid))serviceAlive=!process.HasExited&&process.StartTime.ToUniversalTime()<=started;}catch{}
+        GameEntryPolicy.Reject(!serviceAlive,"recovery_service_closed");
+    }
+    internal void Claim()
+    {
+        try{using(var file=new FileStream(planFile+".ack.claimed",FileMode.CreateNew,FileAccess.Write,FileShare.None)){byte[] bytes=Encoding.ASCII.GetBytes(plan.recoveryId);file.Write(bytes,0,bytes.Length);}}
+        catch(IOException){throw new EntryFailure("rejected","replayed_recovery");}
     }
 }
 internal static class GameEntryFrameStore
@@ -161,16 +222,22 @@ internal static class GameEntryRunner
         Point[] points={new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2),new Point(bounds.Left,bounds.Top),new Point(bounds.Right-1,bounds.Top),new Point(bounds.Left,bounds.Bottom-1),new Point(bounds.Right-1,bounds.Bottom-1)};
         foreach(Point point in points)GameEntryPolicy.Reject(!platform.PointBelongs(acquired,point),"cursor_obstructed");
     }
-    internal static void Run(EntryAction command,IEntryPlatform platform,Bitmap frame)
+    internal static void RestartPatches(EntryAction command,IEntryPlatform platform,EntryWindow window,Bitmap frame)
+    {
+        foreach(Rectangle bounds in new[]{GameEntryPolicy.Region(command,command.restartHeaderBounds),GameEntryPolicy.Region(command,command.restartMessageBounds),GameEntryPolicy.Target(command)})
+            using(var expected=frame.Clone(bounds,PixelFormat.Format32bppArgb))using(var actual=platform.CapturePatch(window,bounds))GameEntryPolicy.Reject(!GameEntryPolicy.PatchMatches(expected,actual),"stale_restart_modal");
+    }
+    internal static void Run(EntryAction command,IEntryPlatform platform,Bitmap frame,GameEntryRecovery recovery=null)
     {
         if(platform.StopRequested())throw new EntryFailure("cancelled","operator_stop");
         Rectangle bounds=GameEntryPolicy.Target(command);var window=platform.ForegroundGame();
         GameEntryPolicy.Reject(window==null,"game_not_foreground");
         GameEntryPolicy.Reject(window.Pid!=(int)command.gamePid||window.Handle!=GameEntryPolicy.WindowHandle(command.gameWindow)||window.Width!=(int)command.width||window.Height!=(int)command.height,"game_window_changed");
-        bool attempted=false;
+        bool attempted=false;GameEntryPolicy.Reject(command.control=="restart_continue"&&recovery==null,"invalid_recovery_plan");
         try
         {
             Guard(command,platform,window,bounds);
+            if(recovery!=null){recovery.Check(platform.UtcNow);RestartPatches(command,platform,window,frame);recovery.Claim();}
             if(command.control=="main_deploy")GameEntryPolicy.Reject(!EntryControlVisual.MainDeploy(frame).enabled,"main_deploy_disabled");
             Rectangle anchor=GameEntryPolicy.Anchor(command);
             using(var expected=frame.Clone(anchor,PixelFormat.Format32bppArgb))using(var actual=platform.CapturePatch(window,anchor))
@@ -183,6 +250,7 @@ internal static class GameEntryRunner
             platform.MoveCursor(window,new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2));
             Guard(command,platform,window,bounds);
             if(command.control=="main_deploy")GameEntryPolicy.Reject(!platform.MainDeployReady(window),"main_deploy_disabled");
+            if(recovery!=null){recovery.Check(platform.UtcNow);RestartPatches(command,platform,window,frame);recovery.Check(platform.UtcNow);}
             Guard(command,platform,window,bounds);attempted=true;platform.Click();
             if(command.kind=="replace_join_id")
             {
@@ -524,7 +592,7 @@ internal static class GameEntryProgram
     public static int Main(string[] args)
     {
         var actionClock=Stopwatch.StartNew();
-        if(args.Length==1&&args[0]=="--probe"){Console.WriteLine(Json.Serialize(new {format="farmdogs-entry-capabilities-v1",automaticEntry=true,oneShot=true,stopKey="F8",stopWatcher=true,initialFocus=true,mainDeployGate=true,splashKeyStart=true,absolutePointer=true,maxActionMilliseconds=3000}));return 0;}
+        if(args.Length==1&&args[0]=="--probe"){Console.WriteLine(Json.Serialize(new {format="farmdogs-entry-capabilities-v1",automaticEntry=true,oneShot=true,stopKey="F8",stopWatcher=true,initialFocus=true,mainDeployGate=true,splashKeyStart=true,absolutePointer=true,restartRecovery=true,maxActionMilliseconds=3000}));return 0;}
         if(args.Length==4&&args[0]=="--focus-game")return GameEntryFocus.Run(args);
         if(args.Length==4&&args[0]=="--watch")return GameEntryWatch.Run(args);
         if(args.Length!=3||args[0]!="--execute"){Console.Error.WriteLine("Usage: WardogsEntry.exe --execute command.json result.json");return 1;}
@@ -546,7 +614,8 @@ internal static class GameEntryProgram
                     {
                         try{using(var used=new FileStream(commandPath+".claimed",FileMode.CreateNew,FileAccess.Write,FileShare.None)){byte[] marker=Encoding.ASCII.GetBytes(DateTime.UtcNow.ToString("o"));used.Write(marker,0,marker.Length);}}
                         catch(IOException){throw new EntryFailure("rejected","replayed_command");}
-                        var platform=new GameEntryNative(actionClock);GameEntryRunner.Run(command,platform,frame);
+                        var recovery=command.control=="restart_continue"?GameEntryRecovery.Load(command,commandPath,DateTime.UtcNow):null;
+                        var platform=new GameEntryNative(actionClock);GameEntryRunner.Run(command,platform,frame,recovery);
                     }
                     success=true;status="completed";reason=null;
                 }

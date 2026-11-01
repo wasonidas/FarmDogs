@@ -20,6 +20,7 @@ const {createEntryFlow}=require('./entry-flow.cjs');
 const {createAppUpdate}=require('./app-update.cjs');
 const {currentClanAssociation}=require('./clan-association.cjs');
 const {createClanPresence}=require('./clan-presence.cjs');
+const {rejectRecoveryInput}=require('./restart-recovery.cjs');
 function createObserver(options={}){
 const ROOT=path.resolve(__dirname,'..');
 const DATA=path.resolve(options.dataDir||process.env.WARDOGS_DATA_DIR||path.join(ROOT,'data'));
@@ -46,7 +47,8 @@ function persist(){atomicJson(runtimeFile,runtime);}
 const clanPresence=createClanPresence({now:utcNow,fetchImpl:fetcher,event,getAssociation:()=>accountView().clanAssociation||{status:'disconnected'},getServers:publicViews});
 const rewardProtection=createRewardProtection({load:()=>readJson(path.join(DATA,'reward-protection.json')),save:value=>atomicJson(path.join(DATA,'reward-protection.json'),value),now:utcNow,monoNow,event});
 const teamClicker=createTeamClicker({root:ROOT,dataDir:DATA,now:utcNow,monoNow,event,...options.teamClickerOptions});
-const entryDriver=options.entryDriver||(launcher.availability().automaticEntry===true?require('./game-entry.cjs').createGameEntry({root:ROOT,dataDir:DATA,now:utcNow,monoNow,event,getTarget:(number,id)=>connectionTarget(publicViews(),number,id)}):{available:()=>false,view:()=>null,blocking:()=>false,stop:()=>{}});
+ function entryTarget(number,id){const views=publicViews(),target=connectionTarget(views,number,id),row=views.find(server=>server.number===number);return {...target,trusted:row.trusted===true,online:row.online===true,stale:row.stale===true};}
+ const entryDriver=options.entryDriver||(launcher.availability().automaticEntry===true?require('./game-entry.cjs').createGameEntry({root:ROOT,dataDir:DATA,now:utcNow,monoNow,event,getTarget:entryTarget}):{available:()=>false,view:()=>null,blocking:()=>false,stop:()=>{}});
 const entryAvailable=()=>entryDriver.available()&&(!!options.entryDriver||launcher.availability().automaticEntry===true);
 const opening=createScheduledOpening({load:()=>readJson(path.join(DATA,'opening-plan.json')),save:job=>atomicJson(path.join(DATA,'opening-plan.json'),job),now:utcNow,event,
  resolveTarget:(number,id)=>{
@@ -74,7 +76,7 @@ const opening=createScheduledOpening({load:()=>readJson(path.join(DATA,'opening-
  }
 });
 const automatic=createAutoSession({root:ROOT,dataDir:DATA,now:utcNow,monoNow,launcher,event,getInputs:(number,purpose)=>purpose==='break'?{movement:movement()}:{server:publicViews().find(s=>s.number===number),account:accountView(),movement:movement()},...(options.screenReader?{reader:options.screenReader}:{})});
-const entry=createEntryFlow({now:utcNow,monoNow,driver:entryDriver,launcher,teamClicker,automatic,event,getTarget:(number,id)=>connectionTarget(publicViews(),number,id),getInputs:()=>({movement:movement()})});
+ const entry=createEntryFlow({now:utcNow,monoNow,driver:entryDriver,launcher,teamClicker,automatic,event,getTarget:entryTarget,getInputs:session=>({movement:movement(),server:publicViews().find(s=>s.number===session?.server),account:accountView()}),onRecovery:({previousEntryId,entryId})=>{if(entryOrigin?.entryId===previousEntryId)entryOrigin={...entryOrigin,entryId};}});
 async function beginEntry(target,settings={},seeding=true,endAt=null,isCurrent=()=>true,origin={kind:'manual'}){
  if(!entryAvailable())throw Error('Compila o instala el controlador de entrada automática antes de usar esta función.');
  if(!isCurrent())return null;
@@ -203,6 +205,7 @@ function state(){
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 async function body(req){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>65536)throw Error('Solicitud demasiado grande.');}return JSON.parse(text||'{}');}
 function requireSeedingPurpose(input){
+ rejectRecoveryInput(input);
  if(input?.purpose!==undefined&&input.purpose!=='seeding')throw Error('Usa Movimiento temporal para una ausencia; esta función prepara seeding.');
  if(input?.presenceMode==='entry'||input?.trustedEntry!==undefined||input?.entryProof!==undefined||input?.entryId!==undefined)throw Error('La comprobación de entrada solo puede proceder del flujo automático, no de esta solicitud.');
 }

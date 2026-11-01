@@ -16,7 +16,7 @@ if(cap.sha256!==hash(path.join(root,'bin/WardogsMovement.exe')))throw Error('El 
 const clickCap=JSON.parse(fs.readFileSync(path.join(root,'bin/team-clicker-capabilities.json')));
 if(clickCap.format!=='wardogs-team-clicker-capabilities-v1'||clickCap.teamClicker!==true||clickCap.automaticTeamRecognition!==true||clickCap.automaticTeamSelection!==true||clickCap.automaticAnyTeam!==true||clickCap.messageHotkeys!==true||clickCap.persistentTeamAttempt!==true||clickCap.positiveEntryConfirmation!==true||clickCap.sha256!==hash(path.join(root,'bin/WardogsTeamClicker.exe')))throw Error('El autoclic y sus capacidades no coinciden.');
 const entryCap=JSON.parse(fs.readFileSync(path.join(root,'bin/entry-capabilities.json')));
-if(entryCap.automaticEntry!==true||entryCap.stopWatcher!==true||entryCap.mainDeployGate!==true||entryCap.splashKeyStart!==true||entryCap.absolutePointer!==true||entryCap.sha256!==hash(path.join(root,'bin/WardogsEntry.exe')))throw Error('La entrada automática y sus capacidades no coinciden.');
+if(entryCap.automaticEntry!==true||entryCap.stopWatcher!==true||entryCap.mainDeployGate!==true||entryCap.splashKeyStart!==true||entryCap.absolutePointer!==true||entryCap.restartRecovery!==true||entryCap.sha256!==hash(path.join(root,'bin/WardogsEntry.exe')))throw Error('La entrada automática y sus capacidades no coinciden.');
 const stamp=new Date().toISOString().replace(/[^0-9]/g,'');
 const build=path.join(root,'dist','portable-'+stamp),folder=path.join(build,'FarmDogs');
 fs.mkdirSync(folder,{recursive:true});
@@ -33,7 +33,7 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'Conserva las carpetas bin, src y public junto al ejecutable. Node está incluido.',
  'Usa WebView2 de Windows; Steam y Wardogs deben estar instalados.',
  '',
- 'Cuatro secciones: Entrar, Seedear, Elegir equipo y Mi VIP.',
+ 'Cuatro secciones: JUGAR, SEEDING, EQUIPO y MI VIP.',
  'Anti-AFK tiene un acceso directo visible en todas las secciones para una ausencia breve dentro de cualquier partida de Wardogs.',
  'Elige 5, 15 o 30 minutos o una duración propia; puedes ajustar tiempo entre pasos y duración de cada paso.',
  'Confirma que estás desplegado y con las manos vacías, pulsa Activar anti-AFK y vuelve al juego. No requiere Steam en la app, servidor elegido ni población.',
@@ -53,12 +53,15 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'Una vez clicando, cambiar el foco o la resolución detiene definitivamente ese intento. Para volver a probar, pulsa Esperar equipo.',
  'Después de DESPLEGANDO, el autoclic se desactiva y puedes preparar seeding.',
  'El usuario ha confirmado que el selector automático funciona en el juego. El ensayo anterior instrumentado por F6 sigue conservado como historial.',
- 'Selecciona servidor y duración, pulsa Iniciar seeding y completa la entrada y el despliegue en Wardogs.',
+ 'En Seeding, selecciona servidor, equipo y duración y pulsa Entrar y seedear. FarmDogs completa la entrada y el despliegue.',
  'Si falla el portapapeles, la apertura sigue y el ID permanece visible para copiarlo manualmente.',
  'Continuar seeding conserva un ciclo ya confirmado por tu cuenta aunque se cierren nuevas admisiones; no vuelve a abrir el juego.',
  'El movimiento espera por defecto a 20 jugadores, presencia de tu cuenta y HUD con manos vacías en primer plano.',
  'Si ya estás desplegado, marca la casilla de confirmación manual para usar movimiento sin conectar Steam a la app.',
  'F8 o Detener sesión cancelan el automatismo. La entrada, equipo y despliegue se verifican antes de preparar el movimiento.',
+ 'Si un reinicio confirmado interrumpe un seeding con entrada propia verificada, puede recuperar una sola vez el mismo servidor y equipo sin ampliar el plazo.',
+ 'Espera datos válidos del servidor y no vuelve a abrir Steam ni recupera el foco. F8 o Detener cancelan también esa espera.',
+ 'No recupera expulsiones AFK, mensajes desconocidos, cambios de ID ni sesiones con presencia confirmada sólo de forma manual.',
  'También puedes programar cuándo se prepara la sesión; el PC y el servicio deben seguir encendidos.',
  'El modo por actividad vigila los cinco servidores, elige un destino y prepara una sola sesión.',
  'Cobro antes de caducar puede proteger los retos semanales; actívalo con Steam conectado en la app.',
@@ -66,7 +69,9 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'No cobra el premio actual al activar la protección. Los resultados inciertos requieren revisión.',
  '',
  'La recepción automática de avisos de Discord todavía NO está conectada.',
- 'No se ha validado el ciclo automático completo en partida activa de Spain ni un VIP nuevo.',
+ 'R2 mantuvo 25 minutos de partida activa con A/D real y sin expulsión observada; se confirmó un día nuevo de VIP por sedeo. Hubo pausas OCR.',
+ 'R3 añade una corrección de salud OCR probada offline. Su fiabilidad en vivo, la entrada por actividad y la recuperación real siguen pendientes.',
+ 'El ciclo premiado se reanudó manualmente tras actualizar la app; no acredita un trayecto completo sin intervención desde Steam cerrado.',
  'Reglas de premios: https://wardogsspain.com/vip',
  '',
  'Los datos que cree la app se guardan en data junto a ella. Este paquete no contiene data, cuentas, cookies, historial ni capturas.',

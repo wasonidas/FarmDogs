@@ -1,6 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {createAutoSeeding,advanceAutoSeeding,isAdmittedSeedingContinuation}=require('../src/auto-seeding.cjs');
+const {randomUUID}=require('node:crypto');
 const now=Date.parse('2026-10-30T10:00:00Z');
 const session=()=>createAutoSeeding({server:2,durationMinutes:60},now);
 const inputs=()=>({server:{number:2,trusted:true,players:20,seedingActive:true},account:{seedingFresh:true,seeding:{servidor:2,estado:'aguantando',dentro:true}},screen:{status:'verified_capture',scene:'gameplay_hud',capturedAt:new Date(now).toISOString(),gameForeground:true,gamePid:6612},movement:{available:true,status:'stopped',armed:false}});
@@ -140,4 +141,14 @@ test('movimiento temporal: F8, fin y otro controlador no permiten continuar',()=
  let r=advanceAutoSeeding(s,i,now);assert.equal(r.session.status,'cancelled');assert.equal(r.command,'stop');delete i.movement.autoOperatorStopped;assert.notEqual(advanceAutoSeeding(r.session,i,now).command,'start');
  r=advanceAutoSeeding(breakSession(),i,now+5*60000);assert.equal(r.session.status,'expired');assert.equal(r.command,'stop');assert.match(r.session.reason,/movimiento temporal/);
  i.movement={available:true,armed:true,status:'running',autoSessionId:'other'};r=advanceAutoSeeding(breakSession(),i,now);assert.equal(r.session.status,'error');assert.equal(r.command,'stop');
+});
+
+test('entrada propia: sólo el reinicio estricto fresco deja una evidencia de recuperación; nunca una expulsión AFK',()=>{
+ const proof={entryId:randomUUID(),server:2,joinId:randomUUID(),gamePid:1234,gameWindow:5678,confirmedAt:new Date(now).toISOString()};
+ const create=()=>createAutoSeeding({server:2,durationMinutes:30,presenceMode:'entry'},now,{trustedEntry:proof});
+ const input=()=>({...inputs(),screen:{status:'verified_capture',scene:'server_restart',restartConfirmed:true,gameForeground:true,gamePid:1234,gameWindow:5678,frameId:randomUUID(),capturedAt:new Date(now).toISOString()}});
+ const s=create(),i=input(),r=advanceAutoSeeding(s,i,now);assert.equal(r.session.status,'error');assert.equal(r.command,'stop');assert.deepEqual(r.session.disconnect,{cause:'server_restart',confirmed:true,entryId:proof.entryId,seedingId:s.id,server:2,joinId:proof.joinId,gamePid:1234,gameWindow:5678,frameId:i.screen.frameId,capturedAt:i.screen.capturedAt});assert.equal(r.session.operatorStopped,false);
+ for(const alter of [i=>i.screen.restartConfirmed=false,i=>delete i.screen.restartConfirmed,i=>i.screen.scene='afk_kick',i=>i.screen.scene='server_message_unknown',i=>i.screen.frameId='old',i=>i.screen.gameWindow=999,i=>i.screen.capturedAt=new Date(now-5001).toISOString(),i=>i.account.seeding.servidor=1]){const i=input();alter(i);assert.equal(advanceAutoSeeding(create(),i,now).session.disconnect,undefined);}
+ assert.equal(advanceAutoSeeding(manualSession(),input(),now).session.disconnect,undefined);
+ const stopped=create();stopped.operatorStopped=true;assert.equal(advanceAutoSeeding(stopped,input(),now).session.disconnect,undefined);
 });

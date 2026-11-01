@@ -8,10 +8,12 @@ const common=['/nologo','/codepage:65001','/langversion:5','/platform:x64','/r:S
 const options={cwd:root,stdio:'inherit',windowsHide:true,timeout:30000};
 const source=name=>path.join(root,'native',name);
 if(!process.argv.includes('--test-only')){
- fs.mkdirSync(bin,{recursive:true});
- const staging=process.argv.includes('--staging'),output=path.join(bin,staging?'WardogsEntry.next.exe':'WardogsEntry.exe');
+ const outputIndex=process.argv.indexOf('--output'),customOutput=outputIndex>=0?process.argv[outputIndex+1]:null;
+ if(outputIndex>=0&&(!customOutput||customOutput.startsWith('--')))throw Error('Falta la ruta de salida de staging.');
+ const staging=process.argv.includes('--staging')||!!customOutput,output=customOutput?path.resolve(customOutput):path.join(bin,staging?'WardogsEntry.next.exe':'WardogsEntry.exe');
+ fs.mkdirSync(path.dirname(output),{recursive:true});
  execFileSync(compiler,[...common,'/target:exe','/out:'+output,source('GameWindow.cs'),source('EntryControlVisual.cs'),source('GameEntry.cs')],options);
- if(!staging)fs.writeFileSync(path.join(bin,'entry-capabilities.json'),JSON.stringify({format:'farmdogs-entry-capabilities-v1',automaticEntry:true,oneShot:true,stopKey:'F8',stopWatcher:true,initialFocus:true,mainDeployGate:true,splashKeyStart:true,absolutePointer:true,maxActionMilliseconds:3000,sha256:crypto.createHash('sha256').update(fs.readFileSync(output)).digest('hex')}));
+ if(!staging||customOutput)fs.writeFileSync(path.join(path.dirname(output),'entry-capabilities.json'),JSON.stringify({format:'farmdogs-entry-capabilities-v1',automaticEntry:true,oneShot:true,stopKey:'F8',stopWatcher:true,initialFocus:true,mainDeployGate:true,splashKeyStart:true,absolutePointer:true,restartRecovery:true,maxActionMilliseconds:3000,sha256:crypto.createHash('sha256').update(fs.readFileSync(output)).digest('hex')}));
  console.log('Built: '+output);
 }
 const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'farmdogs-entry-tests-'));

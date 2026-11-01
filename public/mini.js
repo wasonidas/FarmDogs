@@ -110,7 +110,7 @@ function renderClicker(c){if(c&&!clickerSettingsInitialized){setClickerDraft({te
 }
 function target(){return state?.servers.find(s=>s.number===selected&&s.trusted&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(s.joinId||''));}
 function renderEntry(s){
- const e=s?.entry,entering=entryRunning(e),automatic=s?.capabilities?.automaticEntry===true;
+ const e=s?.entry,entering=entryRunning(e),recovering=entering&&!!e.recovery,automatic=s?.capabilities?.automaticEntry===true;
  if(!entryTeamInitialized&&s?.teamClicker){$('entry-team').value=Object.hasOwn(teamNames,s.teamClicker.team)?s.teamClicker.team:'blue';entryTeamInitialized=true;}
  if(!seedTeamInitialized){$('seed-team').value='any';seedTeamInitialized=true;}
  const queuedTeam=entering&&e.seeding?e.team:['scheduled','launching'].includes(s?.opening?.status)?s.opening.team:activityRunning(s?.activity)?s.activity.team:null;
@@ -126,10 +126,10 @@ function renderEntry(s){
  $('entry-progress').dataset.active=String(entering);
  $('entry-guidance').hidden=!entering;
  if(!e)return;
- const labels={opening:'Abriendo juego',waiting_game:'Esperando Wardogs',navigating:'Buscando servidor',joining:'Entrando al servidor',choosing_team:'Eligiendo equipo',deploying:'Esperando despliegue',starting_seeding:'Preparando seeding',completed:'Entrada completada',cancelled:'Detenido',expired:'Tiempo terminado',interrupted:'Interrumpido',error:'Revisar entrada'};
- $('entry-progress-server').textContent=`· #${e.server}`;$('entry-progress-state').textContent=labels[e.status]||e.status;
+ const labels={opening:'Abriendo juego',recovering_source:'Esperando al servidor',waiting_game:'Esperando Wardogs',navigating:'Buscando servidor',joining:'Entrando al servidor',choosing_team:'Eligiendo equipo',deploying:'Esperando despliegue',starting_seeding:'Preparando seeding',completed:'Entrada completada',cancelled:'Detenido',expired:'Tiempo terminado',interrupted:'Interrumpido',error:'Revisar entrada'};
+ $('entry-progress-server').textContent=`· #${e.server}${recovering?' · Reconexión':''}`;$('entry-progress-state').textContent=labels[e.status]||e.status;
  $('entry-progress-detail').textContent=`${e.reason}${entering?' · fin '+at(e.endAt):''}`;
- const stage={opening:0,waiting_game:0,navigating:1,joining:1,choosing_team:2,deploying:3,starting_seeding:3,completed:4}[e.status];
+ const stage={opening:0,recovering_source:1,waiting_game:0,navigating:1,joining:1,choosing_team:2,deploying:3,starting_seeding:3,completed:4}[e.status];
  for(const [index,key]of ['game','server','team','hud'].entries())$('entry-stage-'+key).dataset.state=stage===undefined?'idle':index<stage?'done':index===stage?'current':'idle';
  $('entry-stop').disabled=busy||!entering;
 }
@@ -233,7 +233,7 @@ function render(s){
  const d=s.diagnostics?.[selected];$('diagnostic-title').textContent=d?.title||'Estado de sesión sin comprobar';$('diagnostic-detail').textContent=(d?.detail||'Esperando una lectura del servicio.')+(d?.screenEvidence?` Captura del juego: ${when(d.screenEvidence.capturedAt)}.`:'');$('diagnostic-panel').dataset.severity=d?.severity||'info';$('diagnostic-select').hidden=!['prepare_entry','review_server'].includes(d?.action?.kind);$('diagnostic-select').textContent=`Seleccionar #${d?.action?.server||selected}`;
  if(d?.action?.kind==='review_game'&&autoActive(aSession)){$('auto-status').textContent='Revisar juego';$('auto-detail').textContent=`${d.title} · captura ${at(d.screenEvidence?.capturedAt)}. ${aSession.reason}`;}
  if(breakActive(s.autoSeeding)){$('auto-status').textContent='Anti-AFK en uso';$('auto-detail').textContent='La pausa anti-AFK se controla en la tarjeta superior. Detén esa pausa antes de iniciar seeding.';}
- if(entryRunning(s.entry)){$('auto-status').textContent='Entrada automática';$('auto-detail').textContent=s.entry.reason;}
+ if(entryRunning(s.entry)){$('auto-status').textContent=s.entry.recovery?'Recuperando seeding':'Entrada automática';$('auto-detail').textContent=s.entry.reason;}
  renderBreak(s);renderClicker(s.teamClicker);renderEntry(s);renderUpdate(s);controls();
  publishState(s);
 }

@@ -4,6 +4,14 @@ const {classifyEntryScreen}=require('../src/entry-screen.cjs');
 const target={server:2,joinId:'11111111-2222-4333-8444-555555555555'};
 const report=lines=>({format:'wardogs-image-text-v1',width:2560,height:1440,lines:lines.map(([text,x,y,width=300,height=26])=>({text,words:[{text,x,y,width,height}]}))});
 const idLines=[['BUSCAR SERVIDOR',1040,563],['INTRODUCE LA IDENTIFICACIÓN DEL SERVIDOR',908,650,558],['CANCELAR',1094,852,146],['BÚSQUEDA',1409,852,136]];
+
+test('entrada: CONTINUAR sólo se propone para el reinicio completo con permiso interno',()=>{
+ const raw=require('./fixtures/ocr-restart-modal.json');
+ assert.equal(classifyEntryScreen(raw,target).phase,'error');assert.equal(classifyEntryScreen(raw,target).action,undefined);
+ const action=classifyEntryScreen(raw,{...target,recovery:true}).action;assert.equal(action.key,'restart_continue');assert.equal(action.kind,'click');assert.ok(action.restartHeaderBounds.y<action.restartMessageBounds.y);assert.ok(action.restartMessageBounds.y<action.bounds.y);
+ for(const fixture of ['ocr-afk-modal.json','ocr-join-modal.json'])assert.notEqual(classifyEntryScreen(require('./fixtures/'+fixture),{...target,recovery:true}).action?.key,'restart_continue');
+ const partial=structuredClone(raw);partial.lines.find(l=>/reiniciando/.test(l.text)).text='El servidor se está reiniciando. Otro mensaje';assert.equal(classifyEntryScreen(partial,{...target,recovery:true}).action,undefined);
+});
 test('entrada: menú principal y categorías conducen por anclas reales',()=>{
  const readyMenu={...require('./fixtures/ocr-main-menu.json'),controls:{mainDeploy:{enabled:true}}};
  const menu=classifyEntryScreen(readyMenu,target);assert.equal(menu.action.key,'main_deploy');
