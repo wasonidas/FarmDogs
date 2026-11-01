@@ -45,22 +45,38 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $viewErrors = Join-Path $env:RUNNER_TEMP 'farmdogs-release-view.err'
-          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GH_REPO --json tagName,isDraft 2> $viewErrors
-          if ($LASTEXITCODE -eq 0) {
-            $existingRelease = $releaseJson | ConvertFrom-Json
-            if ($existingRelease.isDraft) { throw 'This version has an incomplete draft release. Review the draft before publishing again.' }
-            if ($existingRelease.tagName -ne $env:RELEASE_TAG) { throw 'GitHub returned an unexpected release.' }
-            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'publish=false'
-            Write-Output 'The published version is unchanged. Increase package.json version to publish a new portable.'
-            exit 0
+          # Drafts are not reliably visible through /releases/tags/{tag}.
+          # This exact interrupted release is handled only by its pinned recovery.
+          if ($env:GH_REPO -ceq 'wasonidas/FarmDogs' -and $env:RELEASE_TAG -ceq 'v0.5.4') {
+            $recoveryErrors = Join-Path $env:RUNNER_TEMP 'farmdogs-054-recovery-view.err'
+            $recoveryJson = & gh api "repos/$env:GH_REPO/releases/430768060" 2> $recoveryErrors
+            if ($LASTEXITCODE -eq 0) {
+              $recovery = $recoveryJson | ConvertFrom-Json
+              if ($recovery.id -ne 430768060 -or $recovery.tag_name -cne 'v0.5.4' -or $recovery.target_commitish -cne 'dbc1243d6b280fbf94462b5607ab87829b4d7a4d' -or $recovery.prerelease -ne $false) { throw 'The pinned recovery release identity changed.' }
+              Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'publish=false'
+              if ($recovery.draft) { Write-Output '::notice::The verified 0.5.4 draft is reserved for recover-0.5.4.yml; no duplicate build or release will be created.' }
+              else { Write-Output 'The recovered 0.5.4 release is already published; it will remain unchanged.' }
+              exit 0
+            }
+            $recoveryStatus = (& gh api --include "repos/$env:GH_REPO/releases/430768060" 2> $recoveryErrors) -join "`n"
+            if ($recoveryStatus -notmatch '(?m)^HTTP/\S+\s+404(?:\s|$)') { throw 'Could not verify the pinned recovery state.' }
           }
-          # A failed release view can also mean authentication/network failure.
-          # Only a confirmed HTTP 404 authorizes creating a new release.
-          $apiErrors = Join-Path $env:RUNNER_TEMP 'farmdogs-release-api.err'
-          $apiResponse = (& gh api --include "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" 2> $apiErrors) -join "`n"
-          if ($LASTEXITCODE -eq 0) { throw 'The release appeared during the check. Run again to inspect it without modifying it.' }
-          if ($apiResponse -notmatch '(?m)^HTTP/\S+\s+404(?:\s|$)') { throw 'Could not verify that the release is absent. No release will be created.' }
+          $inventoryComplete = $false
+          for ($page = 1; $page -le 100; $page++) {
+            $inventoryJson = & gh api "repos/$env:GH_REPO/releases?per_page=100&page=$page"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read the authenticated release inventory.' }
+            $rows = @($inventoryJson | ConvertFrom-Json)
+            $matches = @($rows | Where-Object { $_.tag_name -ceq $env:RELEASE_TAG })
+            if ($matches.Count -gt 1) { throw 'The version has multiple release identities.' }
+            if ($matches.Count -eq 1) {
+              if ($matches[0].draft) { throw 'This version has an incomplete draft. Review that numeric release ID before publishing again.' }
+              Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'publish=false'
+              Write-Output 'The published version is unchanged. Increase package.json version to publish a new portable.'
+              exit 0
+            }
+            if ($rows.Count -lt 100) { $inventoryComplete = $true; break }
+          }
+          if (!$inventoryComplete) { throw 'Could not exhaust the release inventory safely.' }
           $tagErrors = Join-Path $env:RUNNER_TEMP 'farmdogs-release-tag.err'
           $tagResponse = (& gh api --include "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2> $tagErrors) -join "`n"
           if ($LASTEXITCODE -eq 0) { throw 'This version tag already exists without a published release. Review it before publishing.' }
@@ -178,51 +194,108 @@ jobs:
         working-directory: release-artifacts
         run: |
           set -euo pipefail
-          sha256sum --check SHA256SUMS.txt
-          gh release create "$RELEASE_TAG" FarmDogs-portable.zip SHA256SUMS.txt \
-            --repo "$GH_REPO" --target "$GITHUB_SHA" --draft \
-            --title "FarmDogs $RELEASE_TAG" --notes-file RELEASE_NOTES.md
-          created_release_id=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.id')
-          [[ "$created_release_id" =~ ^[1-9][0-9]*$ ]]
-          gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets,isDraft \
-            --jq 'if .isDraft and ([.assets[].name] | index("FarmDogs-portable.zip") != null and index("SHA256SUMS.txt") != null) then "Release assets verified" else error("Incomplete draft assets") end'
-          verification_directory=$(mktemp -d)
-          gh release download "$RELEASE_TAG" --repo "$GH_REPO" --dir "$verification_directory" \
-            --pattern FarmDogs-portable.zip --pattern SHA256SUMS.txt
-          cmp SHA256SUMS.txt "$verification_directory/SHA256SUMS.txt"
-          cmp FarmDogs-portable.zip "$verification_directory/FarmDogs-portable.zip"
-          (cd "$verification_directory" && sha256sum --check SHA256SUMS.txt)
-          CREATED_RELEASE_ID="$created_release_id" python3 - <<'PY'
-          import json, os, re, subprocess
+          python3 -I - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess, tempfile
 
           repo, tag, sha = os.environ['GH_REPO'], os.environ['RELEASE_TAG'], os.environ['GITHUB_SHA']
-          release_id = int(os.environ['CREATED_RELEASE_ID'])
-          assert re.fullmatch(r'[0-9a-f]{40}', sha), 'A full source commit SHA is required'
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo), 'Invalid repository'
+          assert re.fullmatch(r'v\d+\.\d+\.\d+', tag) and re.fullmatch(r'[0-9a-f]{40}', sha), 'Invalid release identity'
 
-          def get(route):
-              result = subprocess.run(['gh', 'api', route], capture_output=True, text=True, check=True)
+          def api(method, endpoint, payload=None):
+              command = ['gh', 'api', '--method', method, endpoint]
+              data = None
+              if payload is not None:
+                  command += ['--input', '-']
+                  data = json.dumps(payload)
+              result = subprocess.run(command, input=data, capture_output=True, text=True, check=True)
               return json.loads(result.stdout)
 
-          draft = get(f'repos/{repo}/releases/{release_id}')
-          assert draft.get('id') == release_id and draft.get('draft') is True, 'The created draft identity changed'
-          assert draft.get('tag_name') == tag and draft.get('target_commitish') == sha, 'The draft does not target this source commit'
-          assert get(f'repos/{repo}/releases/tags/{tag}').get('id') == release_id, 'The tag now names another release'
+          def optional_get(endpoint):
+              result = subprocess.run(['gh', 'api', '--include', endpoint], capture_output=True, text=True)
+              status = re.match(r'^HTTP/\S+\s+(\d{3})(?:\s|$)', result.stdout)
+              assert status, 'Could not verify the HTTP response'
+              if int(status.group(1)) == 404:
+                  assert result.returncode != 0, 'Unexpected successful absence response'
+                  return None
+              assert int(status.group(1)) == 200 and result.returncode == 0, 'Could not verify the resource'
+              _, separator, body = result.stdout.partition('\n\n')
+              assert separator, 'Missing API response body'
+              return json.loads(body)
 
-          response = subprocess.run(['gh', 'api', '--include', f'repos/{repo}/git/ref/tags/{tag}'], capture_output=True, text=True)
-          status = re.match(r'^HTTP/\S+\s+(\d{3})(?:\s|$)', response.stdout)
-          assert status, 'Could not confirm the tag HTTP status before publishing'
-          code = int(status.group(1))
-          if code == 404:
-              assert response.returncode != 0, 'Unexpected successful response for an absent tag'
+          def verify_tag(allow_absent=False):
+              reference = optional_get(f'repos/{repo}/git/ref/tags/{tag}')
+              if reference is None:
+                  assert allow_absent, 'The published source tag is absent'
+                  return
+              target = reference.get('object', {})
+              assert target.get('type') == 'commit' and target.get('sha') == sha, 'The tag targets another source commit'
+
+          def own_release(value, release_id, draft):
+              assert type(value.get('id')) is int and value['id'] == release_id, 'Release identity changed'
+              assert value.get('tag_name') == tag and value.get('target_commitish') == sha, 'Release source changed'
+              assert value.get('draft') is draft and value.get('prerelease') is False, 'Unexpected stable release state'
+
+          names = {'FarmDogs-portable.zip', 'SHA256SUMS.txt', 'RELEASE_NOTES.md'}
+          assert {p.name for p in pathlib.Path('.').iterdir()} == names, 'Unexpected build artifact files'
+          assert all(pathlib.Path(n).is_file() and not pathlib.Path(n).is_symlink() for n in names), 'Unsafe build artifact'
+          archive, checksums = pathlib.Path('FarmDogs-portable.zip'), pathlib.Path('SHA256SUMS.txt')
+          expected_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert checksums.read_text(encoding='ascii').splitlines() == [expected_hash + '  FarmDogs-portable.zip'], 'Build checksum mismatch'
+          expected_assets = {p.name: {'size': p.stat().st_size, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in (archive, checksums)}
+          for page in range(1, 101):
+              releases = api('GET', f'repos/{repo}/releases?per_page=100&page={page}')
+              assert isinstance(releases, list) and all(isinstance(v, dict) for v in releases), 'Invalid release inventory'
+              assert not any(v.get('tag_name') == tag for v in releases), 'Existing release/draft will not be overwritten'
+              if len(releases) < 100:
+                  break
           else:
-              assert code == 200 and response.returncode == 0, 'Could not verify the tag before publishing'
-              headers, separator, body = response.stdout.partition('\n\n')
-              assert separator, 'Missing tag response body'
-              target = json.loads(body).get('object', {})
-              assert target.get('type') == 'commit' and target.get('sha') == sha, 'The tag points to another source commit'
+              raise RuntimeError('Could not exhaust the release inventory')
+          verify_tag(allow_absent=True)
+
+          # Capture the numeric ID directly from CREATE. Draft lookup by tag is not used.
+          created = api('POST', f'repos/{repo}/releases', {
+              'tag_name': tag, 'target_commitish': sha, 'name': 'FarmDogs ' + tag,
+              'body': pathlib.Path('RELEASE_NOTES.md').read_text(encoding='utf-8-sig'),
+              'draft': True, 'prerelease': False, 'make_latest': 'false'
+          })
+          release_id = created.get('id')
+          assert type(release_id) is int and release_id > 0, 'Missing CREATE release ID'
+          own_release(created, release_id, True)
+          endpoint = f'repos/{repo}/releases/{release_id}'
+          for item in (archive, checksums):
+              upload = f'https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={item.name}'
+              content_type = 'application/zip' if item.suffix == '.zip' else 'text/plain'
+              result = subprocess.run(['gh', 'api', '--method', 'POST', '-H', 'Content-Type: ' + content_type,
+                                       '--input', str(item), upload], capture_output=True, text=True, check=True)
+              asset = json.loads(result.stdout)
+              assert asset.get('name') == item.name and asset.get('state') == 'uploaded', 'Asset upload failed'
+
+          def verify_assets(value, draft):
+              own_release(value, release_id, draft)
+              assets = value.get('assets', [])
+              assert len(assets) == 2 and {v.get('name') for v in assets} == set(expected_assets), 'Unexpected release assets'
+              with tempfile.TemporaryDirectory(prefix='farmdogs-release-verify-') as directory:
+                  for asset in assets:
+                      expected = expected_assets[asset['name']]
+                      assert asset.get('state') == 'uploaded' and asset.get('size') == expected['size'], 'Asset metadata mismatch'
+                      asset_id = asset.get('id')
+                      assert type(asset_id) is int and asset_id > 0, 'Invalid asset ID'
+                      downloaded = pathlib.Path(directory) / asset['name']
+                      with downloaded.open('wb') as output:
+                          subprocess.run(['gh', 'api', '-H', 'Accept: application/octet-stream',
+                                          f'repos/{repo}/releases/assets/{asset_id}'], stdout=output, check=True)
+                      assert hashlib.sha256(downloaded.read_bytes()).hexdigest() == expected['sha256'], 'Downloaded asset checksum mismatch'
+
+          verify_assets(api('GET', endpoint), True)
+          verify_tag(allow_absent=True)
+          published = api('PATCH', endpoint, {'draft': False, 'prerelease': False, 'make_latest': 'true'})
+          own_release(published, release_id, False)
+          assert published.get('published_at'), 'Release was not published'
+          verify_tag()
+          verify_assets(api('GET', endpoint), False)
+          latest = api('GET', f'repos/{repo}/releases/latest')
+          own_release(latest, release_id, False)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write(f"### FarmDogs publicado\n\n{published['html_url']}\n\n")
+              summary.write(f'Source `{sha}`; numeric release `{release_id}`; both assets downloaded and SHA256-verified.\n')
           PY
-          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
-          published_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
-          test "$published_sha" = "$GITHUB_SHA"
-          release_url=$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq .url)
-          printf '### FarmDogs publicado\n\n%s\n' "$release_url" >> "$GITHUB_STEP_SUMMARY"

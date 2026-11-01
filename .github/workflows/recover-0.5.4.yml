@@ -1,0 +1,177 @@
+name: Recover the verified FarmDogs 0.5.4 draft
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/recover-0.5.4.yml']
+
+permissions: {}
+
+concurrency:
+  group: farmdogs-recover-0.5.4
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.repository == 'wasonidas/FarmDogs' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify the existing build and assets; publish only numeric release 430768060
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import hashlib, json, os, pathlib, re, stat, subprocess, tempfile, urllib.request, zipfile
+
+          REPO = 'wasonidas/FarmDogs'
+          TAG, VERSION = 'v0.5.4', '0.5.4'
+          SOURCE = 'dbc1243d6b280fbf94462b5607ab87829b4d7a4d'
+          RELEASE_ID, RUN_ID, BUILD_JOB_ID = 430768060, 41335927112, 124935621709
+          PREVIOUS_LATEST_ID = 430357698
+          ASSETS = {
+              'FarmDogs-portable.zip': {'id': 699131507, 'size': 36401888, 'sha256': '0bf676e2ff176061b1974604fabcee1c0fcfa7ca65b657819581a1d17b851933'},
+              'SHA256SUMS.txt': {'id': 699131508, 'size': 89, 'sha256': '4f9f286acb77a005b3834038a1974e79465c5ebcb31215c325d9d19dceb8ebae'}
+          }
+          assert os.environ['GH_REPO'] == REPO and os.environ['GITHUB_EVENT_NAME'] == 'push' and os.environ['GITHUB_REF'] == 'refs/heads/main', 'Unexpected recovery context'
+          ENDPOINT = f'repos/{REPO}/releases/{RELEASE_ID}'
+
+          def api(method, endpoint, payload=None):
+              command = ['gh', 'api', '--method', method, endpoint]
+              data = None
+              if payload is not None:
+                  command += ['--input', '-']
+                  data = json.dumps(payload)
+              result = subprocess.run(command, input=data, capture_output=True, text=True, check=True)
+              return json.loads(result.stdout)
+
+          def own_release(value, draft):
+              assert value.get('id') == RELEASE_ID and value.get('tag_name') == TAG, 'Pinned release identity changed'
+              assert value.get('target_commitish') == SOURCE and value.get('draft') is draft and value.get('prerelease') is False, 'Pinned release source/state changed'
+
+          def verify_tag(allow_absent=False):
+              route = f'repos/{REPO}/git/ref/tags/{TAG}'
+              response = subprocess.run(['gh', 'api', '--include', route], capture_output=True, text=True)
+              status = re.match(r'^HTTP/\S+\s+(\d{3})(?:\s|$)', response.stdout)
+              assert status, 'Could not verify the tag response'
+              if int(status.group(1)) == 404:
+                  assert allow_absent and response.returncode != 0, 'Published source tag is absent'
+                  return
+              assert int(status.group(1)) == 200 and response.returncode == 0, 'Could not verify the tag'
+              _, separator, body = response.stdout.partition('\n\n')
+              assert separator, 'Missing tag response body'
+              target = json.loads(body).get('object', {})
+              assert target.get('type') == 'commit' and target.get('sha') == SOURCE, 'Tag points to a different source commit'
+
+          def verify_build():
+              run = api('GET', f'repos/{REPO}/actions/runs/{RUN_ID}')
+              assert run.get('id') == RUN_ID and run.get('head_sha') == SOURCE and run.get('head_branch') == 'main', 'Pinned build run identity changed'
+              assert run.get('status') == 'completed' and run.get('event') == 'push' and run.get('path') == '.github/workflows/release.yml', 'Pinned workflow is not complete'
+              assert run.get('repository', {}).get('full_name') == REPO, 'Build run belongs to another repository'
+              jobs = api('GET', f'repos/{REPO}/actions/runs/{RUN_ID}/jobs?per_page=100')
+              rows = jobs.get('jobs', [])
+              assert jobs.get('total_count') == len(rows) and len(rows) <= 100, 'Incomplete build job inventory'
+              build = [v for v in rows if v.get('id') == BUILD_JOB_ID]
+              assert len(build) == 1 and build[0].get('name') == 'build' and build[0].get('status') == 'completed' and build[0].get('conclusion') == 'success', 'Pinned build job did not succeed'
+
+          def asset_metadata(value):
+              assets = value.get('assets', [])
+              assert len(assets) == 2 and {v.get('name') for v in assets} == set(ASSETS), 'Unexpected asset inventory'
+              for asset in assets:
+                  expected = ASSETS[asset['name']]
+                  assert asset.get('id') == expected['id'] and asset.get('size') == expected['size'] and asset.get('state') == 'uploaded', 'Pinned asset identity/size/state changed'
+                  digest = asset.get('digest')
+                  assert digest is None or digest == 'sha256:' + expected['sha256'], 'Asset digest changed'
+              return assets
+
+          def download_assets(value, directory, public=False):
+              for asset in asset_metadata(value):
+                  expected = ASSETS[asset['name']]
+                  destination = directory / asset['name']
+                  if public:
+                      url = f"https://github.com/{REPO}/releases/download/{TAG}/{asset['name']}"
+                      assert asset.get('browser_download_url') == url, 'Unexpected public download URL'
+                      with urllib.request.urlopen(url, timeout=90) as response, destination.open('wb') as output:
+                          while True:
+                              block = response.read(1024 * 1024)
+                              if not block:
+                                  break
+                              output.write(block)
+                  else:
+                      with destination.open('wb') as output:
+                          subprocess.run(['gh', 'api', '-H', 'Accept: application/octet-stream', f"repos/{REPO}/releases/assets/{expected['id']}"], stdout=output, check=True)
+                  assert destination.stat().st_size == expected['size'] and hashlib.sha256(destination.read_bytes()).hexdigest() == expected['sha256'], 'Downloaded pinned asset mismatch'
+
+          def audit_archive(directory):
+              checksum = (directory / 'SHA256SUMS.txt').read_text(encoding='ascii')
+              assert checksum.splitlines() == [ASSETS['FarmDogs-portable.zip']['sha256'] + '  FarmDogs-portable.zip'], 'Checksum file content changed'
+              with zipfile.ZipFile(directory / 'FarmDogs-portable.zip') as archive:
+                  members = archive.infolist()
+                  assert len({v.filename for v in members}) == len(members), 'Duplicate ZIP paths'
+                  assert sum(v.file_size for v in members) < 250 * 1024 * 1024, 'Unexpected ZIP expansion size'
+                  for info in members:
+                      parts = pathlib.PurePosixPath(info.filename).parts
+                      assert parts and parts[0] == 'FarmDogs' and not info.filename.startswith('/') and '\\' not in info.filename and '..' not in parts, 'Unsafe ZIP path'
+                      assert all(p.lower() not in {'data', '.git', 'research', 'planning', 'webview-profile'} for p in parts), 'Private workspace path in ZIP'
+                      assert not stat.S_ISLNK(info.external_attr >> 16) and not info.flag_bits & 1, 'Unsafe ZIP member'
+                  files = {v.filename: v for v in members if not v.is_dir()}
+                  assert len(files) == 63 and archive.testzip() is None, 'ZIP file count or CRC mismatch'
+                  manifest = json.loads(archive.read('FarmDogs/manifest.json'))
+                  assert manifest.get('format') == 'wardogs-portable-v1' and manifest.get('application') == 'FarmDogs' and manifest.get('version') == VERSION, 'Unexpected package manifest'
+                  assert manifest.get('privateDataIncluded') is False and manifest.get('platform') == 'win32-x64', 'Unexpected package privacy/platform'
+                  rows = manifest.get('files', [])
+                  assert len(rows) == 62 and len({v.get('path') for v in rows}) == 62, 'Unexpected manifest payload'
+                  assert set(files) == {'FarmDogs/manifest.json'} | {'FarmDogs/' + v['path'] for v in rows}, 'Manifest does not cover the ZIP'
+                  for row in rows:
+                      assert re.fullmatch(r'[0-9a-f]{64}', row.get('sha256', '')), 'Invalid payload checksum'
+                      assert hashlib.sha256(archive.read('FarmDogs/' + row['path'])).hexdigest() == row['sha256'], 'Payload checksum mismatch'
+                  assert json.loads(archive.read('FarmDogs/package.json')).get('version') == VERSION, 'Package version differs'
+                  for cap, binary in [('movement', 'WardogsMovement.exe'), ('team-clicker', 'WardogsTeamClicker.exe'), ('entry', 'WardogsEntry.exe')]:
+                      capability = json.loads(archive.read(f'FarmDogs/bin/{cap}-capabilities.json'))
+                      assert capability.get('sha256') == hashlib.sha256(archive.read('FarmDogs/bin/' + binary)).hexdigest(), 'Controller capability checksum differs'
+                  private = re.compile(r'C:[\\/]+Users[\\/]+|steamLoginSecure=|(?m:^Cookie:\s*\S)|(?m:^Set-Cookie:\s*\S)|(?:ghp_|github_pat_)[A-Za-z0-9_]{20,}', re.IGNORECASE)
+                  for name, info in files.items():
+                      if pathlib.PurePosixPath(name).suffix.lower() in {'.json', '.cjs', '.js', '.html', '.css', '.md', '.txt'}:
+                          assert not private.search(archive.read(name).decode('utf-8-sig')), 'Private material detected in text payload'
+
+          verify_build()
+          release = api('GET', ENDPOINT)
+          assert type(release.get('draft')) is bool, 'Missing release state'
+          was_draft = release['draft']
+          own_release(release, was_draft)
+          verify_tag(allow_absent=was_draft)
+          with tempfile.TemporaryDirectory(prefix='farmdogs-recover-054-') as temporary:
+              directory = pathlib.Path(temporary)
+              download_assets(release, directory)
+              audit_archive(directory)
+              current = api('GET', ENDPOINT)
+              own_release(current, was_draft)
+              asset_metadata(current)
+              if was_draft:
+                  latest = api('GET', f'repos/{REPO}/releases/latest')
+                  assert latest.get('id') == PREVIOUS_LATEST_ID and latest.get('tag_name') == 'v0.5.2' and latest.get('draft') is False and latest.get('prerelease') is False, 'Stable latest changed; refusing to replace it'
+                  verify_tag(allow_absent=True)
+                  current = api('PATCH', ENDPOINT, {'draft': False, 'prerelease': False, 'make_latest': 'true'})
+                  own_release(current, False)
+                  assert current.get('published_at'), 'Pinned release was not published'
+              else:
+                  assert current.get('published_at'), 'Published pinned release has no publication date'
+              verify_tag()
+              download_assets(current, directory, public=True)
+              latest = api('GET', f'repos/{REPO}/releases/latest')
+              if was_draft:
+                  own_release(latest, False)
+              elif latest.get('id') != RELEASE_ID:
+                  newer = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', latest.get('tag_name', ''))
+                  assert newer and tuple(map(int, newer.groups())) > (0, 5, 4) and latest.get('draft') is False and latest.get('prerelease') is False, 'Latest is neither this release nor a newer stable version'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              result = 'Published the verified existing draft' if was_draft else 'Already published and identical; no mutation'
+              summary.write(f'### FarmDogs 0.5.4 recovery\n\n{result}.\n\n')
+              summary.write(f'Release `{RELEASE_ID}`, source `{SOURCE}`, successful build job `{BUILD_JOB_ID}`; both pinned assets verified before and anonymously after publication.\n')
+          PY
