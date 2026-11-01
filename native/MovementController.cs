@@ -33,6 +33,9 @@ namespace WardogsSeeding {
   string sessionId, lastKey, lastError;
   DateTime lastWrite = DateTime.MinValue;
   string autoSessionId, autoOperatorStopped, lastCommandId;
+  readonly System.Collections.Generic.HashSet<string> autoOperatorStoppedSessions = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+  bool autoStopReadFault;
+  const string UnresolvedStop = "No se pudo identificar la sesion pendiente al detener. Cierra y vuelve a abrir FarmDogs para reactivar el movimiento.";
   DateTime autoLease;
   double autoLeaseMono;
   int autoCount;
@@ -85,6 +88,7 @@ namespace WardogsSeeding {
   void Arm(bool one) {
    if (busy || plan.Armed) return;
    try {
+    if(autoStopReadFault)throw new InvalidOperationException(UnresolvedStop);
     if (!hotkeysReady) throw new InvalidOperationException("F7/F8 no disponibles.");
     if (!deployed.Checked) throw new InvalidOperationException("Confirma el despliegue y cierra el chat antes de empezar.");
     gamePid = KeyboardInput.FindGame(); if (gamePid == 0) throw new InvalidOperationException("Abre una unica instancia de Wardogs.");
@@ -109,19 +113,35 @@ namespace WardogsSeeding {
    try { Write("stopped", reason); } catch (Exception error) { lastError = "Error de registro: " + error.Message; }
    if (!closing) UpdateStatus();
   }
-  void OperatorStop(string reason) { if(autoSessionId!=null)autoOperatorStopped=autoSessionId;Stop(reason); }
+  void CancelAutomaticSession(string id) { if(id!=null){autoOperatorStoppedSessions.Add(id);autoOperatorStopped=id;} }
+  void OperatorStop(string reason) {
+   CancelAutomaticSession(autoSessionId);
+   try {
+    var pending=ReadPendingAutomaticCommand();
+    if(pending!=null)CancelAutomaticSession(pending.CancellationSessionId());
+   } catch(Exception) { autoStopReadFault=true;lastError=UnresolvedStop; }
+   Stop(reason);
+  }
   void SelectAutomaticSession(string id) { automaticCadence.Select(id);autoSessionId=id;autoCount=automaticCadence.CompletedCount; }
+  AutomaticCommand ReadPendingAutomaticCommand() {
+   string file=Path.Combine(dataDir,"movement-command.json"),text;
+   // File.Exists also hides access errors. Only actual absence is an idle state;
+   // unreadable commands must keep an unbound emergency stop latched closed.
+   try{using(var stream=new FileStream(file,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)){if(stream.Length>8192)throw new InvalidOperationException("Orden automatica demasiado grande.");using(var input=new StreamReader(stream))text=input.ReadToEnd();}}
+   catch(FileNotFoundException){return null;}
+   var command=json.Deserialize<AutomaticCommand>(text);if(command==null)throw new ArgumentException("Orden automatica vacia.");return command;
+  }
   void ReadAutomaticCommand() {
-   string file=Path.Combine(dataDir,"movement-command.json");if(!File.Exists(file))return;
-   string text;using(var stream=new FileStream(file,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)){if(stream.Length>8192)throw new InvalidOperationException("Orden automatica demasiado grande.");using(var input=new StreamReader(stream))text=input.ReadToEnd();}
-   var command=json.Deserialize<AutomaticCommand>(text);if(command==null||command.id==lastCommandId)return;
+   if(autoStopReadFault)return;
+   var command=ReadPendingAutomaticCommand();if(command==null||command.id==lastCommandId)return;
    try{command.Validate(DateTime.UtcNow);}catch(ArgumentException){lastCommandId=command.id;if(autoSessionId!=null&&plan.Armed)Stop("Orden automatica no vigente");return;}
    lastCommandId=command.id;
    if(command.kind=="stop"){
-    if(command.sessionId==autoSessionId){if(command.cancelled)autoOperatorStopped=autoSessionId;Stop(command.reason??"Esperando una nueva comprobacion.");}
+    if(command.sessionId==autoSessionId){if(command.cancelled)CancelAutomaticSession(autoSessionId);Stop(command.reason??"Esperando una nueva comprobacion.");}
     return;
    }
-   if(command.sessionId==autoOperatorStopped)return;
+   if(!hotkeysReady){lastError="F7/F8 no disponibles. Cierra y vuelve a abrir FarmDogs antes de activar el movimiento.";Stop(lastError);return;}
+   if(autoOperatorStoppedSessions.Contains(command.sessionId))return;
    if(command.kind=="watch"){
     if(!plan.Armed&&!busy){SelectAutomaticSession(command.sessionId);lastError=null;Write("auto_waiting",command.reason??"Esperando inicio de partida");}return;
    }
@@ -175,7 +195,7 @@ namespace WardogsSeeding {
    finally { busy = false; if (!closing) UpdateStatus(); }
   }
   void UpdateStatus() {
-   arm.Enabled = hotkeysReady && !plan.Armed && !busy; test.Enabled = hotkeysReady && !plan.Armed && !busy;
+   arm.Enabled = hotkeysReady && !autoStopReadFault && !plan.Armed && !busy; test.Enabled = hotkeysReady && !autoStopReadFault && !plan.Armed && !busy;
    status.Text = lastError ?? (plan.Armed ? plan.Reason : (plan.Reason ?? "Detenido - esperando configuracion"));
    status.ForeColor = lastError != null ? Color.Firebrick : plan.Armed ? Color.DarkGreen : Color.DimGray;
    string end = plan.EndUtc == default(DateTime) ? "--:--" : TimeZoneInfo.ConvertTimeFromUtc(plan.EndUtc, madrid).ToString("HH:mm:ss");

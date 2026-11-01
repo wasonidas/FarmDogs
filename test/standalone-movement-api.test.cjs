@@ -45,6 +45,13 @@ test('API movimiento temporal: pausa por foco, exige nueva captura y F8 es termi
  f.native(false,id,{autoOperatorStopped:id});await f.service.tick();assert.equal((await f.state()).autoSeeding.status,'cancelled');assert.equal(f.command().cancelled,true);f.native();f.capture();await f.service.tick();assert.equal(f.command().kind,'stop');
 });
 
+test('API movimiento temporal: F8 cancela el UUID pendiente antes de que el controlador lo adopte',async t=>{
+ const f=await fixture(t);f.native();assert.equal((await f.post('/api/movement/start',sessionInput)).status,200);
+ const id=(await f.state()).autoSeeding.id;assert.equal(f.command().kind,'watch');f.native(false,null,{autoOperatorStopped:id});await f.service.tick();
+ let state=await f.state();assert.equal(state.autoSeeding.status,'cancelled');assert.equal(state.autoSeeding.operatorStopped,true);assert.equal(f.command().kind,'stop');assert.equal(f.command().cancelled,true);
+ f.native(false,null);f.capture();await f.service.tick();state=await f.state();assert.equal(state.autoSeeding.status,'cancelled');assert.equal(f.command().kind,'stop');
+});
+
 test('API movimiento temporal: cancelar no desactiva una selección de equipo ajena',async t=>{
  const f=await fixture(t);await f.post('/api/team-clicker/config',{enabled:true,team:'green',intervalMs:20,startMode:'automatic'});
  const before=(await f.state()).teamClicker;assert.equal((await f.post('/api/movement/start',sessionInput)).status,400);await f.post('/api/movement/stop');

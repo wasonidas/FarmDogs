@@ -8,7 +8,7 @@ FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automát
 
 [Descargar el portable](https://github.com/wasonidas/FarmDogs/releases/latest) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-**FarmDogs Launcher 0.5.0** añade presencia del clan en los servidores, una interfaz renovada y mejoras en cola, reconocimiento del personaje y avisos. Puedes entrar con un equipo aleatorio, elegir el color de tu clan o preparar seeding. Consulta las comprobaciones y los límites de la versión más abajo.
+**FarmDogs Launcher 0.5.1** corrige los componentes incoherentes tras actualizar, cierra el controlador oculto al salir y cancela la preparación pendiente con F8. La serie 0.5 añade presencia del clan en los servidores, una interfaz renovada y mejoras en cola, reconocimiento del personaje y avisos. Puedes entrar con un equipo aleatorio, elegir el color de tu clan o preparar seeding. Consulta las comprobaciones y los límites de la versión más abajo.
 
 ## Descargar y abrir
 
@@ -164,6 +164,7 @@ FarmDogs no gasta WSP ni compra VIP. Las reglas del servidor pueden cambiar; la 
 | Situación | Qué revisar |
 | --- | --- |
 | Anti-AFK espera o se pausa | Wardogs delante, personaje desplegado, manos vacías y menús cerrados. |
+| Controlador no disponible o componentes distintos | Cierra FarmDogs y vuelve a extraer el portable completo conservando `data`. La app indica qué componente falta o no coincide; esto no significa que una actualización esté en curso. |
 | Seeding espera población | Revisa el umbral de seeding. Para una pausa en una partida, usa el acceso Anti-AFK independiente. |
 | Selector esperando | Debe verse el selector de facciones dentro de Wardogs. |
 | Selector detenido al cambiar de ventana | Vuelve a pulsar Esperar equipo y regresa al juego. |
@@ -189,7 +190,7 @@ El servicio local escucha en `127.0.0.1:24243`. FarmDogs consulta las fuentes de
 
 ## Estado de la versión
 
-La **0.5.0 supera 471 pruebas de fuente**. Se comprobó la asociación de un clan real mediante la cuenta Steam autorizada y su consulta de presencia. En una prueba real con el servidor #1 lleno, la app esperó aproximadamente dos minutos de cola, entró en el equipo **verde** elegido y detuvo el autoclic tras DESPLEGANDO. Ese resultado acredita **cola → equipo fijo → parada de clics**.
+La **0.5.1 supera 483 pruebas de fuente**. El cierre normal solicita la salida del controlador oculto; F8 cancela también el inicio pendiente y no se arma movimiento si no se pudo registrar su parada. Los componentes ausentes o incoherentes se explican junto a la acción, sin anunciar una actualización inexistente. Se comprobó la asociación de un clan real mediante la cuenta Steam autorizada y su consulta de presencia. En una prueba real con el servidor #1 lleno, la app esperó aproximadamente dos minutos de cola, entró en el equipo **verde** elegido y detuvo el autoclic tras DESPLEGANDO. Ese resultado acredita **cola → equipo fijo → parada de clics**.
 
 La corrección para HUD luminoso se comprobó offline sobre **dos capturas de referencia**. Cuando no se lee la brújula, exige otras anclas completas del personaje antes de reconocerlo. Esa comprobación de imágenes no sustituye una prueba continua de movimiento en partida; el autoclic detenido tampoco equivale por sí solo a Entrada completada.
 

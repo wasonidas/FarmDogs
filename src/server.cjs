@@ -119,11 +119,14 @@ function updateBusy(){
  if(reward.attempts?.some(attempt=>attempt.status==='reserved'))return {busy:true,reason:'La protección de premios está terminando una operación.'};
  return {busy:false,reason:'FarmDogs está inactivo.'};
 }
+function requestAppShutdown(id=randomUUID()){
+ const at=utcNow();atomicJson(path.join(DATA,'app-shutdown.json'),{format:'farmdogs-app-shutdown-v1',id,root:ROOT,servicePid:process.pid,issuedAt:new Date(at).toISOString(),expiresAt:new Date(at+5000).toISOString()});
+ return new Date(at).toISOString();
+}
 async function prepareUpdateShutdown({phase,plan}){
  if(phase==='prepare')return {processes:[{pid:process.pid,executablePath:process.execPath}]};
  if(phase!=='commit')throw Error('Fase de actualización no válida.');
- const at=utcNow();atomicJson(path.join(DATA,'app-shutdown.json'),{format:'farmdogs-app-shutdown-v1',id:plan.id,root:ROOT,servicePid:process.pid,issuedAt:new Date(at).toISOString(),expiresAt:new Date(at+5000).toISOString()});
- updateShutdownRequested=true;updateShutdownId=plan.id;updateShutdownRequestedAt=new Date(at).toISOString();
+ updateShutdownRequestedAt=requestAppShutdown(plan.id);updateShutdownRequested=true;updateShutdownId=plan.id;
  updateShutdownTimer=setTimeout(()=>{void close().finally(()=>{if(require.main===module)process.exit(0);});},500);
 }
 const updater=options.appUpdate||createAppUpdate({root:ROOT,dataDir:DATA,now:utcNow,event,getBusy:updateBusy,prepareShutdown:options.prepareUpdateShutdown||prepareUpdateShutdown,...options.updateOptions});
@@ -392,7 +395,13 @@ async function tickEntry(){try{await entry.tick();}catch(error){try{entry.stop('
 const clickerTimer=setInterval(tickClicker,100);
 const refreshTimer=setInterval(refreshServers,1000),watchTimer=setInterval(()=>{tickWatch();void tickEntry();automatic.tick();void clanPresence.tick().catch(error=>event('clan_presence_error',{message:error.message}));tickActivity().catch(error=>event('activity_error',{message:error.message}));opening.tick().catch(error=>event('opening_error',{message:error.message}));if(options.autoUpdate!==false)void updater.tick();},1000);
 server.listen(PORT,'127.0.0.1',async()=>{PORT=server.address().port;atomicJson(configFile,config);persist();atomicJson(path.join(DATA,'service.json'),{pid:process.pid,port:PORT,url:`http://127.0.0.1:${PORT}`,startedAt:isoNow()});await refreshServers();resolveReady(`http://127.0.0.1:${PORT}`);});
-function close(){if(closePromise)return closePromise;clanPresence.close();updater.close();entry.close();teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);clearTimeout(updateShutdownTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
+function close(){if(closePromise)return closePromise;
+ // A stop command releases keys but leaves the hidden native message loop alive.
+ // Use the same short, installation/PID-bound cooperative exit as the updater,
+ // including when no movement session is active. Never let a marker I/O failure
+ // prevent the remaining controllers from being disarmed and the service closed.
+ try{requestAppShutdown(updateShutdownId||randomUUID());}catch(error){console.error('No se pudo solicitar el cierre del controlador: '+error.message);}
+ clanPresence.close();updater.close();entry.close();teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);clearTimeout(updateShutdownTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
 return {ready,close,tick:async()=>{tickClicker();tickWatch();await tickEntry();automatic.tick();await clanPresence.tick();await tickActivity();await opening.tick();if(options.autoUpdate!==false)await updater.tick();},refresh:refreshServers,state};
 }
 module.exports={createObserver};

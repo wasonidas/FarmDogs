@@ -36,6 +36,28 @@ async function app({initial=sample(),clipboardFails=false,onPost,host=false}={})
  return {node,requests,hostMessages,hostEvent:message=>{for(const handler of hostListeners)handler({data:message});},hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},async disconnect(){current=null;await vm.runInContext('poll()',context);},posts:()=>requests.filter(request=>request.method==='POST')};
 }
 
+test('componentes: un controlador incoherente explica el bloqueo sin anunciar una actualización ficticia',async()=>{
+ const initial=sample();initial.localTools.automaticMovement=false;
+ const reason='El controlador de movimiento no coincide con su archivo de verificación. Vuelve a extraer el portable completo.';
+ initial.localTools.diagnostics={automaticMovement:{code:'hash_mismatch',reason}};
+ const a=await app({initial});
+ assert.equal(a.node('break-start').disabled,true);assert.equal(a.node('auto-start').disabled,true);assert.equal(a.node('activity-start').disabled,true);
+ for(const id of ['break-help','auto-detail','auto-start-help'])assert.equal(a.node(id).textContent,reason,id);
+ assert.equal(a.node('auto-status').textContent,'No disponible');assert.doesNotMatch(a.node('auto-detail').textContent,/Actualizando/);
+ // A newly verified installation becomes usable on the next state update, but
+ // rendering readiness never starts a controller or bypasses confirmation.
+ a.update({...initial,localTools:{...initial.localTools,automaticMovement:true,diagnostics:{automaticMovement:{code:'ready',reason:'Verificado.'}}}});
+ assert.equal(a.node('auto-start').disabled,false);assert.equal(a.node('activity-start').disabled,false);assert.equal(a.node('break-start').disabled,true);assert.equal(a.posts().length,0);
+});
+
+test('componentes: una versión anterior sin diagnóstico conserva un motivo útil y no afirma estar actualizando',async()=>{
+ const initial=sample();initial.localTools.automaticMovement=false;
+ const a=await app({initial});
+ assert.match(a.node('break-help').textContent,/controlador.*no está disponible/);
+ assert.match(a.node('auto-detail').textContent,/conservando data/);assert.doesNotMatch(a.node('auto-detail').textContent,/Actualizando/);
+ assert.equal(a.posts().length,0);
+});
+
 test('clan: solo una presencia lista en servidor confirmado se vuelve verde y muestra el recuento real',async()=>{
  const initial=sample();initial.servers=initial.servers.map(s=>({...s,online:true}));initial.clanPresence={status:'ready',clan:{slug:'arc-troopers',tag:'ARC',name:'Arc Troopers'},selfExcluded:false,servers:{'1':{status:'present',reportedCount:7,teams:{blue:7,red:0,green:0,unassigned:0},members:[{name:'DO_NOT_RENDER_ROSTER_NAME'}]},'2':{status:'empty',reportedCount:0,teams:{blue:0,red:0,green:0}},'3':{status:'unknown',reportedCount:null},'4':{status:'present',reportedCount:2},'5':{status:'present',reportedCount:1}}};initial.servers[3].online=false;initial.servers[4].trusted=false;
  const a=await app({initial}),indicator=n=>a.node('server-'+n).querySelector('.clan-presence'),label=n=>a.node('server-'+n).querySelector('.clan-label').textContent;

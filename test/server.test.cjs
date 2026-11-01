@@ -107,6 +107,21 @@ test('API: una instantánea de cuenta incompleta no impide observar los servidor
 test('API: cerrar el servicio interrumpe el seguimiento y deja de aceptar nuevas peticiones',async t=>{
  const f=await fixture(t);await f.post('/api/watch/start');const response=await f.post('/api/service/stop');assert.equal(response.status,200);await response.json();await f.service.close();
  const disk=JSON.parse(await fs.readFile(path.join(f.dir,'runtime.json'),'utf8'));assert.equal(disk.watch.status,'interrupted');assert.equal(disk.watch.rewardVerified,false);await assert.rejects(f.state);
+ const request=JSON.parse(await fs.readFile(path.join(f.dir,'app-shutdown.json'),'utf8')),service=JSON.parse(await fs.readFile(path.join(f.dir,'service.json'),'utf8'));
+ assert.equal(request.format,'farmdogs-app-shutdown-v1');assert.equal(request.servicePid,service.pid);assert.equal(request.servicePid,process.pid);assert.equal(request.root,path.resolve(__dirname,'..'));assert.equal(Date.parse(request.expiresAt)-Date.parse(request.issuedAt),5000);assert.ok(Date.parse(service.startedAt)<=Date.parse(request.issuedAt));
+});
+
+test('cierre: incluso sin sesión de movimiento pide salida nativa propia, una sola vez y sin simular actualización',async t=>{
+ const f=await fixture(t),before=await f.state();assert.equal(before.autoSeeding,null);assert.equal(before.update.shutdownRequested,false);
+ await assert.rejects(fs.readFile(path.join(f.dir,'app-shutdown.json')),{code:'ENOENT'});
+ await f.service.close();const request=JSON.parse(await fs.readFile(path.join(f.dir,'app-shutdown.json'),'utf8'));
+ assert.match(request.id,/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i);assert.equal(request.root,before.installationRoot);assert.equal(request.servicePid,process.pid);assert.equal(request.issuedAt,before.now);assert.equal(Date.parse(request.expiresAt)-Date.parse(request.issuedAt),5000);
+ f.advance(7000);await f.service.close();assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.dir,'app-shutdown.json'),'utf8')),request);assert.equal(f.service.state().update.shutdownRequested,false);
+});
+
+test('cierre: un fallo al escribir la señal no deja el servidor ni el seguimiento activos',async t=>{
+ const errors=[];t.mock.method(console,'error',message=>errors.push(message));const f=await fixture(t);await f.post('/api/watch/start');await fs.mkdir(path.join(f.dir,'app-shutdown.json'));
+ await f.service.close();const disk=JSON.parse(await fs.readFile(path.join(f.dir,'runtime.json'),'utf8'));assert.equal(disk.watch.status,'interrupted');await assert.rejects(f.state);assert.equal(errors.length,1);assert.match(errors[0],/No se pudo solicitar el cierre del controlador/);
 });
 
 test('API: importar cuenta requiere token y origen local y no escribe datos rechazados',async t=>{
