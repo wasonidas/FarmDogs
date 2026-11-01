@@ -10,9 +10,10 @@ const {atomicJson}=require('./store.cjs');
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const SHA=/^[0-9a-f]{64}$/i;
 const TERMINAL=new Set(['error','cancelled']);
-const CRITICAL=new Set(['lookup','confirm_join']);
+const CRITICAL=new Set(['lookup','confirm_join','restart_continue']);
 const NAVIGATION=new Set(['splash_continue','main_deploy','community','join_by_id','type_join_id']);
 const FORM=new Set(['join_id_input','join_id_ready']);
+const SAFE_PREINPUT_REJECTIONS=new Set(['operator_input','game_not_foreground','cursor_obstructed','cursor_position_unconfirmed','game_window_changed','stale_target','main_deploy_disabled']);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const safeText=value=>String(value?.message||value||'Error local.').replace(/[\u0000-\u001f]/g,' ').slice(0,250);
 
@@ -21,7 +22,7 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
  const executable=path.join(root,'bin','WardogsEntry.exe'),directory=path.join(dataDir,'entry-screen-monitor');
  let current=null,generation=0,closed=false,startPending=false,tickPending=null,pendingAction=null,rawCapture=null;
  let watcher=null,binding=null,startedMono=null,budgetMs=0,lastActionMono=-Infinity,lastCaptureAt=-Infinity,lastActionAt=-Infinity;
- let typedJoinId=null,lastSection=null,chain={},attempts=new Map(),actionFrames=new Set(),focusAttempted=false,lastFocusMono=-Infinity;
+ let typedJoinId=null,lastSection=null,chain={},attempts=new Map(),actionFrames=new Set(),focusAttempted=false,lastFocusMono=-Infinity,recoveryPlan=null,restartPermit=false;
  const emit=(name,details)=>{try{event(name,details);}catch{}};
  const reader=createScreenReader({root,dataDir,directory,now,run,classify:report=>{rawCapture=report;return classifyGameScreen(report);}});
  const same=token=>!closed&&current&&!current.stopped&&!TERMINAL.has(current.phase)&&generation===token;
@@ -34,6 +35,7 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
     cap.sha256===createHash('sha256').update(fs.readFileSync(executable)).digest('hex');
   }catch{return false;}
  }
+ function recoveryAvailable(){try{return available()&&JSON.parse(fs.readFileSync(path.join(root,'bin','entry-capabilities.json'),'utf8')).restartRecovery===true;}catch{return false;}}
  const blocking=ownerId=>!!pendingAction&&(!ownerId||pendingAction.ownerId===ownerId);
  function view(){return current?structuredClone({...current,blocking:blocking(current.sessionId)}):null;}
  function state(phase,reason,extra={}){
@@ -61,13 +63,31 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   const ordered=[...groups.values()].sort((a,b)=>b.modified-a.modified);
   for(const group of ordered.slice(15))for(const file of group.files){const stat=await fsp.lstat(file).catch(()=>null);if(stat?.isFile()&&!stat.isSymbolicLink())await fsp.unlink(file).catch(()=>{});}
  }
+ function watchReportSummary(report,ownerId){
+  if(!report||typeof report!=='object')return {reportAt:null,lastStatus:'other',lastReason:null,schemaMatches:false,reportOwnerMatches:false,reportServiceMatches:false};
+  const at=typeof report.at==='string'?Date.parse(report.at):NaN;
+  return {reportAt:Number.isFinite(at)?new Date(at).toISOString():null,lastStatus:['watching','cancelled','closed'].includes(report.status)?report.status:'other',lastReason:report.reason==null?null:['operator_stop','watch_stopped','service_closed','deadline_reached'].includes(report.reason)?report.reason:'other',schemaMatches:report.format==='farmdogs-entry-watch-v1',reportOwnerMatches:report.sessionId===ownerId,reportServiceMatches:report.servicePid===process.pid};
+ }
+ function rememberWatchDiagnostic(code,{ownerId,owned,startup=false,report=undefined,readError=null}={}){
+  // Freeze the first unhealthy observation before cooperative cleanup rewrites
+  // the report to closed/watch_stopped. Only allowlisted scalars leave here.
+  if(!current||current.sessionId!==ownerId||current.stopped||current.watchDiagnostic)return;
+  const fromCurrentRead=report!==undefined,summary=fromCurrentRead?watchReportSummary(report,ownerId):owned?.lastReportSummary||null,age=summary?.reportAt?now()-Date.parse(summary.reportAt):NaN;
+  const diagnostic={format:'farmdogs-entry-watch-diagnostic-v1',code,startup:startup===true,failure:code!=='operator_stop',at:new Date(now()).toISOString(),reportObserved:!!summary,reportFromCurrentRead:fromCurrentRead,reportAgeMilliseconds:Number.isFinite(age)?Math.round(age):null,reportAt:summary?.reportAt||null,lastStatus:summary?.lastStatus||null,lastReason:summary?.lastReason||null,schemaMatches:summary?.schemaMatches??null,reportOwnerMatches:summary?.reportOwnerMatches??null,reportServiceMatches:summary?.reportServiceMatches??null,watcherOwnerMatches:owned?.ownerId===ownerId,childExited:owned?.exited===true,childExitCode:Number.isInteger(owned?.exitCode)?owned.exitCode:null,childExitSignal:['SIGHUP','SIGINT','SIGQUIT','SIGABRT','SIGKILL','SIGTERM','SIGBREAK'].includes(owned?.exitSignal)?owned.exitSignal:null,childKilled:owned?.child?.killed===true,stopRequested:owned?.stopRequested===true,readError:['ENOENT','EACCES','EPERM','EISDIR','ELOOP','EINVAL','EIO','ENOTDIR','invalid_report'].includes(readError)?readError:null};
+  current={...current,watchDiagnostic:diagnostic};
+  emit('game_entry_watch_diagnostic',{sessionId:ownerId,server:current.server,diagnostic:structuredClone(diagnostic)});
+ }
  async function watchHealth({startup=false}={}){
-  if(!watcher||watcher.ownerId!==current?.sessionId)throw Error('El monitor de parada no pertenece a esta sesión.');
-  const report=await readReport(watcher.file,16384);
-  if(report.format!=='farmdogs-entry-watch-v1'||report.sessionId!==current.sessionId||report.servicePid!==process.pid)throw Error('La identidad del monitor de parada no es válida.');
-  if(report.status==='cancelled'&&report.reason==='operator_stop'){cancel();const error=Error('Detenido con F8.');error.code='ENTRY_CANCELLED';throw error;}
+  const ownerId=current?.sessionId,owned=watcher;
+  if(!watcher||watcher.ownerId!==current?.sessionId){rememberWatchDiagnostic('watcher_owner_mismatch',{ownerId,owned,startup});throw Error('El monitor de parada no pertenece a esta sesión.');}
+  let report;
+  try{report=await readReport(watcher.file,16384);}
+  catch(error){if(!startup||error.code!=='ENOENT')rememberWatchDiagnostic('report_read_failure',{ownerId,owned,startup,readError:error.code||'invalid_report'});throw error;}
+  owned.lastReportSummary=watchReportSummary(report,ownerId);
+  if(report?.format!=='farmdogs-entry-watch-v1'||report.sessionId!==current.sessionId||report.servicePid!==process.pid){rememberWatchDiagnostic('report_identity_invalid',{ownerId,owned,startup,report});throw Error('La identidad del monitor de parada no es válida.');}
+  if(report.status==='cancelled'&&report.reason==='operator_stop'){rememberWatchDiagnostic('operator_stop',{ownerId,owned,startup,report});cancel();const error=Error('Detenido con F8.');error.code='ENTRY_CANCELLED';throw error;}
   const age=now()-Date.parse(report.at);
-  if(!Number.isFinite(age)||age<0||age>3000||report.status!=='watching'||watcher.exited||watcher.child?.killed===true)throw Error(startup?'No se pudo preparar la parada F8.':'Se perdió el monitor de parada F8; no se enviarán más entradas.');
+  if(!Number.isFinite(age)||age<0||age>3000||report.status!=='watching'||watcher.exited||watcher.child?.killed===true){rememberWatchDiagnostic('watch_unhealthy',{ownerId,owned,startup,report});throw Error(startup?'No se pudo preparar la parada F8.':'Se perdió el monitor de parada F8; no se enviarán más entradas.');}
   return true;
  }
  async function stop({ownerId,reason='Entrada detenida.'}={}){
@@ -83,18 +103,27 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   if(action){let timer;try{await Promise.race([action.catch(()=>{}),new Promise(resolve=>{timer=setTimeout(resolve,4000);})]);}finally{clearTimeout(timer);}}
   return view();
  }
- async function start({id,server,joinId,endAt,initialFocus:focusMode='driver'}={}){
+ async function start({id,server,joinId,endAt,initialFocus:focusMode='driver',recovery=null}={}){
   if(closed||startPending||active()||blocking())throw Error('Ya hay una entrada automática activa o deteniéndose.');
   if(!UUID.test(id||'')||!Number.isInteger(server)||server<1||server>5||!UUID.test(joinId||''))throw Error('Destino de entrada no válido.');
-  if(!['driver','desktop'].includes(focusMode))throw Error('Modo de foco inicial no válido.');
+  if(!['driver','desktop','none'].includes(focusMode)||focusMode==='none'&&!recovery||recovery&&focusMode!=='none')throw Error('Modo de foco inicial no válido.');
   const at=now(),end=Date.parse(endAt),mono=monoNow();
   if(!Number.isFinite(at)||!Number.isFinite(mono)||!Number.isFinite(end)||end<=at||end-at>720*60000)throw Error('Duración de entrada no válida.');
   if(!available())throw Error('Compila o actualiza el controlador de entrada automática.');
+  let plan=null;
+  if(recovery){
+   if(!recoveryAvailable())throw Error('El controlador no permite recuperar reinicios de servidor.');
+   const detected=Date.parse(recovery.detectedAt);
+   if(!['id','rootEntryId','previousEntryId','seedingId','frameId'].every(key=>UUID.test(recovery[key]||''))||recovery.previousEntryId===id||!Number.isInteger(recovery.gamePid)||recovery.gamePid<1||!Number.isSafeInteger(recovery.gameWindow)||recovery.gameWindow<1||!Number.isFinite(detected)||detected>at||at-detected>5000||Date.parse(recovery.endAt)!==end)throw Error('Permiso interno de recuperación no válido.');
+   plan={format:'farmdogs-entry-recovery-v1',recoveryId:recovery.id,entryId:id,root:path.resolve(root),dataDirectory:path.resolve(dataDir),servicePid:process.pid,rootEntryId:recovery.rootEntryId,previousEntryId:recovery.previousEntryId,seedingId:recovery.seedingId,gamePid:recovery.gamePid,gameWindow:recovery.gameWindow,detectedAt:new Date(detected).toISOString(),frameId:recovery.frameId,endAt:new Date(end).toISOString(),createdAt:new Date(at).toISOString()};
+  }
   if(current&&!current.stopped)await stop({ownerId:current.sessionId,reason:'Preparando una sesión nueva.'});
   await fsp.mkdir(dataDir,{recursive:true});const ownDirectory=await fsp.lstat(dataDir);
   if(!ownDirectory.isDirectory()||ownDirectory.isSymbolicLink())throw Error('Directorio local de entrada no válido.');
   generation++;const token=generation;startedMono=mono;budgetMs=end-at;binding=null;typedJoinId=null;lastSection=null;chain={};attempts=new Map();actionFrames=new Set();lastActionMono=-Infinity;lastActionAt=-Infinity;lastCaptureAt=-Infinity;rawCapture=null;focusAttempted=false;lastFocusMono=-Infinity;reader.stop();
-  current={sessionId:id,server,joinId,endAt:new Date(end).toISOString(),phase:'waiting_game',at:new Date(at).toISOString(),capturedAt:null,frameId:null,gamePid:null,gameWindow:null,chainConfirmed:false,operatorStopped:false,stopped:false,focusAttempted:false,initialFocusMode:focusMode,reason:'Preparando F8 y esperando Wardogs en primer plano.'};
+  recoveryPlan=plan;restartPermit=!!plan;
+  if(plan){const planFile=path.join(dataDir,'entry-recovery-'+id+'.json');if(fs.existsSync(planFile))throw Error('El permiso de recuperación ya existe. Inicia una entrada nueva.');atomicJson(planFile,plan);binding={gamePid:plan.gamePid,gameWindow:plan.gameWindow,width:null,height:null};focusAttempted=true;}
+  current={sessionId:id,server,joinId,endAt:new Date(end).toISOString(),phase:'waiting_game',at:new Date(at).toISOString(),capturedAt:null,frameId:null,gamePid:null,gameWindow:null,chainConfirmed:false,operatorStopped:false,stopped:false,focusAttempted:!!plan,initialFocusMode:focusMode,...(plan?{recoveryId:plan.recoveryId}:{}),reason:'Preparando F8 y esperando Wardogs en primer plano.'};
   const file=path.join(dataDir,'entry-watch-'+id+'.json');startPending=true;
   try{
    watcher={ownerId:id,file,child:null,exited:false,stopRequested:false};const owned=watcher;
@@ -124,7 +153,7 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   return true;
  }
  async function initialFocus(token){
-  if(!same(token)||current.initialFocusMode==='desktop'||focusAttempted||monoNow()-lastFocusMono<2000)return;
+  if(!same(token)||current.initialFocusMode!=='driver'||focusAttempted||monoNow()-lastFocusMono<2000)return;
   await watchHealth();if(!same(token))return;
   const ownerId=current.sessionId,issued=now(),file=path.join(dataDir,'entry-focus-'+ownerId+'.json');lastFocusMono=monoNow();
   const promise=(async()=>{
@@ -151,6 +180,7 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
  }
  function actionAllowed(action,screen){
   if(!action||!NAVIGATION.has(action.key)&&!CRITICAL.has(action.key)||!['click','replace_join_id','press_start'].includes(action.kind))throw Error('Paso de entrada sin confirmar.');
+  if(action.key==='restart_continue'&&(!recoveryPlan||!restartPermit||attempts.has(action.key)||action.kind!=='click'))throw Error('El permiso único para confirmar el reinicio ya no está disponible.');
   if((action.kind==='replace_join_id')!==(action.key==='type_join_id'))throw Error('Tipo de acción no válido.');
   if((action.kind==='press_start')!==(action.key==='splash_continue'))throw Error('Tipo de inicio no válido.');
   const responseWait=action.key==='splash_continue'&&attempts.has(action.key)?8000:800;
@@ -163,7 +193,7 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   return true;
  }
  function verifyCriticalTarget(action){
-  if(!CRITICAL.has(action.key))return;
+  if(!CRITICAL.has(action.key)&&!recoveryPlan)return;
   let target;
   // The injected reader uses the existing trusted public catalogue. No name or
   // mode suffix authorizes a connection, and no new network request is made here.
@@ -173,35 +203,49 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   if(!UUID.test(target.joinId||'')||target.joinId.toLowerCase()!==current.joinId.toLowerCase())throw Error('El ID de entrada del servidor ha cambiado. Actualiza los servidores e inicia una entrada nueva.');
   const age=now()-Date.parse(target.sourceAt);
   if(target.trusted===false||target.online===false||target.stale===true||!Number.isFinite(age)||age< -60000||age>90000)throw Error('La fuente del servidor está antigua, sin conexión o sin confirmar. Actualiza los servidores e inicia una entrada nueva.');
+  if(recoveryPlan&&Date.parse(target.sourceAt)<=Date.parse(recoveryPlan.detectedAt))throw Error('Esperando una fuente oficial posterior al reinicio.');
+  if(recoveryPlan&&(target.trusted!==true||target.online!==true||age<0))throw Error('El destino de recuperación no tiene una fuente oficial reciente.');
  }
  async function execute(action,screen,raw,token){
   if(!same(token)||!actionAllowed(action,screen))return;
   await watchHealth();if(!same(token))return;
   await pruneActions().catch(error=>emit('game_entry_cache_warning',{message:safeText(error)}));if(!same(token))return;
   verifyCriticalTarget(action);
-  const issued=now(),id=randomUUID(),command={format:'farmdogs-entry-action-v1',id,sessionId:current.sessionId,issuedAt:new Date(issued).toISOString(),expiresAt:new Date(Math.min(issued+3000,Date.parse(current.endAt))).toISOString(),endAt:current.endAt,gamePid:screen.gamePid,gameWindow:screen.gameWindow,width:raw.width,height:raw.height,frameId:screen.frameId,frameCapturedAt:screen.capturedAt,framePath:raw.source.path,frameSha256:raw.source.sha256,kind:action.kind,control:action.key,bounds:action.bounds,...(action.anchorBounds?{anchorBounds:action.anchorBounds}:{}),...(action.kind==='replace_join_id'?{joinId:current.joinId}:{})};
+  const issued=now(),id=randomUUID(),command={format:'farmdogs-entry-action-v1',id,sessionId:current.sessionId,issuedAt:new Date(issued).toISOString(),expiresAt:new Date(Math.min(issued+3000,Date.parse(current.endAt))).toISOString(),endAt:current.endAt,gamePid:screen.gamePid,gameWindow:screen.gameWindow,width:raw.width,height:raw.height,frameId:screen.frameId,frameCapturedAt:screen.capturedAt,framePath:raw.source.path,frameSha256:raw.source.sha256,kind:action.kind,control:action.key,bounds:action.bounds,...(action.anchorBounds?{anchorBounds:action.anchorBounds}:{}),...(action.kind==='replace_join_id'?{joinId:current.joinId}:{}),...(action.key==='restart_continue'?{recoveryId:recoveryPlan.recoveryId,restartHeaderBounds:action.restartHeaderBounds,restartMessageBounds:action.restartMessageBounds}:{})};
   const commandFile=path.join(dataDir,'entry-action-'+id+'.json'),resultFile=path.join(dataDir,'entry-result-'+id+'.json'),ownerId=current.sessionId;
   atomicJson(commandFile,command);if(!same(token))return;
   actionFrames.add(screen.frameId);attempts.set(action.key,(attempts.get(action.key)||0)+1);lastActionMono=monoNow();
+  if(recoveryPlan)restartPermit=false;
   const promise=(async()=>{
    try{
     await run(executable,['--execute',commandFile,resultFile],{cwd:root,windowsHide:true,timeout:4000,maxBuffer:65536});
     const result=await readReport(resultFile),age=now()-Date.parse(result.at);
     if(result.format!=='farmdogs-entry-result-v1'||result.id!==id||result.sessionId!==ownerId||!Number.isFinite(age)||age<0||age>5000||Date.parse(result.at)<issued||Date.parse(result.at)>Date.parse(command.expiresAt))throw Error('El resultado de entrada no se puede verificar.');
     if(!same(token))return;
-    current={...current,lastAction:{id,key:action.key,status:result.status,reason:result.reason||null,at:result.at}};
+    current={...current,lastAction:{id,key:action.key,status:result.status,reason:result.reason||null,inputAttempted:typeof result.inputAttempted==='boolean'?result.inputAttempted:null,at:result.at}};
     if(result.status==='cancelled'&&result.reason==='operator_stop'){cancel();return;}
     if(result.success!==true||result.status!=='completed'){
+     if(result.reason==='input_privilege_mismatch'){current={...current,inputPermission:'requires_elevation'};const error=Error('Wardogs está abierto con permisos superiores. Cierra FarmDogs por completo y vuelve a abrirla como administrador, o abre ambos con permisos normales.');error.code='ENTRY_INPUT_PRIVILEGES';throw error;}
      if(['invalid_control','invalid_action'].includes(result.reason)){const error=Error('El controlador no reconoce este paso. Reabre FarmDogs con la versión más reciente.');error.code='ENTRY_PROTOCOL_MISMATCH';throw error;}
      if(result.reason==='input_release_failed'){const error=Error('El estado de las teclas es incierto. Entrada detenida.');error.code='ENTRY_UNSAFE_INPUT';throw error;}
+     // Only a verified, explicit pre-input rejection can retain a critical
+     // lookup/join permit. A restart ACK may already be claimed before input.
+     if(action.key!=='restart_continue'&&result.success===false&&result.status==='rejected'&&result.inputAttempted===false&&SAFE_PREINPUT_REJECTIONS.has(result.reason)){
+      const attemptsSoFar=attempts.get(action.key)||0;if(attemptsSoFar<=1)attempts.delete(action.key);else attempts.set(action.key,attemptsSoFar-1);
+      // Wardogs can mask the ID. After intervening input/focus, a prior write
+      // cannot attest that the user left the field unchanged: write it again.
+      if(action.key==='lookup'){typedJoinId=null;delete chain.typed;}
+      state(CRITICAL.has(action.key)?'joining':'navigating','El paso se interrumpió antes de pulsar. Esperando una captura nueva para continuar.');return;
+     }
      if(CRITICAL.has(action.key))throw Error('No se confirmó '+action.key+'; no se repetirá la conexión.');
      state('navigating','El paso no se completó; se comprobará una pantalla nueva.');return;
     }
     lastActionAt=Date.parse(result.at);emit('game_entry_action',{sessionId:ownerId,key:action.key,frameId:screen.frameId});
     if(action.key==='type_join_id'){typedJoinId=current.joinId;chain.typed={at:result.at,frameId:screen.frameId};}
+    else if(action.key==='restart_continue'){chain.restart_ack={at:result.at,frameId:screen.frameId};state('navigating','Reinicio confirmado una vez. Esperando un menú nuevo para reconstruir la conexión.');}
     else if(action.key==='lookup'){chain.lookup={at:result.at,frameId:screen.frameId};state('joining','Esperando la confirmación del servidor.');}
     else if(action.key==='confirm_join'){chain.confirm_join={at:result.at,frameId:screen.frameId};current={...current,chainConfirmed:true};state('joining','Servidor confirmado. Esperando la entrada y el selector de equipo.');}
-   }catch(error){if(same(token)){if(error.code==='ENTRY_PROTOCOL_MISMATCH')fail(safeText(error));else if(error.code==='ENTRY_UNSAFE_INPUT'||CRITICAL.has(action.key)||action.key==='type_join_id')fail('Resultado de entrada incierto; no se enviarán más acciones: '+safeText(error));else state('navigating','No se confirmó el paso; se comprobará otra captura antes de intentarlo.');}}
+   }catch(error){if(same(token)){if(error.code==='ENTRY_PROTOCOL_MISMATCH'||error.code==='ENTRY_INPUT_PRIVILEGES')fail(safeText(error));else if(error.code==='ENTRY_UNSAFE_INPUT'||CRITICAL.has(action.key)||action.key==='type_join_id')fail('Resultado de entrada incierto; no se enviarán más acciones: '+safeText(error));else state('navigating','No se confirmó el paso; se comprobará otra captura antes de intentarlo.');}}
   })();
   const owned={ownerId,promise};pendingAction=owned;
   try{await promise;}finally{if(pendingAction===owned)pendingAction=null;}
@@ -223,10 +267,16 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   const captured=Date.parse(screen.capturedAt);
   if(captured<lastActionAt||captured<lastCaptureAt){state('waiting_game','Esperando una captura posterior al último paso.',{capturedAt:null,frameId:null});return;}
   lastCaptureAt=captured;
+  if(recoveryPlan&&captured<Date.parse(recoveryPlan.createdAt)){state('waiting_game','Esperando una captura nueva posterior al permiso de recuperación.');return;}
   const ownLookup=chain.typed&&chain.lookup?{server:current.server,joinId:current.joinId}:null;
-  const classified=classifyEntryScreen(raw,{server:current.server,joinId:current.joinId,typedJoinId,ownLookup});
+  const classified=classifyEntryScreen(raw,{server:current.server,joinId:current.joinId,typedJoinId,ownLookup,recovery:restartPermit});
   current={...current,capturedAt:screen.capturedAt,frameId:screen.frameId,gamePid:screen.gamePid,gameWindow:screen.gameWindow};
   if(classified.phase==='error'){fail(classified.reason||'La pantalla indica un problema de conexión.');return;}
+  if(recoveryPlan&&!chain.restart_ack&&classified.phase!=='restart_modal'){
+   if(classified.phase==='unknown')state('waiting_game','Esperando el modal exacto de reinicio antes de cualquier acción de recuperación.');
+   else fail('El modal de reinicio fue sustituido antes de confirmarlo. La recuperación se ha detenido.');
+   return;
+  }
   if(classified.phase!=='unknown'){
    const section=FORM.has(classified.phase)?'id_form':classified.phase;
    if(lastSection&&section!==lastSection)typedJoinId=null;
@@ -267,6 +317,6 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   return true;
  }
  async function close(){if(closed)return;const ownerId=current?.sessionId;closed=true;await stop({ownerId,reason:'El servicio local se cerró.'});}
- return {available,start,tick,checkReady,view,stop,blocking,active,close};
+ return {available,recoveryAvailable,start,tick,checkReady,view,stop,blocking,active,close};
 }
 module.exports={createGameEntry};

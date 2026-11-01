@@ -1,0 +1,307 @@
+name: Build and publish FarmDogs 0.5.3 R3 beta
+
+on:
+  push:
+    branches: ['beta/0.5.3-r3']
+
+permissions: {}
+
+concurrency:
+  group: farmdogs-beta-0.5.3-r3
+  cancel-in-progress: false
+
+env:
+  BETA_REF: refs/heads/beta/0.5.3-r3
+  PACKAGE_VERSION: '0.5.3'
+  RELEASE_TAG: v0.5.3-beta.1
+  EXPECTED_LATEST_TAG: v0.5.2
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      latest_id: ${{ steps.preflight.outputs.latest_id }}
+      archive_sha256: ${{ steps.artifacts.outputs.archive_sha256 }}
+    steps:
+      - name: Reject other events or refs
+        run: |
+          if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -cne 'refs/heads/beta/0.5.3-r3' -or $env:BETA_REF -cne $env:GITHUB_REF) { throw 'Only a push to beta/0.5.3-r3 is allowed.' }
+          if ($env:GITHUB_SHA -notmatch '^[0-9a-f]{40}$') { throw 'A complete source commit SHA is required.' }
+          if ($env:RELEASE_TAG -cne 'v0.5.3-beta.1' -or $env:PACKAGE_VERSION -cne '0.5.3' -or $env:EXPECTED_LATEST_TAG -cne 'v0.5.2') { throw 'The beta release constants changed.' }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+          architecture: x64
+      - name: Verify version, release absence and unchanged stable latest
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $releaseVersion = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          if ($releaseVersion -cne '0.5.3') { throw 'This workflow only builds package.json version 0.5.3.' }
+          function Assert-Absent([string]$Route, [string]$Label) {
+            $errorFile = Join-Path $env:RUNNER_TEMP ("farmdogs-beta-" + $Label + '.err')
+            $response = (& gh api --include $Route 2> $errorFile) -join "`n"
+            if ($LASTEXITCODE -eq 0) { throw "$Label already exists. Nothing will be overwritten." }
+            if ($response -notmatch '(?m)^HTTP/\S+\s+404(?:\s|$)') { throw "Could not confirm $Label is absent; refusing to continue." }
+          }
+          Assert-Absent "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" 'release'
+          Assert-Absent "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 'tag'
+          $latestJson = & gh api "repos/$env:GH_REPO/releases/latest"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the current stable latest release.' }
+          $latest = $latestJson | ConvertFrom-Json
+          if ($latest.tag_name -cne 'v0.5.2' -or $latest.draft -ne $false -or $latest.prerelease -ne $false -or $latest.id -notmatch '^\d+$') { throw 'Stable latest is not the expected v0.5.2 release.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "latest_id=$($latest.id)"
+          exit 0
+      - name: Check the Windows build requirements
+        run: |
+          $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
+          $metadata = Join-Path $env:WINDIR 'System32\WinMetadata'
+          $runtimeFacade = Join-Path $env:WINDIR 'Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.0.0.0__b03f5f7f11d50a3a\System.Runtime.dll'
+          foreach ($requiredFile in @((Join-Path $framework 'csc.exe'), (Join-Path $framework 'System.Runtime.WindowsRuntime.dll'), $runtimeFacade)) {
+            if (!(Test-Path -LiteralPath $requiredFile -PathType Leaf)) { throw "Missing Windows build dependency: $requiredFile" }
+          }
+          if (!(Test-Path -LiteralPath $metadata -PathType Container) -or !(Get-ChildItem -LiteralPath $metadata -Filter '*.winmd')) { throw 'The Windows WinRT metadata directory is unavailable.' }
+          $nodeLicense = Join-Path (Split-Path (Get-Command node).Source) 'LICENSE'
+          if (!(Test-Path -LiteralPath $nodeLicense -PathType Leaf)) { throw 'The official Node distribution LICENSE is required to bundle Node.' }
+          if (!(Test-Path -LiteralPath LICENSE -PathType Leaf)) { throw 'The FarmDogs source license is missing.' }
+          Get-Command tar.exe | Out-Null
+      - name: Test without game input
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'The test suite failed.' }
+      - name: Build the Windows components and portable
+        run: |
+          foreach ($buildScript in @('build:movement', 'build:reader', 'build:team-clicker', 'build:entry', 'build:updater', 'build:desktop', 'build:launcher', 'package:portable')) {
+            npm run $buildScript
+            if ($LASTEXITCODE -ne 0) { throw "Build failed: $buildScript" }
+          }
+      - name: Verify the bundled runtime and prepare the beta files
+        id: artifacts
+        run: |
+          $portableInfo = Get-Content -LiteralPath dist/latest-portable.json -Raw | ConvertFrom-Json
+          $probeReport = Join-Path $env:RUNNER_TEMP 'farmdogs-beta-portable-probe.json'
+          $probe = [System.Diagnostics.Process]::new()
+          $probe.StartInfo.FileName = Join-Path $portableInfo.folder 'FarmDogs.exe'
+          $probe.StartInfo.WorkingDirectory = $portableInfo.folder
+          $probe.StartInfo.UseShellExecute = $false
+          $probe.StartInfo.CreateNoWindow = $true
+          $probe.StartInfo.Environment['PATH'] = ''
+          $probe.StartInfo.Environment['NODE_OPTIONS'] = ''
+          $probe.StartInfo.ArgumentList.Add('--probe')
+          $probe.StartInfo.ArgumentList.Add($probeReport)
+          $probe.Start() | Out-Null
+          if (!$probe.WaitForExit(15000)) { $probe.Kill(); throw 'The portable probe timed out.' }
+          if ($probe.ExitCode -ne 0) { throw 'The portable probe failed.' }
+          $probeResult = Get-Content -LiteralPath $probeReport -Raw | ConvertFrom-Json
+          if (!$probeResult.success -or !$probeResult.bundledRuntime -or $probeResult.windowShown) { throw 'The portable did not pass its isolated-runtime probe.' }
+          if (Test-Path -LiteralPath (Join-Path $portableInfo.folder 'data')) { throw 'The probe unexpectedly created private data.' }
+          $releaseDirectory = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
+          New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+          $releaseArchive = Join-Path $releaseDirectory 'FarmDogs-portable.zip'
+          Copy-Item -LiteralPath $portableInfo.archive -Destination $releaseArchive
+          $archiveHash = (Get-FileHash -LiteralPath $releaseArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveHash -notmatch '^[0-9a-f]{64}$' -or $archiveHash -cne $portableInfo.sha256) { throw 'The archive checksum changed.' }
+          Set-Content -LiteralPath (Join-Path $releaseDirectory 'SHA256SUMS.txt') -Encoding ascii -Value "$archiveHash  FarmDogs-portable.zip"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "archive_sha256=$archiveHash"
+          $releaseNotes = @(
+            'FarmDogs v0.5.3-beta.1 para Windows x64; candidato R3 de la version 0.5.3.',
+            '',
+            'Beta publica, no version estable. El actualizador estable no instala betas.',
+            'R3 ajusta la region OCR de salud y conserva las tres anclas y la frescura de las capturas.',
+            '535 pruebas automatizadas superadas; R3 se ha comprobado con imagenes guardadas, sin nueva prueba live de R3.',
+            'La recuperacion acotada se valida en contratos automatizados; no se afirma una recuperacion real completa.',
+            'Descarga FarmDogs-portable.zip, extrae toda la carpeta y abre FarmDogs.exe.',
+            'Incluye Node; requiere Steam/Wardogs y Microsoft Edge WebView2.',
+            'Conserva tu carpeta data al actualizar. El paquete no incluye cuentas ni perfiles locales.',
+            'Comprueba la descarga con SHA256SUMS.txt. Lee el README para uso y limitaciones.'
+          )
+          Set-Content -LiteralPath (Join-Path $releaseDirectory 'RELEASE_NOTES.md') -Encoding utf8 -Value $releaseNotes
+      - uses: actions/upload-artifact@v4
+        with:
+          name: farmdogs-beta-0.5.3-r3
+          path: |
+            release-artifacts/FarmDogs-portable.zip
+            release-artifacts/SHA256SUMS.txt
+            release-artifacts/RELEASE_NOTES.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      EXPECTED_LATEST_ID: ${{ needs.build.outputs.latest_id }}
+      EXPECTED_ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+    steps:
+      - name: Reject other events or refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/beta/0.5.3-r3 && "$BETA_REF" == "$GITHUB_REF" ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" == v0.5.3-beta.1 && "$PACKAGE_VERSION" == 0.5.3 && "$EXPECTED_LATEST_TAG" == v0.5.2 ]]
+      - uses: actions/download-artifact@v4
+        with:
+          name: farmdogs-beta-0.5.3-r3
+          path: release-artifacts
+      - name: Verify the draft assets and publish only a prerelease; preserve stable latest
+        shell: bash
+        working-directory: release-artifacts
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess, tempfile
+
+          repo = os.environ['GH_REPO']
+          tag = os.environ['RELEASE_TAG']
+          sha = os.environ['GITHUB_SHA']
+          expected_hash = os.environ['EXPECTED_ARCHIVE_SHA256']
+          latest_id = os.environ['EXPECTED_LATEST_ID']
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo), 'Invalid repository'
+          assert tag == 'v0.5.3-beta.1' and os.environ['PACKAGE_VERSION'] == '0.5.3', 'Invalid beta version'
+          assert os.environ['GITHUB_EVENT_NAME'] == 'push' and os.environ['GITHUB_REF'] == 'refs/heads/beta/0.5.3-r3', 'Invalid event/ref'
+          assert re.fullmatch(r'[0-9a-f]{40}', sha), 'Invalid source commit'
+          assert re.fullmatch(r'[0-9a-f]{64}', expected_hash), 'Missing build checksum'
+          assert re.fullmatch(r'[1-9][0-9]*', latest_id), 'Missing stable release ID'
+
+          def api(method, endpoint, payload=None):
+              command = ['gh', 'api', '--method', method, endpoint]
+              data = None
+              if payload is not None:
+                  command += ['--input', '-']
+                  data = json.dumps(payload)
+              result = subprocess.run(command, input=data, capture_output=True, text=True, check=True)
+              return json.loads(result.stdout)
+
+          def absent(endpoint):
+              result = subprocess.run(['gh', 'api', '--include', endpoint], capture_output=True, text=True)
+              assert result.returncode != 0, 'Release/tag already exists; nothing will be overwritten'
+              assert re.search(r'(?m)^HTTP/\S+\s+404(?:\s|$)', result.stdout), 'Absence is unconfirmed; refusing to create'
+
+          def stable_latest():
+              current = api('GET', f'repos/{repo}/releases/latest')
+              assert current.get('tag_name') == 'v0.5.2', 'Stable latest changed'
+              assert str(current.get('id')) == latest_id, 'Stable release identity changed'
+              assert current.get('draft') is False and current.get('prerelease') is False, 'Unexpected stable state'
+              return current
+
+          def reject_existing_drafts_or_releases():
+              # A by-tag 404 alone must not be treated as absence of a draft.
+              # The write-scoped token enumerates authenticated releases too.
+              page = 1
+              while True:
+                  releases = api('GET', f'repos/{repo}/releases?per_page=100&page={page}')
+                  assert isinstance(releases, list), 'Invalid release inventory'
+                  assert all(isinstance(item, dict) for item in releases), 'Invalid release record'
+                  assert not any(item.get('tag_name') == tag for item in releases), 'An existing release/draft must not be overwritten'
+                  if len(releases) < 100:
+                      return
+                  page += 1
+                  assert page <= 100, 'Could not exhaust release inventory safely'
+
+          def own_release(release, release_id, draft):
+              assert type(release.get('id')) is int and release['id'] == release_id, 'Release identity changed'
+              assert release.get('tag_name') == tag and release.get('target_commitish') == sha, 'Release source changed'
+              assert release.get('draft') is draft and release.get('prerelease') is True, 'Unexpected beta release state'
+
+          def verify_tag_source(allow_absent=False):
+              reference = f'repos/{repo}/git/ref/tags/{tag}'
+              if allow_absent:
+                  result = subprocess.run(['gh', 'api', '--include', reference], capture_output=True, text=True)
+                  if result.returncode != 0:
+                      assert re.search(r'(?m)^HTTP/\S+\s+404(?:\s|$)', result.stdout), 'Could not verify draft tag state'
+                      return
+              target = api('GET', reference).get('object', {})
+              for _ in range(5):
+                  if target.get('type') == 'commit':
+                      assert target.get('sha') == sha, 'Beta tag points to a different source commit'
+                      return
+                  assert target.get('type') == 'tag' and re.fullmatch(r'[0-9a-f]{40}', target.get('sha', '')), 'Invalid beta tag object'
+                  target = api('GET', f"repos/{repo}/git/tags/{target['sha']}").get('object', {})
+              raise RuntimeError('Could not resolve beta tag safely')
+
+          names = {'FarmDogs-portable.zip', 'SHA256SUMS.txt', 'RELEASE_NOTES.md'}
+          assert {item.name for item in pathlib.Path('.').iterdir()} == names, 'Unexpected artifact files'
+          assert all(pathlib.Path(name).is_file() and not pathlib.Path(name).is_symlink() for name in names), 'Unsafe artifact file'
+          archive = pathlib.Path('FarmDogs-portable.zip')
+          checksums = pathlib.Path('SHA256SUMS.txt')
+          assert checksums.read_text(encoding='ascii').splitlines() == [expected_hash + '  FarmDogs-portable.zip'], 'Unexpected checksum manifest'
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected_hash, 'Archive differs from the build job'
+          asset_paths = [archive, checksums]
+          expected_assets = {item.name: {'size': item.stat().st_size, 'sha256': hashlib.sha256(item.read_bytes()).hexdigest()} for item in asset_paths}
+
+          # Recheck under the write-scoped job immediately before any mutation.
+          stable_latest()
+          reject_existing_drafts_or_releases()
+          absent(f'repos/{repo}/releases/tags/{tag}')
+          absent(f'repos/{repo}/git/ref/tags/{tag}')
+          try:
+              # CREATE explicitly opts out of latest and never publishes the draft.
+              created = api('POST', f'repos/{repo}/releases', {
+                  'tag_name': tag, 'target_commitish': sha, 'name': 'FarmDogs ' + tag,
+                  'body': pathlib.Path('RELEASE_NOTES.md').read_text(encoding='utf-8-sig'),
+                  'draft': True, 'prerelease': True, 'make_latest': 'false'
+              })
+              release_id = created.get('id')
+              assert type(release_id) is int and release_id > 0, 'Missing newly created release ID'
+              own_release(created, release_id, True)
+              endpoint = f'repos/{repo}/releases/{release_id}'
+              for item in asset_paths:
+                  # The numeric ID is from this CREATE, never a pre-existing tag.
+                  upload = f'https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={item.name}'
+                  content_type = 'application/zip' if item.suffix == '.zip' else 'text/plain'
+                  result = subprocess.run(['gh', 'api', '--method', 'POST', '-H', 'Content-Type: ' + content_type,
+                                           '--input', str(item), upload], capture_output=True, text=True, check=True)
+                  asset = json.loads(result.stdout)
+                  assert asset.get('name') == item.name and asset.get('state') == 'uploaded', 'Asset upload failed'
+
+              def verify_assets(release, draft):
+                  own_release(release, release_id, draft)
+                  assets = release.get('assets', [])
+                  assert len(assets) == 2 and {item.get('name') for item in assets} == set(expected_assets), 'Incomplete/unexpected assets'
+                  with tempfile.TemporaryDirectory(prefix='farmdogs-beta-verify-') as temporary:
+                      for asset in assets:
+                          name = asset['name']
+                          expected = expected_assets[name]
+                          assert asset.get('state') == 'uploaded' and asset.get('size') == expected['size'], 'Asset metadata mismatch'
+                          asset_id = asset.get('id')
+                          assert type(asset_id) is int and asset_id > 0, 'Invalid asset identity'
+                          downloaded = pathlib.Path(temporary) / name
+                          with downloaded.open('wb') as output:
+                              subprocess.run(['gh', 'api', '-H', 'Accept: application/octet-stream',
+                                              f'repos/{repo}/releases/assets/{asset_id}'], stdout=output, check=True)
+                          assert hashlib.sha256(downloaded.read_bytes()).hexdigest() == expected['sha256'], 'Downloaded asset checksum mismatch'
+
+              verify_assets(api('GET', endpoint), True)
+              verify_tag_source(allow_absent=True)
+              # EDIT publishes only our verified prerelease, never a stable/latest.
+              edited = api('PATCH', endpoint, {'draft': False, 'prerelease': True, 'make_latest': 'false'})
+              own_release(edited, release_id, False)
+              assert edited.get('published_at'), 'The prerelease was not published'
+              verify_assets(api('GET', endpoint), False)
+              verify_tag_source()
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write('### FarmDogs beta prerelease published and verified\n\n')
+                  summary.write(f'Tag `{tag}`, source `{sha}`; published prerelease, never stable/latest.\n\n')
+                  summary.write('Both uploaded assets were downloaded and SHA256-verified. Stable latest remains `v0.5.2`.\n')
+          finally:
+              # Also check after a failed upload/edit. Never repair or move /latest.
+              stable_latest()
+          PY

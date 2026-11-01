@@ -6,9 +6,13 @@
 
 FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automática por ID, presencia de tu clan, selección de equipo y movimiento temporal anti-AFK. Funciona en tu PC y guarda allí su configuración. Tiene identidad visual propia: un perro tecnológico y tipografía Rajdhani Bold. Es un proyecto independiente, sin afiliación con Wardogs ni Wardogs Spain.
 
-[Descargar el portable](https://github.com/wasonidas/FarmDogs/releases/latest) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
+[Descargar el ZIP para Windows](https://github.com/wasonidas/FarmDogs/releases/latest/download/FarmDogs-portable.zip) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-**FarmDogs Launcher 0.5.2** mejora la entrada programada y por actividad, el reconocimiento del personaje y la cancelación por F8. Conserva las correcciones de componentes y cierre de la 0.5.1, la presencia del clan y el equipo aleatorio o elegido. Consulta las comprobaciones y los límites de la versión más abajo.
+**FarmDogs Launcher 0.5.4** reúne las mejoras de entrada automática, selección de equipo y reconocimiento del personaje en una ventana más compacta, con icono propio. El usuario confirmó el recorrido completo de entrada, elección de equipo y anti-AFK de esta versión.
+
+En **JUGAR**, marca **Activar anti-AFK al desplegar** si quieres que el movimiento quede preparado al entrar. Usa los ajustes de Anti-AFK y su duración empieza al desplegar, sin consumir la espera en cola. La casilla es opcional, no necesita conectar Steam a FarmDogs ni esperar población y solo actúa tras verificar la entrada y el personaje con manos vacías.
+
+El selector mantiene los clics sobre el color elegido aunque esté apagado por equilibrio. Si mueves el launcher o cambias de aplicación, pausa y vuelve a comprobar el selector al regresar al juego. **F8** y **Detener** cancelan. Las actualizaciones automáticas esperan a que FarmDogs esté inactivo. Consulta el [estado de validación](#estado-de-la-versión) para los casos que todavía requieren pruebas reales.
 
 ## Descargar y abrir
 
@@ -24,7 +28,7 @@ Necesitas Windows 10/11 x64, el runtime Microsoft Edge WebView2, reconocimiento 
 
 ### Actualizar sin perder tus ajustes
 
-**Desde 0.3.0:** la primera actualización a una versión con actualizador es manual. Cierra FarmDogs Launcher, extrae toda la versión nueva en otra carpeta y pasa tu carpeta `data` a esa carpeta antes de abrirla. Ahí se guardan los ajustes y el perfil de cuenta. No compartas esa carpeta con el clan: cada persona debe utilizar sus propios datos.
+**Si tu versión es antigua o no aparece Actualizaciones:** descarga una vez el ZIP nuevo. Cierra FarmDogs Launcher y sustituye sus archivos por los de la versión nueva, conservando tu carpeta `data`. Ahí se guardan los ajustes y el perfil de cuenta. No compartas esa carpeta con el clan: cada persona debe utilizar sus propios datos.
 
 **Desde 0.4.0:** la tarjeta **Actualizaciones** permite dejar marcada **Actualizar automáticamente**, usar **Buscar actualización** o pulsar **Instalar y reabrir**. FarmDogs consulta únicamente las versiones estables de `wasonidas/FarmDogs`, descarga el portable y comprueba su SHA-256, las rutas y el manifiesto de archivos.
 
@@ -70,8 +74,9 @@ Este modo no abre el juego, redespliega ni reconecta al personaje. Tampoco compr
 En **JUGAR** verás los cinco servidores de Wardogs Spain y su población, consultada cada 30 segundos.
 
 1. Elige servidor y **Equipo**: **Aleatorio · primero disponible**, azul, rojo o verde.
-2. Pulsa **Entrar automáticamente** y deja **Wardogs en primer plano**.
-3. Sigue la tarjeta **Entrada automática**: Abrir juego → Entrar al servidor → Elegir equipo → Desplegar.
+2. Si quieres movimiento al entrar, marca **Activar anti-AFK al desplegar**. Usa la duración, intervalo y paso de la tarjeta Anti-AFK; no hace falta confirmar después que ya estás desplegado.
+3. Pulsa **Entrar automáticamente**. El launcher se minimiza al ceder el foco inicial al juego; deja **Wardogs en primer plano**.
+4. Sigue la tarjeta **Entrada automática**: Abrir juego → Entrar al servidor → Elegir equipo → Desplegar.
 
 FarmDogs reconoce las pantallas del juego, abre la entrada por ID, escribe el destino, busca el servidor y comprueba su confirmación antes de conectar. Después intenta entrar en el equipo elegido hasta leer **DESPLEGANDO** y espera un HUD reciente del personaje desplegado. Abrir el juego, escribir el ID o ver el selector no bastan para declarar la entrada completada.
 
@@ -79,17 +84,19 @@ FarmDogs reconoce las pantallas del juego, abre la entrada por ID, escribe el de
 
 El botón **Desplegar** del menú principal aparece gris mientras carga y todavía no acepta clics. FarmDogs espera a reconocerlo a pleno color antes de pulsarlo. En el selector de equipos mantiene el clic continuo aunque el color del equipo esté apagado por equilibrio.
 
-Al comenzar intenta poner Wardogs delante **una sola vez** y continúa desde su pantalla de inicio cuando la reconoce. Si Windows no permite activarlo, te pide volver al juego. Después respeta **Alt+Tab**: no recupera el foco repetidamente. Mantén el juego delante durante la entrada; si sales mientras el autoclic está en marcha, tendrás que iniciar otro intento. **F8** cancela también durante el arranque y el reconocimiento.
+Al comenzar intenta poner Wardogs delante **una sola vez** y continúa desde su pantalla de inicio cuando la reconoce. Si Windows no permite activarlo, te pide volver al juego. Después respeta **Alt+Tab**: no recupera el foco repetidamente. Si sales durante la selección automática, pausa sin clicar y conserva la espera; al volver exige reconocer de nuevo el selector de la misma ventana. **F8** cancela también durante el arranque y el reconocimiento.
 
 Mientras avanza, la app muestra un aviso grande: **FarmDogs está trabajando. No necesitas tocar nada**, junto al paso actual. Las cargas pueden tardar: espera a que reconozca la siguiente pantalla y deja Wardogs delante. **F8** o **Detener entrada** siguen disponibles durante la espera.
 
-Puedes empezar con Steam y el juego cerrados, o desde los menús de entrada de Wardogs. Si ya estás desplegado y solo quieres movimiento, usa Anti-AFK o la confirmación manual de SEEDING. Durante la cadena, una pantalla no reconocida queda en espera; un error de servidor, reinicio o regreso a un menú tras confirmar el destino detiene el intento. No hay reconexión automática. **Detener entrada** y **F8** cancelan sin volver a intentarlo solos.
+Puedes empezar con Steam y el juego cerrados, o desde los menús de entrada de Wardogs. Si ya estás desplegado y solo quieres movimiento, usa Anti-AFK o la confirmación manual de SEEDING. Durante la entrada, una pantalla no reconocida queda en espera; un error de servidor, reinicio o regreso a un menú tras confirmar el destino detiene el intento. La recuperación descrita en SEEDING se aplica sólo después de una entrada propia completada para seedear. **Detener entrada** y **F8** cancelan sin volver a intentarlo solos.
 
 Si la instalación no dispone del controlador de entrada, el botón muestra **Abrir Wardogs y copiar ID**. En ese modo completa tú la entrada y el despliegue. Si no se puede copiar el ID, sigue visible para copiarlo manualmente.
 
 ### Cuando el servidor está lleno
 
-FarmDogs reconoce la cola del servidor y espera plaza sin repetir la búsqueda ni abandonar la cola por su cuenta. Al entrar, continúa con el equipo elegido. **La cola consume la duración máxima de tu sesión**, igual que las cargas, la selección de equipo y el movimiento. Ajusta ese tiempo antes de empezar: no se añade otro plazo al llegar al selector. Al agotarse, la automatización termina.
+FarmDogs reconoce la cola del servidor y espera plaza sin repetir la búsqueda ni abandonar la cola por su cuenta. Al entrar, continúa con el equipo elegido. **La cola y la selección de equipo consumen el plazo de entrada**: no se reinicia al llegar al selector. Al agotarse, la automatización termina.
+
+La casilla **Activar anti-AFK al desplegar** tiene su propia duración, que empieza al confirmar el despliegue. En cambio, una sesión de **SEEDING** comparte su plazo entre búsqueda, entrada, espera y movimiento. La disponibilidad de un equipo no tiene un tiempo garantizado; la app muestra el tiempo restante cuando existe un plazo configurado.
 
 La parada del autoclic al leer **DESPLEGANDO** y el estado **Entrada completada** son pasos distintos. Para completar la entrada, FarmDogs también debe reconocer el HUD del personaje desplegado. El movimiento de SEEDING espera después sus propias condiciones.
 
@@ -121,11 +128,19 @@ El equipo de Seedear se conserva para Ahora, A una hora y Al haber actividad. Ca
 
 Si se cierran nuevas admisiones, pero la cuenta y el servidor siguen confirmando tu ciclo, aparece **Continuar seeding**. La sesión puede continuar sin abrir otra vez el juego.
 
-La programación y la búsqueda iniciadas desde el launcher pueden activar el juego una sola vez al comenzar la entrada. El permiso queda ligado al trabajo y a su destino; una intervención nueva fuera del juego durante el arranque lo revoca. Si Windows no cede el foco, FarmDogs avisa para volver al juego. Para cancelar una espera programada o por actividad, usa su botón Cancelar/Detener; F8 cancela los controles cuando la entrada ya está en marcha.
+La programación y la búsqueda iniciadas desde el launcher pueden activar el juego una sola vez al comenzar la entrada. El permiso queda ligado al trabajo y a su destino. Si estás moviendo o usando el launcher, espera a que termines antes de minimizarlo; si estás usando otra aplicación, conserva la espera sin quitarle el foco. Si Windows no cede el foco, FarmDogs avisa para volver al juego. Para cancelar una espera programada o por actividad, usa su botón Cancelar/Detener; F8 cancela los controles cuando la entrada ya está en marcha.
 
 La duración incluye búsqueda, entrada, espera y movimiento. Las programaciones necesitan el PC despierto, FarmDogs abierto y una sesión de Steam válida recordada; al entrar, Wardogs debe estar en primer plano. Se interrumpen al reiniciar y no ejecutan una hora perdida por más de un minuto. La búsqueda por actividad no lee mensajes de Discord ni acredita las ventajas de responder a una llamada del staff.
 
-El movimiento se pausa al abrir menús, perder el foco o no reconocer el HUD; solo reanuda con una captura válida nueva. El autoclic ya iniciado se cancela si pierde el foco. F8 o Detener cancelan la cadena y sus controles, sin rearmado automático.
+El movimiento se pausa al abrir menús, perder el foco o no reconocer el HUD; solo reanuda con una captura válida nueva. En modo automático, el autoclic pausa al perder el foco o con una tecla modificadora y exige reconocer de nuevo el selector al volver a la misma ventana. F8 o Detener cancelan la cadena y sus controles, sin rearmado automático.
+
+### Si el servidor se reinicia
+
+FarmDogs puede intentar **una sola reconexión al mismo servidor** cuando un seeding iniciado por la app pierde su entrada por un reinicio confirmado. Primero detiene el movimiento y espera dos lecturas oficiales válidas, hasta 15 minutos y siempre dentro de la duración original. La tarjeta muestra **Recuperando seeding** y **Esperando al servidor**; puedes cancelarla con F8 o Detener.
+
+Sólo cierra el aviso exacto de reinicio, comprueba de nuevo el destino y repite equipo y despliegue. No vuelve a abrir Steam ni pone el juego delante por la fuerza: déjalo en primer plano para continuar. La nueva partida vuelve a esperar el umbral configurado antes de mover al personaje.
+
+No se aplica a presencia confirmada manualmente, expulsiones AFK, mensajes desconocidos, cambios de ID o tareas que hayas detenido. Cerrar y volver a abrir FarmDogs tampoco reanuda un trabajo. Esta recuperación sigue pendiente de una prueba real completa.
 
 ## EQUIPO: entrar en el color de tu clan
 
@@ -138,7 +153,7 @@ No necesitas teclas de inicio, colocar el cursor ni guardar coordenadas. El inte
 
 Una vez reconocida la tarjeta, el clic continúa aunque el color se apague por equilibrio de equipos o desaparezca el selector. **ENTRANDO**, un cambio de color o la aparición del HUD no sustituyen la confirmación **DESPLEGANDO**.
 
-Antes de adquirir la tarjeta puedes alternar entre FarmDogs y el juego. Una vez clicando, perder el foco, cambiar la ventana o su tamaño, pulsar una tecla modificadora o un error cancela el intento. Para repetir, pulsa **Esperar equipo** otra vez. **Cancelar** y **F8** también terminan la espera o los clics.
+Puedes alternar entre FarmDogs y el juego. En modo automático, al perder el foco o mantener una tecla modificadora deja de clicar y conserva la espera; al volver requiere un reconocimiento nuevo del mismo proceso, ventana y tamaño. No reutiliza coordenadas de otra ventana. Mover el ratón o un color apagado no cancela la cadena; el cursor se vuelve a colocar en el equipo mientras el juego está delante. **Cancelar**, **F8**, el fin del plazo y los errores reales del controlador sí terminan la espera. No se bloquea el ratón: si navegas manualmente a otro servidor o eliges otro equipo, la cadena anterior no acredita ese cambio y no se promete conservar el destino.
 
 Cambiar color o velocidad durante la espera la cancela antes de aplicar los nuevos ajustes. Esta pestaña sirve cuando tú completas la entrada al servidor. En **JUGAR** o **SEEDING**, la cadena automática coordina el mismo selector y espera su desarme antes de entregar el control al movimiento. No actives dos automatismos por separado.
 
@@ -146,7 +161,7 @@ Cambiar color o velocidad durante la espera la cancela antes de aplicar los nuev
 
 FarmDogs avisa cuando una acción necesita **Wardogs en primer plano**. La ventana de aviso es grande, funciona con FarmDogs minimizada y no cambia la ventana activa. Se oculta al volver al juego. Distingue falta de foco de una pantalla o un HUD que no se reconoce.
 
-Si la selección de equipo se cancela por perder el foco, el aviso explica que debes reactivar **Esperar equipo**.
+Si la selección automática pausa por perder el foco, el estado lo indica y conserva el tiempo restante. Al volver al juego comprobará de nuevo el selector. Si termina por F8, Cancelar, plazo o un error, hay que iniciar una sesión nueva.
 
 - **Avisos con sonido:** activa o silencia el sonido de FarmDogs.
 - **Probar aviso:** presenta un ejemplo de tres segundos.
@@ -169,11 +184,12 @@ FarmDogs no gasta WSP ni compra VIP. Las reglas del servidor pueden cambiar; la 
 | Controlador no disponible o componentes distintos | Cierra FarmDogs y vuelve a extraer el portable completo conservando `data`. La app indica qué componente falta o no coincide; esto no significa que una actualización esté en curso. |
 | Seeding espera población | Revisa el umbral de seeding. Para una pausa en una partida, usa el acceso Anti-AFK independiente. |
 | Selector esperando | Debe verse el selector de facciones dentro de Wardogs. |
-| Selector detenido al cambiar de ventana | Vuelve a pulsar Esperar equipo y regresa al juego. |
+| Selector en pausa al cambiar de ventana | Vuelve a Wardogs; comprobará de nuevo el selector antes de continuar. F8 o Detener sí exigen iniciar una espera nueva. |
 | Entrada esperando una pantalla | Deja Wardogs delante, en los menús de entrada. Revisa el paso y el mensaje de Entrada automática; no hace clic sobre pantallas desconocidas. |
 | Wardogs se abre detrás de otra ventana | Vuelve al juego. FarmDogs solo intenta activarlo una vez al inicio y respeta tus cambios de ventana posteriores. |
 | Steam solicita inicio de sesión | Completa tú la autenticación. FarmDogs no introduce credenciales ni códigos de Steam Guard. |
 | Entrada detenida por un error | Revisa el motivo y vuelve a iniciarla desde la app. No reconecta ni repite búsquedas de resultado incierto. |
+| El monitor de seguridad dejó de responder | La app detiene las entradas y conserva el diagnóstico. No significa que hayas pulsado F8; revisa el error antes de iniciar otra sesión. |
 | Lleva tiempo en cola | Revisa la posición y el fin de sesión. La cola consume la duración máxima que elegiste. |
 | El autoclic terminó pero sigue Esperando despliegue | DESPLEGANDO ya detuvo los clics; falta reconocer el HUD. Mantén manos vacías, menús cerrados y el juego delante. |
 | Un botón está bloqueado | Detén el otro automatismo: movimiento, selector y programación no se ejecutan a la vez. |
@@ -192,17 +208,19 @@ El servicio local escucha en `127.0.0.1:24243`. FarmDogs consulta las fuentes de
 
 ## Estado de la versión
 
-La **0.5.2 supera 507 pruebas de fuente** e incorpora pruebas dirigidas de permiso de foco diferido, F8 durante solicitudes pendientes, cancelación del trabajo exacto y brújula compacta. Estas comprobaciones de código no sustituyen las pruebas reales descritas a continuación.
+La versión que origina **0.5.4 superó 579 pruebas automáticas** de lógica, API, interfaz y contratos nativos con plataformas simuladas. El usuario confirmó en el juego el recorrido **entrada automática → equipo elegido → despliegue → anti-AFK opcional**. Ese reporte se conserva como prueba de uso real de ese recorrido; no valida todos los casos posibles.
 
-La 0.5.2 completó una programación real desde el launcher con Steam y el juego cerrados: abrió ambos, entró al servidor #1, eligió aleatorio/verde, reconoció el HUD con brújula `064NE` y preparó seeding sin activación manual del juego. Con un jugador esperó correctamente el umbral de 20. F8 canceló esa preparación. En otra prueba, Anti-AFK independiente movió al personaje con cuatro pasos A/D de 500 ms cada 30 s y se detuvo al terminar los dos minutos; el desplazamiento se comprobó visualmente, sin vehículos ni movimiento manual. Fueron pruebas en warmup, no de permanencia en una partida activa.
+También se comprobaron estos recorridos en pruebas reales anteriores:
 
-La **0.5.1 superó 483 pruebas de fuente**. El cierre normal solicita la salida del controlador oculto; F8 cancela también el inicio pendiente y no se arma movimiento si no se pudo registrar su parada. Los componentes ausentes o incoherentes se explican junto a la acción, sin anunciar una actualización inexistente. Se comprobó la asociación de un clan real mediante la cuenta Steam autorizada y su consulta de presencia. En una prueba real con el servidor #1 lleno, la app esperó aproximadamente dos minutos de cola, entró en el equipo **verde** elegido y detuvo el autoclic tras DESPLEGANDO. Ese resultado acredita **cola → equipo fijo → parada de clics**.
+- Apertura programada desde Steam y Wardogs cerrados, entrada por ID, equipo aleatorio/verde, HUD reconocido y traspaso a seeding sin activar manualmente el juego.
+- Cola de aproximadamente dos minutos en un servidor lleno, entrada en verde y parada del autoclic tras DESPLEGANDO.
+- Movimiento A/D visible, parada por tiempo y cancelación con F8.
+- Permanencia de **25 minutos en una partida activa** sin expulsión observada y un **premio nuevo de un día VIP por sedeo**, verificado mediante cuenta e historial recientes. Hubo pausas de lectura y una reanudación manual tras actualizar la app; no fue un trayecto completo sin intervención desde Steam cerrado hasta premio.
+- Actualización real **0.5.0 → 0.5.1** desde GitHub, reapertura y conservación de la cuenta; cierre normal del host y sus controladores.
 
-La corrección para HUD luminoso se comprobó offline sobre **dos capturas de referencia**. Cuando no se lee la brújula, exige otras anclas completas del personaje antes de reconocerlo. Esa comprobación de imágenes no sustituye una prueba continua de movimiento en partida; el autoclic detenido tampoco equivale por sí solo a Entrada completada.
+**Pendientes de prueba real completa:** entrada por actividad natural, recuperación tras reinicio, esperas muy largas en cola o por un equipo y continuidad tras cambios de ronda. La espera simulada se comprobó en los minutos 3, 10 y 29, pero no sustituye ese ensayo dentro del juego. El reconocimiento de pantalla todavía puede fallar o pausar el movimiento: no se relajaron las comprobaciones para aceptar lecturas inciertas.
 
-La cadena desde Steam/juego cerrados hasta equipo aleatorio, HUD, movimiento lateral real y F8 tiene una prueba real en warmup con un jugador y ajustes de prueba de 1 jugador/5 s. Los defaults de seeding siguen siendo **20 jugadores y 60 segundos**. Siguen pendientes la permanencia prolongada en partida activa, los cambios de ronda y un premio VIP nuevo verificado.
-
-El actualizador pasó comprobaciones de paquetes, una instalación aislada y el ciclo real **0.5.0 → 0.5.1** desde GitHub en la instalación de usuario: instaló, reabrió y conservó el perfil autorizado. También se comprobó el cierre normal de la app y del controlador oculto sin terminación forzada. No hay redespliegue ni reconexión automática tras desconexión. La app no garantiza evitar cualquier expulsión ni obtener VIP.
+No hay redespliegue automático tras cambios de ronda. Un monitor de seguridad que deja de responder detiene las entradas; no se ignora para mantener la automatización. FarmDogs no garantiza evitar cualquier expulsión ni obtener VIP. Las reglas y los menús del juego pueden cambiar.
 
 ## Compilar desde el código
 

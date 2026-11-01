@@ -7,6 +7,8 @@ using System.Runtime.InteropServices;
 
 namespace WardogsSeeding {
  public sealed class TeamClickerNative : ITeamClickerPlatform,ITeamClickerAnyPlatform,ITeamClickerButtonInput {
+  int integrityPid;string integrityStatus;
+  void CheckIntegrity(TeamClickerFrame frame){if(frame==null||frame.Pid<=0)return;if(integrityPid!=frame.Pid){integrityStatus=InputIntegrity.Assess(frame.Pid).Status;integrityPid=frame.Pid;}if(integrityStatus=="requires_elevation")throw new InvalidOperationException("Wardogs esta abierto con permisos superiores. Cierra FarmDogs por completo y vuelve a abrirla como administrador, o abre ambos con permisos normales.");}
   TeamClickerAnySelector anySelector;
   TeamClickerFrame anyFrame;
   [StructLayout(LayoutKind.Sequential)] struct RECT {public int Left,Top,Right,Bottom;}
@@ -37,7 +39,7 @@ namespace WardogsSeeding {
   bool Same(TeamClickerFrame frame) {
    var current=ForegroundGame();return current!=null&&frame!=null&&current.Pid==frame.Pid&&current.Window==frame.Window&&current.Width==frame.Width&&current.Height==frame.Height;
   }
-  POINT Origin(TeamClickerFrame frame) {POINT origin=new POINT();if(!Same(frame)||!ClientToScreen(new IntPtr(frame.Window),ref origin))throw new InvalidOperationException("Wardogs ha perdido el foco.");return origin;}
+  POINT Origin(TeamClickerFrame frame) {POINT origin=new POINT();if(!Same(frame)||!ClientToScreen(new IntPtr(frame.Window),ref origin))throw new TeamClickerContextPauseException("Wardogs ha perdido el foco.");return origin;}
   bool PointBelongs(TeamClickerFrame frame,POINT point) {
    uint pid;var hit=WindowFromPoint(point);GetWindowThreadProcessId(hit,out pid);return hit!=IntPtr.Zero&&pid==frame.Pid&&Same(frame);
   }
@@ -93,19 +95,19 @@ namespace WardogsSeeding {
   }
   public void Button(bool down){Mouse(down?0x0002u:0x0004u);}
   public void Click(TeamClickerFrame frame,TeamClickerTarget target) {
-   CheckStop();
+   CheckStop();CheckIntegrity(frame);
    POINT origin=Origin(frame),point=new POINT(origin.X+target.x,origin.Y+target.y);
-   if(ModifiersDown()||!PointBelongs(frame,point))throw new InvalidOperationException("El juego no esta listo para recibir el clic.");
+   if(ModifiersDown()||!PointBelongs(frame,point))throw new TeamClickerContextPauseException("El juego no esta listo para recibir el clic.");
    if(!SetCursorPos(point.X,point.Y))throw new InvalidOperationException("No se pudo situar el cursor sobre el equipo.");
-   CheckStop();if(ModifiersDown()||!PointBelongs(frame,point))throw new InvalidOperationException("El juego ha perdido el foco antes del clic.");
+   CheckStop();if(ModifiersDown()||!PointBelongs(frame,point))throw new TeamClickerContextPauseException("El juego ha perdido el foco antes del clic.");
    // Always attempt button-up, including a rejected/partial down or focus change.
    TeamClickerButton.Click(this,()=>{
     // A real down/up pulse must span a game input sample; zero-duration pairs
     // can be accepted by Windows without being observed by the game.
     System.Threading.Thread.Sleep(15);
     CheckStop();
-    if(ModifiersDown()||!Same(frame)||!PointBelongs(frame,point))throw new InvalidOperationException("El juego ha perdido el foco durante el clic.");
-    POINT after=Origin(frame);if(after.X!=origin.X||after.Y!=origin.Y)throw new InvalidOperationException("La ventana ha cambiado durante el clic.");
+    if(ModifiersDown()||!Same(frame)||!PointBelongs(frame,point))throw new TeamClickerContextPauseException("El juego ha perdido el foco durante el clic.");
+    POINT after=Origin(frame);if(after.X!=origin.X||after.Y!=origin.Y)throw new TeamClickerContextPauseException("La ventana ha cambiado durante el clic.");
    });
   }
  }

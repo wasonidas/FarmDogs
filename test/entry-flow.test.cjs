@@ -11,9 +11,10 @@ function fixture(){
  let utc=Date.parse('2026-10-31T15:00:00Z'),mono=100,d=null,t={ownerId:null,enabled:false},a=null,driverBusy=false,teamBusy=false;
  const calls=[],events=[],hooks={},motion={};
  const driver={
+  recoveryAvailable:()=>hooks.recoveryAvailable!==false,
   async start(value){calls.push(['driver-start',value]);d={sessionId:value.id,server:value.server,joinId:value.joinId,phase:'waiting_game',at:new Date(utc).toISOString()};if(hooks.driverStart)await hooks.driverStart(value);},
   view:()=>d?structuredClone(d):null,
-  tick:async()=>{if(hooks.driverTick)await hooks.driverTick();},
+  tick:async()=>{calls.push(['driver-tick']);if(hooks.driverTick)await hooks.driverTick();},
   async checkReady(owner){calls.push(['driver-guard',owner]);return hooks.driverGuard?hooks.driverGuard(owner):true;},
   blocking:owner=>driverBusy&&(!owner||d?.sessionId===owner),
   stop(value){if(d?.sessionId!==value.ownerId)return;calls.push(['driver-stop',value]);d={...d,phase:'cancelled',reason:value.reason};if(hooks.driverStop)hooks.driverStop(value);}
@@ -31,7 +32,7 @@ function fixture(){
  };
  const flow=createEntryFlow({now:()=>utc,monoNow:()=>mono,driver,teamClicker,automatic,event:(kind,detail)=>events.push({kind,...detail}),
   launcher:{async openGame(){calls.push(['game-open']);if(hooks.openGame)await hooks.openGame();}},
-  getTarget:(server,id)=>hooks.target?hooks.target(server,id):{server,joinId:id},getInputs:()=>({movement:{...motion}})
+  getTarget:(server,id)=>hooks.target?hooks.target(server,id):{server,joinId:id},getInputs:()=>({movement:{...motion},server:hooks.source||{number:1,joinId,trusted:true,online:true,stale:false,players:0,capacity:100,sourceAt:new Date(utc).toISOString()},account:hooks.account||{}}),onRecovery:value=>calls.push(['recovery-origin',value])
  });
  return {flow,calls,events,hooks,motion,driver,teamClicker,automatic,
   advance(ms){utc+=ms;mono+=ms;},wall(ms){utc+=ms;},mono(ms){mono+=ms;},
@@ -64,6 +65,35 @@ test('entrada completa: une destino verificado, equipo, HUD y seeding con una so
 
 test('entrada sin seeding termina tras HUD y no solicita movimiento',async()=>{
  const f=fixture();await complete(f,{...input,seeding:false});assert.equal(f.flow.view().status,'completed');assert.equal(f.flow.view().connected,true);assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
+});
+
+test('entrada con anti-AFK: espera equipo y HUD verificados y conserva una duración propia después de la cola',async()=>{
+ const f=fixture(),settings={...input,seeding:false,antiAfk:true,durationMinutes:120,antiAfkSettings:{durationMinutes:7,intervalSeconds:17,holdMs:800}};
+ await reachTeam(f,settings);const entry=f.flow.view();assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
+ f.advance(30*60000);f.screen('team_selector');await f.flow.tick();assert.equal(f.flow.view().status,'choosing_team');assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
+ f.completeTeam();f.screen('deploying');await f.flow.tick();assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
+ f.advance(1000);f.screen('gameplay_hud');await f.flow.tick();
+ const state=f.flow.view(),start=f.calls.find(c=>c[0]==='movement-start');assert.equal(state.status,'completed');assert.equal(state.endAt,entry.endAt);assert.equal(state.seeding,false);assert.equal(state.antiAfk,true);
+ assert.deepEqual(start[1],{purpose:'break',presenceMode:'entry',server:1,durationMinutes:7,intervalSeconds:17,holdMs:800});assert.equal(start[1].confirmedDeployed,undefined);assert.equal(start[2].endAt,undefined);
+ assert.deepEqual(start[2].trustedEntry,{entryId:entry.id,server:1,joinId,gamePid:123,gameWindow:456,confirmedAt:state.deployedAt});assert.match(state.reason,/anti-AFK/);
+ f.flow.stop();assert.equal(f.automatic.view().status,'cancelled');
+ const other=fixture();await complete(other,{...input,seeding:false,antiAfk:true});other.setAutomatic({id:randomUUID(),purpose:'break',status:'moving'});other.flow.stop();assert.equal(other.automatic.view().status,'moving');
+});
+
+test('anti-AFK al entrar: valida intención y ajustes sin abrir nada y usa valores propios por defecto',async()=>{
+ for(const changes of [{antiAfk:'true'},{antiAfk:true,seeding:true},{antiAfk:false,antiAfkSettings:{}},{antiAfkSettings:{}},{antiAfk:true,antiAfkSettings:null},{antiAfk:true,antiAfkSettings:[]},{antiAfk:true,antiAfkSettings:{presenceMode:'manual'}},{antiAfk:true,antiAfkSettings:{confirmedDeployed:true}},{antiAfk:true,antiAfkSettings:{durationMinutes:0}},{antiAfk:true,antiAfkSettings:{durationMinutes:721}},{antiAfk:true,antiAfkSettings:{intervalSeconds:4}},{antiAfk:true,antiAfkSettings:{holdMs:2001}}]){
+  const f=fixture();await assert.rejects(f.flow.start({...input,seeding:false,...changes}),/anti-AFK|ambos|casilla/);assert.equal(f.calls.length,0);
+ }
+ const f=fixture();await complete(f,{...input,seeding:false,antiAfk:true});assert.deepEqual(f.calls.find(c=>c[0]==='movement-start')[1],{purpose:'break',presenceMode:'entry',server:1,durationMinutes:15,intervalSeconds:30,holdMs:500});
+});
+
+test('anti-AFK al entrar: HUD ajeno, expiración, error y F8 no preparan movimiento',async()=>{
+ const settings={...input,seeding:false,antiAfk:true};
+ for(const changes of [{gamePid:999},{gameWindow:999},{chainConfirmed:false},{capturedAt:'2026-10-31T14:00:00Z'},{phase:'error',error:'falló entrada'}]){
+  const f=fixture();await reachTeam(f,settings);f.completeTeam();f.screen('gameplay_hud',changes);await f.flow.tick();assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
+ }
+ const expired=fixture();await reachTeam(expired,settings);expired.advance(15*60000);expired.completeTeam();expired.screen('gameplay_hud');await expired.flow.tick();assert.equal(expired.flow.view().status,'expired');assert.equal(expired.calls.some(c=>c[0]==='movement-start'),false);
+ const stopped=fixture();await reachTeam(stopped,settings);stopped.motion.autoOperatorStopped=stopped.flow.view().id;stopped.completeTeam();stopped.screen('gameplay_hud');await stopped.flow.tick();assert.equal(stopped.flow.view().status,'cancelled');assert.equal(stopped.calls.some(c=>c[0]==='movement-start'),false);
 });
 test('el equipo aleatorio necesita capacidad y confirma un color real, conservando la petición',async()=>{
  const unsupported=fixture();await assert.rejects(unsupported.flow.start({...input,team:'any'}),/Actualiza/);assert.equal(unsupported.calls.length,0);
@@ -177,4 +207,47 @@ test('caducar durante esperas asíncronas detiene el flujo sin afirmar una entre
  assert.equal(read.flow.view().status,'expired');assert.equal(read.calls.some(c=>c[0]==='team-prepare'),false);
  const movement=fixture(),opening=deferred();await reachTeam(movement,{...input,durationMinutes:1});movement.completeTeam();movement.screen('gameplay_hud');movement.hooks.autoStart=()=>opening.promise;const handoff=movement.flow.tick();for(let i=0;i<4;i++)await Promise.resolve();movement.advance(60000);opening.resolve();await handoff;
  assert.equal(movement.flow.view().status,'expired');assert.equal(movement.automatic.active(),false);
+});
+
+function restart(f,changes={}){
+ const state=f.flow.view(),a=f.automatic.view();
+ f.setAutomatic({...a,status:'error',operatorStopped:false,disconnect:{cause:'server_restart',confirmed:true,entryId:state.id,seedingId:a.id,server:state.server,joinId:state.joinId,gamePid:state.gamePid,gameWindow:state.gameWindow,frameId:randomUUID(),capturedAt:new Date(f.utc).toISOString(),...changes}});
+}
+async function sourceReady(f){
+ f.advance(30000);f.hooks.source={number:1,joinId,trusted:true,online:true,stale:false,players:0,capacity:100,sourceAt:new Date(f.utc).toISOString()};await f.flow.tick();
+ f.advance(30000);f.hooks.source={...f.hooks.source,sourceAt:new Date(f.utc).toISOString()};await f.flow.tick();
+}
+test('recuperación propia: espera dos muestras sin inputs ni apertura/foco y entrega una cadena nueva con el límite original',async()=>{
+ const f=fixture();await complete(f);const root=f.flow.view(),oldMovement=f.automatic.view().id;restart(f);const before=f.calls.filter(c=>c[0]==='driver-tick').length;
+ await f.flow.tick();let s=f.flow.view();assert.equal(s.status,'recovering_source');assert.notEqual(s.id,root.id);assert.equal(s.rootEntryId,root.id);assert.equal(s.restartCount,1);assert.equal(s.endAt,root.endAt);assert.equal(s.initialFocus,'none');assert.equal(s.recovery.seedingId,oldMovement);
+ const recoveryStart=f.calls.filter(c=>c[0]==='driver-start').at(-1)[1];assert.equal(recoveryStart.initialFocus,'none');assert.equal(recoveryStart.recovery.previousEntryId,root.id);assert.equal(f.calls.filter(c=>c[0]==='game-open').length,1);assert.equal(f.calls.filter(c=>c[0]==='driver-tick').length,before);
+ f.hooks.source={number:1,joinId,trusted:true,online:true,stale:true,players:0,capacity:100,sourceAt:new Date(f.utc+1000).toISOString()};f.advance(1000);await f.flow.tick();assert.deepEqual(f.flow.view().recovery.sourceSamples,[]);assert.equal(f.calls.filter(c=>c[0]==='driver-tick').length,before);
+ await sourceReady(f);assert.equal(f.flow.view().status,'waiting_game');assert.equal(f.calls.filter(c=>c[0]==='driver-tick').length,before);
+ f.screen('gameplay_hud');await f.flow.tick();assert.equal(f.calls.filter(c=>c[0]==='movement-start').length,1,'un HUD solo no hereda el selector ni el proof anterior');
+ f.screen('team_selector');await f.flow.tick();f.completeTeam();f.screen('gameplay_hud');await f.flow.tick();s=f.flow.view();
+ assert.equal(s.status,'completed');assert.equal(s.restartCount,1);assert.equal(f.automatic.view().entryId,s.id);assert.notEqual(f.automatic.view().id,oldMovement);assert.equal(f.calls.filter(c=>c[0]==='movement-start').at(-1)[2].endAt,root.endAt);assert.equal(f.calls.filter(c=>c[0]==='game-open').length,1);
+ restart(f);await f.flow.tick();assert.equal(f.calls.filter(c=>c[0]==='driver-start').length,2,'no se permite una segunda recuperación');
+});
+test('recuperación: sin prueba estricta, modo manual, F8 previo o capacidad nativa no hay intento',async()=>{
+ for(const change of [{confirmed:false},{cause:'afk_kick'},{cause:'server_message_unknown'},{gameWindow:999},{capturedAt:'2026-10-31T14:00:00Z'}]){const f=fixture();await complete(f);restart(f,change);await f.flow.tick();assert.equal(f.calls.filter(c=>c[0]==='driver-start').length,1);}
+ for(const mode of ['manual','account']){const f=fixture();await complete(f);restart(f);f.setAutomatic({...f.automatic.view(),presenceMode:mode});await f.flow.tick();assert.equal(f.calls.filter(c=>c[0]==='driver-start').length,1);}
+ const stopped=fixture();await complete(stopped);restart(stopped);stopped.motion.autoOperatorStopped=stopped.automatic.view().id;await stopped.flow.tick();assert.equal(stopped.calls.filter(c=>c[0]==='driver-start').length,1);
+ const unavailable=fixture();await complete(unavailable);restart(unavailable);unavailable.hooks.recoveryAvailable=false;await unavailable.flow.tick();assert.equal(unavailable.flow.view().recoveryUnavailable,true);assert.equal(unavailable.calls.filter(c=>c[0]==='driver-start').length,1);
+});
+test('recuperación: ID rotado, otra presencia privada y Detener abortan sin cancelar movimiento ajeno',async()=>{
+ const changed=fixture();await complete(changed);restart(changed);await changed.flow.tick();changed.advance(30000);changed.hooks.source={number:1,joinId:randomUUID(),trusted:true,online:true,players:0,capacity:100,sourceAt:new Date(changed.utc).toISOString()};await changed.flow.tick();assert.equal(changed.flow.view().status,'error');assert.match(changed.flow.view().reason,/ID/);
+ const privateOther=fixture();await complete(privateOther);restart(privateOther);await privateOther.flow.tick();privateOther.hooks.account={seedingFresh:true,seeding:{servidor:2,dentro:true}};await privateOther.flow.tick();assert.equal(privateOther.flow.view().status,'error');
+ const replaced=fixture();await complete(replaced);restart(replaced);await replaced.flow.tick();const alien={id:randomUUID(),purpose:'break',status:'waiting'};replaced.setAutomatic(alien);await replaced.flow.tick();assert.equal(replaced.flow.view().status,'interrupted');assert.deepEqual(replaced.automatic.view(),alien);
+});
+test('recuperación: F8 y Detener durante checkReady/arranque invalidan callbacks tardíos y no reabren el juego',async()=>{
+ const f=fixture();await complete(f);restart(f);const starting=deferred();f.hooks.driverStart=()=>starting.promise;const tick=f.flow.tick();for(let i=0;i<4;i++)await Promise.resolve();assert.equal(f.flow.view().status,'recovering_source');f.flow.stop();starting.resolve();await tick;assert.equal(f.flow.view().status,'cancelled');assert.equal(f.calls.filter(c=>c[0]==='game-open').length,1);
+ const guard=fixture();await complete(guard);restart(guard);await guard.flow.tick();const reading=deferred();guard.hooks.driverGuard=()=>reading.promise;const pending=guard.flow.tick();for(let i=0;i<4;i++)await Promise.resolve();guard.flow.stop();reading.resolve(true);await pending;assert.equal(guard.flow.view().status,'cancelled');assert.equal(guard.flow.view().recovery.sourceSamples.length,0);
+ const f8=fixture();await complete(f8);restart(f8);await f8.flow.tick();f8.hooks.driverGuard=()=>{f8.setDriver({phase:'cancelled',operatorStopped:true});return false;};await f8.flow.tick();assert.equal(f8.flow.view().status,'cancelled');
+});
+test('recuperación: espera hasta 15 minutos dentro del tiempo original y el reloj atrasado no concede otra duración',async()=>{
+ const long=fixture();await complete(long,{...input,durationMinutes:30});restart(long);await long.flow.tick();long.advance(14*60000);await long.flow.tick();assert.equal(long.flow.view().status,'recovering_source');long.advance(60000);await long.flow.tick();assert.equal(long.flow.view().status,'error');assert.match(long.flow.view().reason,/15 minutos/);
+ const short=fixture();await complete(short,{...input,durationMinutes:1});const end=short.flow.view().endAt;restart(short);await short.flow.tick();short.wall(-3600000);short.mono(60000);await short.flow.tick();assert.equal(short.flow.view().status,'expired');assert.equal(short.flow.view().endAt,end);assert.equal(short.calls.filter(c=>c[0]==='game-open').length,1);
+});
+test('entrada: no admite opciones internas de recuperación ni foco none desde una solicitud pública',async()=>{
+ for(const extra of [{recovery:{}},{restartConfirmed:true},{launch:false},{launchGame:false},{initialFocus:'none'},{rootEntryId:randomUUID()}]){const f=fixture();await assert.rejects(f.flow.start({...input,...extra}));assert.deepEqual(f.calls,[]);}
 });

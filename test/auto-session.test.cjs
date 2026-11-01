@@ -4,6 +4,7 @@ const fs=require('node:fs/promises');
 const path=require('node:path');
 const os=require('node:os');
 const {createAutoSession}=require('../src/auto-session.cjs');
+const {randomUUID}=require('node:crypto');
 async function fixture(t){
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'wardogs-auto-test-'));let now=Date.parse('2026-10-30T10:00:00Z'),mono=0,starts=0;
  let inputs={movement:{available:true,armed:false,status:'stopped'},server:{number:2,trusted:true,seedingActive:true,players:19},account:{seedingFresh:true,seeding:{servidor:2,estado:'aguantando',dentro:true}}};
@@ -82,4 +83,52 @@ test('sesión temporal: pide solo movimiento, conserva propósito y agota el tie
 test('sesión temporal: reiniciar conserva una interrupción y no reactiva el controlador',async t=>{
  const f=await fixture(t);await f.manager.start({purpose:'break',durationMinutes:5,confirmedDeployed:true});const restarted=createAutoSession(f.options);t.after(()=>restarted.close());
  assert.equal(restarted.view().purpose,'break');assert.equal(restarted.view().status,'interrupted');assert.match(restarted.view().reason,/movimiento temporal/);restarted.tick();assert.equal(f.starts,1);
+});
+
+test('sesión: un reinicio positivo guarda prueba y revoca movimiento sin simular F8; Detener sigue terminal',async t=>{
+ const f=await fixture(t),entryId=randomUUID(),joinId=randomUUID();
+ const proof={entryId,server:2,joinId,gamePid:1234,gameWindow:5678,confirmedAt:new Date(f.now).toISOString()};
+ f.options.reader.view=()=>({status:'verified_capture',scene:'server_restart',restartConfirmed:true,gameForeground:true,gamePid:1234,gameWindow:5678,frameId:randomUUID(),capturedAt:new Date(f.now).toISOString()});
+ const manager=createAutoSession(f.options);t.after(()=>manager.close());await manager.start({server:2,durationMinutes:30,presenceMode:'entry'},{trustedEntry:proof});manager.tick();
+ assert.equal(manager.view().status,'error');assert.equal(manager.view().disconnect.cause,'server_restart');assert.equal(manager.view().operatorStopped,false);
+ let command=JSON.parse(await fs.readFile(path.join(f.dir,'movement-command.json'),'utf8'));assert.equal(command.kind,'stop');assert.equal(command.cancelled,false);
+ const saved=JSON.parse(await fs.readFile(path.join(f.dir,'auto-seeding-session.json'),'utf8'));assert.equal(saved.disconnect.entryId,entryId);
+ manager.stop();command=JSON.parse(await fs.readFile(path.join(f.dir,'movement-command.json'),'utf8'));assert.equal(command.cancelled,true);assert.equal(manager.view().operatorStopped,true);
+});
+
+test('sesión: un HUD desconocido reciente explica el bloqueo sin pedir foco ni conceder movimiento',async t=>{
+ const f=await fixture(t);
+ f.options.reader.view=()=>({status:'verified_capture',scene:'unknown',gameForeground:true,gamePid:1234,gameWindow:5678,frameId:randomUUID(),capturedAt:new Date(f.now).toISOString()});
+ const started=await f.manager.start({purpose:'break',durationMinutes:5,confirmedDeployed:true});f.manager.tick();
+ let current=f.manager.view(),command=JSON.parse(await fs.readFile(path.join(f.dir,'movement-command.json'),'utf8'));
+ assert.equal(current.status,'waiting_game');assert.match(current.reason,/está en primer plano.*no se reconoce el HUD/);assert.equal(current.startedMovementAt,null);
+ assert.equal(current.endAt,started.endAt);assert.equal(command.kind,'watch');assert.equal(command.sessionId,started.id);assert.equal(command.endAt,started.endAt);assert.equal(Date.parse(command.expiresAt)-Date.parse(command.issuedAt),3000);
+ const saved=JSON.parse(await fs.readFile(path.join(f.dir,'auto-seeding-session.json'),'utf8'));assert.equal(saved.reason,current.reason);
+ f.setInputs({...f.inputs,movement:{available:true,armed:true,status:'running',autoSessionId:started.id}});f.advance(500);f.manager.tick();
+ current=f.manager.view();command=JSON.parse(await fs.readFile(path.join(f.dir,'movement-command.json'),'utf8'));
+ assert.equal(current.status,'waiting_game');assert.match(current.reason,/no se reconoce el HUD/);assert.equal(command.kind,'stop');assert.equal(command.cancelled,false);assert.equal(command.endAt,started.endAt);assert.equal(current.operatorStopped,false);assert.equal(f.manager.active(),true);
+});
+
+test('sesión: el diagnóstico HUD no sustituye capturas caducadas, falta de foco ni la espera de presencia',async t=>{
+ const f=await fixture(t);let screen;
+ f.options.reader.view=()=>screen;
+ f.setInputs({...f.inputs,server:{...f.inputs.server,players:25}});await f.manager.start({server:2,durationMinutes:5});
+ const base={status:'verified_capture',scene:'unknown',gameForeground:true,gamePid:1234,gameWindow:5678,frameId:randomUUID(),capturedAt:new Date(f.now).toISOString()};
+ for(const change of [{status:'unknown'},{gameForeground:false},{capturedAt:new Date(f.now-5001).toISOString()},{capturedAt:new Date(f.now+1).toISOString()}]){
+  screen={...base,...change};f.manager.tick();assert.equal(f.manager.view().status,'waiting_game');assert.equal(f.manager.view().reason,'Esperando el juego desplegado en primer plano.');
+ }
+ screen={...base,capturedAt:new Date(f.now-5000).toISOString()};f.manager.tick();assert.match(f.manager.view().reason,/no se reconoce el HUD/);
+ f.setInputs({...f.inputs,account:{seedingFresh:true,seeding:{servidor:2,estado:'aguantando',dentro:false}}});screen=base;f.manager.tick();
+ assert.equal(f.manager.view().status,'waiting_presence');assert.doesNotMatch(f.manager.view().reason,/HUD/);
+});
+
+test('sesión: el diagnóstico HUD preserva el aviso sin Steam y no oculta otra ventana de una entrada',async t=>{
+ const f=await fixture(t);let screen={status:'verified_capture',scene:'unknown',gameForeground:true,gamePid:1234,gameWindow:5678,frameId:randomUUID(),capturedAt:new Date(f.now).toISOString()};
+ f.options.reader.view=()=>screen;f.setInputs({...f.inputs,server:{...f.inputs.server,players:25}});
+ await f.manager.start({server:2,durationMinutes:5,presenceMode:'manual',confirmedServer:2});f.manager.tick();
+ assert.match(f.manager.view().reason,/^Prueba sin lectura Steam: Wardogs está en primer plano.*HUD/);f.manager.stop();
+ const proof={entryId:randomUUID(),server:2,joinId:randomUUID(),gamePid:1234,gameWindow:5678,confirmedAt:new Date(f.now).toISOString()};
+ await f.manager.start({server:2,durationMinutes:5,presenceMode:'entry'},{trustedEntry:proof});screen={...screen,gameWindow:8765};f.manager.tick();
+ assert.equal(f.manager.view().status,'waiting_game');assert.equal(f.manager.view().reason,'Esperando el juego desplegado en primer plano.');
+ screen={...screen,gameWindow:5678};f.manager.tick();assert.match(f.manager.view().reason,/no se reconoce el HUD/);
 });

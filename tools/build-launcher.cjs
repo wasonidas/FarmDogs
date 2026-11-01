@@ -4,6 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..'),node=process.execPath;
+const {buildIcon}=require('./build-icon.cjs');
 if(process.platform!=='win32'||process.arch!=='x64'||Number(process.versions.node.split('.')[0])<24)throw Error('Compila con Node.js 24+ para Windows x64.');
 const license=path.join(path.dirname(node),'LICENSE');
 if(!fs.existsSync(license))throw Error('No se encontró el LICENSE de la distribución Node. No se empaqueta sin él.');
@@ -15,7 +16,8 @@ if(path.resolve(node).toLowerCase()!==path.join(runtime,'node.exe').toLowerCase(
 if(path.resolve(license).toLowerCase()!==path.join(runtime,'LICENSE').toLowerCase())fs.copyFileSync(license,path.join(runtime,'LICENSE'));
 fs.writeFileSync(path.join(runtime,'runtime.json'),JSON.stringify({name:'Node.js',version:process.versions.node,platform:'win32',arch:'x64',sha256:crypto.createHash('sha256').update(fs.readFileSync(node)).digest('hex'),license:'LICENSE'},null,2));
 const compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
-execFileSync(compiler,['/nologo','/codepage:65001','/platform:x64','/target:winexe','/out:'+path.join(root,'FarmDogs.exe'),'/r:System.Windows.Forms.dll','/r:System.Net.Http.dll','/r:System.Web.Extensions.dll',path.join(root,'native','DesktopBootstrap.cs')],{cwd:root,stdio:'inherit',windowsHide:true});
+const icon=buildIcon();
+execFileSync(compiler,['/nologo','/codepage:65001','/platform:x64','/target:winexe','/win32icon:'+icon,'/out:'+path.join(root,'FarmDogs.exe'),'/r:System.Windows.Forms.dll','/r:System.Net.Http.dll','/r:System.Web.Extensions.dll',path.join(root,'native','DesktopBootstrap.cs')],{cwd:root,stdio:'inherit',windowsHide:true});
 // Preserve existing local shortcuts; the portable publishes only FarmDogs.exe.
 fs.copyFileSync(path.join(root,'FarmDogs.exe'),path.join(root,'WardogsSeeding.exe'));
 execFileSync(compiler,['/nologo','/codepage:65001','/platform:x64','/target:exe','/main:DesktopBootstrapTests','/out:'+path.join(root,'bin','DesktopBootstrapTests.exe'),'/r:System.Windows.Forms.dll','/r:System.Net.Http.dll','/r:System.Web.Extensions.dll',path.join(root,'native','DesktopBootstrap.cs'),path.join(root,'native','DesktopBootstrapTests.cs')],{cwd:root,stdio:'inherit',windowsHide:true});

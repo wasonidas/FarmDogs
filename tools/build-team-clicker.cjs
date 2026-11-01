@@ -11,7 +11,7 @@ const common=['/nologo','/codepage:65001','/platform:x64','/r:System.Web.Extensi
 const options={cwd:root,stdio:'inherit',windowsHide:true,timeout:30000};
 if(!process.argv.includes('--test-only')){
  const output=path.join(bin,process.argv.includes('--staging')?'WardogsTeamClicker.next.exe':'WardogsTeamClicker.exe');
- execFileSync(compiler,[...common,'/target:winexe','/out:'+output,'/r:System.Drawing.dll',source('GameWindow.cs'),source('TeamClickerCore.cs'),source('TeamClickerHotkeys.cs'),source('TeamClickerLogoDetector.cs'),source('TeamClickerSelectorFrame.cs'),source('TeamClickerWaiter.cs'),source('TeamClickerNative.cs'),source('TeamClickerProgram.cs')],options);
+ execFileSync(compiler,[...common,'/target:winexe','/out:'+output,'/r:System.Drawing.dll',source('GameWindow.cs'),source('InputIntegrity.cs'),source('TeamClickerCore.cs'),source('TeamClickerHotkeys.cs'),source('TeamClickerLogoDetector.cs'),source('TeamClickerSelectorFrame.cs'),source('TeamClickerWaiter.cs'),source('TeamClickerNative.cs'),source('TeamClickerProgram.cs')],options);
  if(!process.argv.includes('--staging'))fs.writeFileSync(path.join(bin,'team-clicker-capabilities.json'),JSON.stringify({format:'wardogs-team-clicker-capabilities-v1',teamClicker:true,automaticTeamRecognition:true,automaticTeamSelection:true,automaticAnyTeam:true,messageHotkeys:true,persistentTeamAttempt:true,positiveEntryConfirmation:true,sha256:crypto.createHash('sha256').update(fs.readFileSync(output)).digest('hex')}));
  console.log('Built: '+output);
 }

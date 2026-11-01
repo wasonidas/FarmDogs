@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-2022
     timeout-minutes: 20
     defaults:
@@ -25,6 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -59,6 +61,10 @@ jobs:
           $apiResponse = (& gh api --include "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" 2> $apiErrors) -join "`n"
           if ($LASTEXITCODE -eq 0) { throw 'The release appeared during the check. Run again to inspect it without modifying it.' }
           if ($apiResponse -notmatch '(?m)^HTTP/\S+\s+404(?:\s|$)') { throw 'Could not verify that the release is absent. No release will be created.' }
+          $tagErrors = Join-Path $env:RUNNER_TEMP 'farmdogs-release-tag.err'
+          $tagResponse = (& gh api --include "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2> $tagErrors) -join "`n"
+          if ($LASTEXITCODE -eq 0) { throw 'This version tag already exists without a published release. Review it before publishing.' }
+          if ($tagResponse -notmatch '(?m)^HTTP/\S+\s+404(?:\s|$)') { throw 'Could not verify that the version tag is absent. No release will be created.' }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'publish=true'
           exit 0
       - name: Check the Windows build requirements
@@ -115,14 +121,28 @@ jobs:
           if ($archiveHash -ne $portableInfo.sha256) { throw 'The archive checksum changed.' }
           Set-Content -LiteralPath (Join-Path $releaseDirectory 'SHA256SUMS.txt') -Encoding ascii -Value "$archiveHash  FarmDogs-portable.zip"
           $releaseNotes = @(
-            "FarmDogs $env:RELEASE_TAG para Windows x64.",
+            "# FarmDogs Launcher $env:RELEASE_TAG",
             '',
-            'Descarga **FarmDogs-portable.zip**, extrae la carpeta completa y abre **FarmDogs.exe**.',
+            '**Descarga FarmDogs-portable.zip**, extrae la carpeta completa y abre **FarmDogs.exe**. No necesitas instalar Node ni saber usar GitHub.',
+            '',
+            '## Novedades',
+            '',
+            '- Elige servidor y equipo: FarmDogs completa la entrada y espera tu color hasta DESPLEGANDO.',
+            '- Nueva casilla **Activar anti-AFK al desplegar**. Usa tus ajustes y empieza a contar al entrar, sin consumir la cola.',
+            '- Ventana fija más compacta, barra oscura e icono propio.',
+            '- Si cambias de ventana, el selector automático pausa y vuelve a reconocer la pantalla al regresar al juego.',
+            '- Mejor lectura del personaje desplegado y mensajes más precisos de controladores y permisos.',
+            '- **Actualizaciones automáticas**: deja marcada la opción en la tarjeta Actualizaciones. Espera a que la app esté inactiva y conserva tus ajustes y cuenta.',
+            '',
+            'Para empezar: en **JUGAR**, elige servidor y equipo, marca anti-AFK si lo quieres y pulsa **Entrar automáticamente**. Deja Wardogs delante y las manos vacías para el movimiento; **F8** o **Detener** cancelan.',
             '',
             'Incluye el runtime Node. Steam/Wardogs y Microsoft Edge WebView2 deben estar instalados.',
-            'Para actualizar, cierra FarmDogs y conserva tu carpeta data; cada jugador usa sus propios datos.',
+            'Si tienes una versión antigua sin actualizador, descarga una vez el ZIP y sustituye sus archivos con FarmDogs cerrado, conservando tu carpeta **data**. No compartas esa carpeta.',
+            'Steam y Wardogs pueden empezar cerrados si Steam recuerda una sesión válida. Si pide contraseña o Steam Guard, debes completarlo tú.',
             '',
-            'La guía de anti-AFK, seeding, selector de equipo y avisos está en el README del repositorio.',
+            'El usuario confirmó entrada, equipo, despliegue y anti-AFK opcional. La versión base pasó 579 pruebas automáticas. Quedan pendientes pruebas reales completas de recuperación tras reinicio, entrada por actividad y esperas muy largas. No garantiza evitar cualquier expulsión ni obtener VIP.',
+            '',
+            'La guía completa de anti-AFK, seeding, clan, equipo y cuenta está en el README.',
             'SHA256SUMS.txt permite comprobar la descarga. El paquete no contiene cuentas, cookies ni registros locales.'
           )
           Set-Content -LiteralPath (Join-Path $releaseDirectory 'RELEASE_NOTES.md') -Encoding utf8 -Value $releaseNotes
@@ -162,8 +182,47 @@ jobs:
           gh release create "$RELEASE_TAG" FarmDogs-portable.zip SHA256SUMS.txt \
             --repo "$GH_REPO" --target "$GITHUB_SHA" --draft \
             --title "FarmDogs $RELEASE_TAG" --notes-file RELEASE_NOTES.md
+          created_release_id=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.id')
+          [[ "$created_release_id" =~ ^[1-9][0-9]*$ ]]
           gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets,isDraft \
             --jq 'if .isDraft and ([.assets[].name] | index("FarmDogs-portable.zip") != null and index("SHA256SUMS.txt") != null) then "Release assets verified" else error("Incomplete draft assets") end'
+          verification_directory=$(mktemp -d)
+          gh release download "$RELEASE_TAG" --repo "$GH_REPO" --dir "$verification_directory" \
+            --pattern FarmDogs-portable.zip --pattern SHA256SUMS.txt
+          cmp SHA256SUMS.txt "$verification_directory/SHA256SUMS.txt"
+          cmp FarmDogs-portable.zip "$verification_directory/FarmDogs-portable.zip"
+          (cd "$verification_directory" && sha256sum --check SHA256SUMS.txt)
+          CREATED_RELEASE_ID="$created_release_id" python3 - <<'PY'
+          import json, os, re, subprocess
+
+          repo, tag, sha = os.environ['GH_REPO'], os.environ['RELEASE_TAG'], os.environ['GITHUB_SHA']
+          release_id = int(os.environ['CREATED_RELEASE_ID'])
+          assert re.fullmatch(r'[0-9a-f]{40}', sha), 'A full source commit SHA is required'
+
+          def get(route):
+              result = subprocess.run(['gh', 'api', route], capture_output=True, text=True, check=True)
+              return json.loads(result.stdout)
+
+          draft = get(f'repos/{repo}/releases/{release_id}')
+          assert draft.get('id') == release_id and draft.get('draft') is True, 'The created draft identity changed'
+          assert draft.get('tag_name') == tag and draft.get('target_commitish') == sha, 'The draft does not target this source commit'
+          assert get(f'repos/{repo}/releases/tags/{tag}').get('id') == release_id, 'The tag now names another release'
+
+          response = subprocess.run(['gh', 'api', '--include', f'repos/{repo}/git/ref/tags/{tag}'], capture_output=True, text=True)
+          status = re.match(r'^HTTP/\S+\s+(\d{3})(?:\s|$)', response.stdout)
+          assert status, 'Could not confirm the tag HTTP status before publishing'
+          code = int(status.group(1))
+          if code == 404:
+              assert response.returncode != 0, 'Unexpected successful response for an absent tag'
+          else:
+              assert code == 200 and response.returncode == 0, 'Could not verify the tag before publishing'
+              headers, separator, body = response.stdout.partition('\n\n')
+              assert separator, 'Missing tag response body'
+              target = json.loads(body).get('object', {})
+              assert target.get('type') == 'commit' and target.get('sha') == sha, 'The tag points to another source commit'
+          PY
           gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
+          published_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          test "$published_sha" = "$GITHUB_SHA"
           release_url=$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq .url)
           printf '### FarmDogs publicado\n\n%s\n' "$release_url" >> "$GITHUB_STEP_SUMMARY"

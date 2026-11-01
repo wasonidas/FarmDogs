@@ -21,6 +21,16 @@ function fixture(t,{reader,anyCapability=true}={}){
 }
 const config={enabled:true,team:'blue',intervalMs:20,hotkey:'F6'};
 
+test('equipo automático: pausa de contexto conserva dueño/plazo; estado caducado o desactivado no anuncia reanudación',async t=>{
+ const f=fixture(t),ownerId='11111111-1111-4111-8111-111111111111',endAt=new Date(f.utc+1800000).toISOString();
+ await f.controller.prepareOwned({ownerId,team:'green',endAt,canArm:async()=>true});
+ f.native({active:true,running:false,pausedForContext:true,waitingForSelector:true,count:500,reason:'Esperando volver a la misma ventana.'});
+ let view=f.controller.view();assert.equal(view.enabled,true);assert.equal(view.pausedForContext,true);assert.equal(view.ownerId,ownerId);assert.equal(view.ownerEndAt,endAt);assert.equal(view.count,500);
+ f.advance(1000);f.controller.renewOwned(ownerId);f.native({active:true,running:true,pausedForContext:false,count:501});
+ view=f.controller.view();assert.equal(view.pausedForContext,false);assert.equal(view.running,true);assert.equal(view.ownerEndAt,endAt);
+ f.native({active:true,running:false,pausedForContext:true});f.advance(4000);assert.equal(f.controller.view().pausedForContext,false);f.controller.stop();assert.equal(f.controller.view().pausedForContext,false);
+});
+
 test('arranque frío de 16 s: no concede clics antes del helper y el lease activo sigue siendo 8 s',async t=>{
  const f=fixture(t),ownerId='11111111-1111-4111-8111-111111111111',endAt=new Date(f.utc+60000).toISOString();let guarded=0,preparationId;
  f.spawnHook(child=>{preparationId=f.command().sessionId;assert.equal(f.command().enabled,false);assert.equal(f.controller.view().preparing,true);assert.equal(f.controller.blocking(),true);f.advance(16000);queueMicrotask(()=>child.emit('spawn'));});

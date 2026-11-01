@@ -46,6 +46,7 @@ internal sealed class DesktopEntryJobFocusPolicy
  internal string Nonce,Kind,OwnerId,SessionId,Status="idle",Reason="";internal int Server;internal string JoinId;
  private double lastMono,bindDeadline,entryDeadline;
  internal bool Pending {get{return Status=="armed"||Status=="waiting_job"||Status=="waiting_game";}}
+ internal bool HandoffActive(double mono){return (Status=="attempted"||Status=="already_foreground")&&!Double.IsNaN(mono)&&!Double.IsInfinity(mono)&&mono>=lastMono&&entryDeadline>0&&mono<entryDeadline;}
  internal bool Arm(string nonce,string kind,int server,string joinId,bool ownForeground,uint input,double mono)
  {
   Guid parsed;if(!ownForeground||!Guid.TryParseExact(nonce,"D",out parsed)||(kind!="scheduled"&&kind!="activity")||Double.IsNaN(mono)||Double.IsInfinity(mono))return false;
@@ -56,7 +57,7 @@ internal sealed class DesktopEntryJobFocusPolicy
  internal void Bind(string nonce,string kind,string owner){Guid parsed;if(nonce!=Nonce||kind!=Kind||!Guid.TryParseExact(owner,"D",out parsed)||OwnerId!=null&&OwnerId!=owner)return;OwnerId=owner;if(Pending){Status="waiting_job";Reason="Permiso preparado; puedes usar el PC hasta que se inicie la tarea.";}}
  internal void Revoke(string reason){if(Pending||Status=="attempted"){Status="revoked";Reason=reason;}}
  internal void Stop(string nonce){if(nonce==Nonce){Status="stopped";Reason="Detenido con F8. La parada se confirma para esta tarea.";}}
- internal string Tick(double mono,uint input,bool gameForeground,bool localPage,DesktopEntryJobSnapshot sample,bool targetAvailable,DateTime now,string expectedRoot,DateTime? inputOccurredAt=null)
+ internal string Tick(double mono,uint input,bool gameForeground,bool localPage,DesktopEntryJobSnapshot sample,bool targetAvailable,DateTime now,string expectedRoot,DateTime? inputOccurredAt=null,bool ownForeground=false,bool interactionBusy=false)
  {
   if(!Pending)return "none";
   if(Double.IsNaN(mono)||Double.IsInfinity(mono)||mono<lastMono){Revoke("El reloj no permite verificar el permiso inicial.");return "revoked";}lastMono=mono;
@@ -77,9 +78,14 @@ internal sealed class DesktopEntryJobFocusPolicy
   if(entry.Status!="opening"&&entry.Status!="waiting_game"){Revoke("La entrada ya ha avanzado; no se volverá a activar la ventana.");return "revoked";}
   if(gameForeground){Status="already_foreground";Reason="Wardogs ya está delante.";return "none";}
   if(!inputOccurredAt.HasValue||inputOccurredAt.Value>now)return "wait";
-  if(inputOccurredAt.Value>=entry.CreatedAt){Revoke("Has usado el PC durante el arranque; vuelve a Wardogs cuando quieras.");return "revoked";}
   if(!sample.InputAtStart.HasValue||sample.WatchStartedAt<entry.CreatedAt||sample.WatchStartedAt>now)return "wait";
-  if(input!=sample.InputAtStart.Value){Revoke("Has cambiado de aplicación durante el arranque; vuelve a Wardogs cuando quieras.");return "revoked";}
+  if(ownForeground&&interactionBusy){Reason="Entrada preparada; esperando que sueltes el ratón antes de ceder el foco.";return "wait";}
+  if(inputOccurredAt.Value>=entry.CreatedAt||input!=sample.InputAtStart.Value)
+  {
+   // Moving the launcher is not a cancellation. Wait until its own window is
+   // idle; interaction with another application never authorizes focus theft.
+   if(!ownForeground||(now-inputOccurredAt.Value).TotalMilliseconds<750){Reason="Entrada preparada; esperando que termines de usar el launcher o vuelvas a Wardogs.";return "wait";}
+  }
   if(!sample.TargetVerified||!targetAvailable)return "wait";
   Status="attempted";Reason="Intento único de activar Wardogs para esta tarea.";return "activate";
  }
@@ -121,31 +127,55 @@ internal sealed class DesktopEntryFocusPolicy
  internal string Nonce,SessionId,Status="idle",Reason="";internal int Server;internal string JoinId;
  private double deadline,lastMono;private uint lastOwnInput;private bool bound;
  internal bool Pending {get{return Status=="armed"||Status=="waiting_game";}}
+ internal bool HandoffActive(double mono){return (Status=="attempted"||Status=="already_foreground")&&!Double.IsNaN(mono)&&!Double.IsInfinity(mono)&&mono>=lastMono&&mono<deadline;}
  internal bool Arm(string nonce,int server,string joinId,bool ownForeground,uint input,double mono)
  {
   Guid parsed;if(!ownForeground||!Guid.TryParseExact(nonce,"D",out parsed)||!Guid.TryParseExact(joinId,"D",out parsed)||server<1||server>5||Double.IsNaN(mono)||Double.IsInfinity(mono))return false;
   Nonce=nonce;Server=server;JoinId=joinId;SessionId=null;bound=false;lastOwnInput=input;lastMono=mono;deadline=mono+180000;Status="armed";Reason="Esperando la sesión iniciada por tu clic.";return true;
  }
  internal void Bind(string nonce,string session){Guid parsed;if(!Pending||nonce!=Nonce||!Guid.TryParseExact(session,"D",out parsed))return;SessionId=session;bound=true;Status="waiting_game";}
- internal void Cancel(string reason){if(!Pending)return;Status="cancelled";Reason=reason;}
- internal string Tick(double mono,uint input,bool ownForeground,bool gameForeground,bool stop,bool localPage,DesktopEntryFocusSample sample,bool targetAvailable,DateTime now,string expectedRoot,bool checkSession=true)
+ internal void Cancel(string reason){if(!Pending&&Status!="attempted")return;Status="cancelled";Reason=reason;}
+ internal string Tick(double mono,uint input,bool ownForeground,bool gameForeground,bool stop,bool localPage,DesktopEntryFocusSample sample,bool targetAvailable,DateTime now,string expectedRoot,bool checkSession=true,bool interactionBusy=false)
  {
   if(!Pending)return "none";
   if(Double.IsNaN(mono)||Double.IsInfinity(mono)||mono<lastMono||mono>=deadline){Cancel("Terminó el permiso inicial de primer plano.");return "cancelled";}lastMono=mono;
   if(stop||!localPage){Cancel("Permiso inicial cancelado.");return "cancelled";}
   // Steam may open itself without human input. A changed input timestamp while
   // another app is foreground means the user chose that app: never take it back.
-  if(!ownForeground&&!gameForeground&&input!=lastOwnInput){Cancel("Has cambiado de aplicación; vuelve a Wardogs cuando quieras.");return "cancelled";}
+  if(!ownForeground&&!gameForeground&&input!=lastOwnInput){Reason="Entrada preparada; vuelve al launcher o a Wardogs para continuar.";return "wait";}
   if(ownForeground)lastOwnInput=input;
   if(!bound||!checkSession)return "wait";
   if(sample==null||sample.FocusMode!="desktop"||sample.SessionId!=SessionId||sample.Server!=Server||!String.Equals(sample.JoinId,JoinId,StringComparison.OrdinalIgnoreCase)||!SameRoot(sample.Root,expectedRoot)||sample.Stopped||sample.End<=now||sample.At>now||(now-sample.At).TotalMilliseconds>1500||!(sample.Status=="opening"||sample.Status=="waiting_game"))
   {Cancel("La sesión ya no autoriza el foco inicial.");return "cancelled";}
   if(gameForeground){Status="already_foreground";Reason="Wardogs ya está delante.";return "none";}
   if(!targetAvailable)return "wait";
+  if(ownForeground&&interactionBusy){Reason="Entrada preparada; esperando que termines de mover o usar el launcher.";return "wait";}
   Status="attempted";Reason="Intento único de activar Wardogs desde tu clic.";return "activate";
  }
  internal void Result(bool success){if(Status=="attempted"){Status=success?"focused":"refused";Reason=success?"Wardogs está delante.":"Windows no permitió activar Wardogs; ponlo delante manualmente.";}}
  internal static bool SameRoot(string left,string right){try{return !String.IsNullOrEmpty(left)&&System.IO.Path.IsPathRooted(left)&&String.Equals(System.IO.Path.GetFullPath(left).TrimEnd('\\','/'),System.IO.Path.GetFullPath(right).TrimEnd('\\','/'),StringComparison.OrdinalIgnoreCase);}catch{return false;}}
+}
+// The launcher yields its own window only for the verified, one-shot initial
+// handoff. This never restores focus after the user has changed application.
+internal static class DesktopEntryHandoff
+{
+ internal static async Task<bool> Run(Func<bool> authorized,Action withdrawLauncher,Func<bool> activate,Func<bool> foreground,Func<int,Task> delay,Func<double> elapsed=null)
+ {
+  var clock=Stopwatch.StartNew();var milliseconds=elapsed??(()=>clock.Elapsed.TotalMilliseconds);double began=milliseconds();
+  Func<double> age=()=>milliseconds()-began;
+  Func<bool> timely=()=>{double value=age();return !Double.IsNaN(value)&&!Double.IsInfinity(value)&&value>=0&&value<=500;};
+  if(!authorized()||!timely())return false;
+  withdrawLauncher();
+  if(!authorized()||!timely())return false;
+  bool accepted=foreground()||activate();
+  for(;;)
+  {
+   if(!authorized()||!timely())return false;
+   if(foreground())return authorized()&&timely();
+   double remaining=500-age();if(!accepted||remaining<=0)return false;
+   await delay(Math.Max(1,(int)Math.Min(25,Math.Ceiling(remaining))));
+  }
+ }
 }
 internal sealed class DesktopEntryFocus : IDisposable
 {
@@ -201,9 +231,41 @@ internal sealed class DesktopEntryFocus : IDisposable
   object raw;var rows=state.TryGetValue("servers",out raw)?raw as object[]:null;if(rows!=null&&entry!=null)foreach(var item in rows){var server=DesktopProtocol.Object(item);if(Integer(server,"number")==entry.Server&&Boolean(server,"trusted")&&Boolean(server,"online")&&String.Equals(DesktopProtocol.Text(server,"joinId"),entry.JoinId,StringComparison.OrdinalIgnoreCase))sample.TargetVerified=true;}
   return sample;}
  private async Task<DesktopEntryJobSnapshot> ReadJob(){var sample=ParseJobState(await ReadState(),jobPolicy.Kind);if(sample!=null)DesktopEntryWatchBaseline.Apply(sample,root,DateTime.UtcNow);return sample;}
- private async Task PulseManual(){uint input;if(!Input(out input)){policy.Cancel("No se puede comprobar la última interacción.");return;}var foreground=GetForegroundWindow();var outcome=policy.Tick(clock.Elapsed.TotalMilliseconds,input,Own(foreground),Game(foreground),false,localPage(),null,false,DateTime.UtcNow,root,false);if(!policy.Pending||policy.SessionId==null)return;var session=policy.SessionId;var sample=Entry(await ReadState());if(disposed||!policy.Pending||policy.SessionId!=session)return;var target=Target();if(!Input(out input)){policy.Cancel("No se puede comprobar la última interacción.");return;}foreground=GetForegroundWindow();outcome=policy.Tick(clock.Elapsed.TotalMilliseconds,input,Own(foreground),Game(foreground),false,localPage(),sample,target!=IntPtr.Zero,DateTime.UtcNow,root);if(outcome=="activate"){bool success=false;try{success=Game(target)&&SetForegroundWindow(target)&&Game(GetForegroundWindow());}catch{}policy.Result(success);}}
- private async Task PulseJob(){uint input;DateTime? inputAt;var nonce=jobPolicy.Nonce;var sample=await ReadJob();if(disposed||!jobPolicy.Pending||jobPolicy.Nonce!=nonce)return;var target=Target();if(!InputWithDate(out input,out inputAt)){jobPolicy.Revoke("No se puede comprobar la última interacción.");return;}var outcome=jobPolicy.Tick(clock.Elapsed.TotalMilliseconds,input,Game(GetForegroundWindow()),localPage(),sample,target!=IntPtr.Zero,DateTime.UtcNow,root,inputAt);if(outcome!="activate")return;
-  bool accepted=false,success=false;try{accepted=Game(target)&&SetForegroundWindow(target);for(int waited=0;;waited+=25){if(disposed||jobPolicy.Nonce!=nonce||jobPolicy.Status!="attempted")return;if(!Input(out input)){jobPolicy.Revoke("No se puede comprobar la última interacción.");return;}if(input!=sample.InputAtStart.Value){jobPolicy.Revoke("Ha habido interacción durante el foco inicial; no se volverá a intentar.");return;}DesktopEntryWatchBaseline.Apply(sample,root,DateTime.UtcNow);if(!sample.InputAtStart.HasValue||!localPage()){jobPolicy.Revoke("La entrada ya no autoriza el foco inicial.");return;}if(Game(target)&&GetForegroundWindow()==target){success=true;break;}if(!accepted||waited>=500)break;await Task.Delay(25);}}catch{}jobPolicy.Result(success);}
+ private void WithdrawLauncher(){if(!owner.IsDisposed&&owner.Visible&&owner.WindowState!=FormWindowState.Minimized)owner.WindowState=FormWindowState.Minimized;}
+ private async Task PulseManual()
+ {
+  uint input;if(!Input(out input)){policy.Cancel("No se puede comprobar la última interacción.");return;}
+  var foreground=GetForegroundWindow();var outcome=policy.Tick(clock.Elapsed.TotalMilliseconds,input,Own(foreground),Game(foreground),false,localPage(),null,false,DateTime.UtcNow,root,false);
+  if(!policy.Pending||policy.SessionId==null)return;
+  var session=policy.SessionId;var sample=Entry(await ReadState());if(disposed||!policy.Pending||policy.SessionId!=session)return;
+  var target=Target();DateTime? inputAt;if(!InputWithDate(out input,out inputAt)){policy.Cancel("No se puede comprobar la última interacción.");return;}
+  foreground=GetForegroundWindow();bool busyOwn=Control.MouseButtons!=MouseButtons.None||!inputAt.HasValue||(DateTime.UtcNow-inputAt.Value).TotalMilliseconds<750;
+  outcome=policy.Tick(clock.Elapsed.TotalMilliseconds,input,Own(foreground),Game(foreground),false,localPage(),sample,target!=IntPtr.Zero,DateTime.UtcNow,root,true,busyOwn);
+  if(outcome!="activate"&&policy.Status!="already_foreground")return;
+  uint expectedInput=input;bool success=false;
+  try{success=await DesktopEntryHandoff.Run(()=>{
+   uint current;if(disposed||policy.SessionId!=session||!policy.HandoffActive(clock.Elapsed.TotalMilliseconds)||!localPage()||sample.End<=DateTime.UtcNow||!Game(target))return false;
+   if(!Input(out current)||current!=expectedInput){policy.Cancel("Has intervenido durante el inicio; no se volverá a activar Wardogs.");return false;}
+   return policy.Status=="attempted"||GetForegroundWindow()==target;
+  },WithdrawLauncher,()=>policy.Status=="attempted"&&Game(target)&&SetForegroundWindow(target),()=>Game(target)&&GetForegroundWindow()==target,ms=>Task.Delay(ms));}catch{}
+  policy.Result(success);
+ }
+ private async Task PulseJob()
+ {
+  uint input;DateTime? inputAt;var nonce=jobPolicy.Nonce;var sample=await ReadJob();if(disposed||!jobPolicy.Pending||jobPolicy.Nonce!=nonce)return;
+  var target=Target();if(!InputWithDate(out input,out inputAt)){jobPolicy.Revoke("No se puede comprobar la última interacción.");return;}
+  var foreground=GetForegroundWindow();var outcome=jobPolicy.Tick(clock.Elapsed.TotalMilliseconds,input,Game(foreground),localPage(),sample,target!=IntPtr.Zero,DateTime.UtcNow,root,inputAt,Own(foreground),Control.MouseButtons!=MouseButtons.None);
+  if(outcome!="activate"&&jobPolicy.Status!="already_foreground")return;
+  uint expectedInput=input;bool success=false;
+  try{success=await DesktopEntryHandoff.Run(()=>{
+   uint current;if(disposed||jobPolicy.Nonce!=nonce||!jobPolicy.HandoffActive(clock.Elapsed.TotalMilliseconds)||sample==null||sample.Entry==null||sample.Entry.End<=DateTime.UtcNow||!localPage()||!Game(target))return false;
+   if(!Input(out current)||current!=expectedInput){jobPolicy.Revoke("Has intervenido durante el inicio; no se volverá a activar Wardogs.");return false;}
+   if(jobPolicy.Status=="already_foreground")return GetForegroundWindow()==target;
+   DesktopEntryWatchBaseline.Apply(sample,root,DateTime.UtcNow);if(!sample.InputAtStart.HasValue){jobPolicy.Revoke("La entrada ya no autoriza el foco inicial.");return false;}
+   return true;
+  },WithdrawLauncher,()=>jobPolicy.Status=="attempted"&&Game(target)&&SetForegroundWindow(target),()=>Game(target)&&GetForegroundWindow()==target,ms=>Task.Delay(ms));}catch{}
+  jobPolicy.Result(success);
+ }
  private async Task Pulse(){if(disposed||busy||!policy.Pending&&!jobPolicy.Pending&&!jobStopping.Pending)return;busy=true;try{if(policy.Pending)await PulseManual();if(!disposed&&jobPolicy.Pending)await PulseJob();if(!disposed&&jobStopping.Pending)try{await jobStopping.Retry();}catch{}}catch{if(policy.Pending)policy.Cancel("No se pudo confirmar la sesión para activar Wardogs.");}finally{busy=false;if(!disposed){Publish();PublishJob();}}}
  private void Publish(){try{publish(new{kind="host_entry_focus_status",id=policy.Nonce,sessionId=policy.SessionId,status=policy.Status,reason=policy.Reason});}catch{}}
  private void PublishJob(){if(jobPolicy.Nonce==null)return;try{publish(new{kind="host_entry_focus_job_status",id=jobPolicy.Nonce,jobKind=jobPolicy.Kind,ownerId=jobPolicy.OwnerId,sessionId=jobPolicy.SessionId,status=jobPolicy.Status,reason=jobPolicy.Reason});}catch{}}

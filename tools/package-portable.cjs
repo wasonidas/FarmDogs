@@ -16,7 +16,7 @@ if(cap.sha256!==hash(path.join(root,'bin/WardogsMovement.exe')))throw Error('El 
 const clickCap=JSON.parse(fs.readFileSync(path.join(root,'bin/team-clicker-capabilities.json')));
 if(clickCap.format!=='wardogs-team-clicker-capabilities-v1'||clickCap.teamClicker!==true||clickCap.automaticTeamRecognition!==true||clickCap.automaticTeamSelection!==true||clickCap.automaticAnyTeam!==true||clickCap.messageHotkeys!==true||clickCap.persistentTeamAttempt!==true||clickCap.positiveEntryConfirmation!==true||clickCap.sha256!==hash(path.join(root,'bin/WardogsTeamClicker.exe')))throw Error('El autoclic y sus capacidades no coinciden.');
 const entryCap=JSON.parse(fs.readFileSync(path.join(root,'bin/entry-capabilities.json')));
-if(entryCap.automaticEntry!==true||entryCap.stopWatcher!==true||entryCap.mainDeployGate!==true||entryCap.splashKeyStart!==true||entryCap.absolutePointer!==true||entryCap.sha256!==hash(path.join(root,'bin/WardogsEntry.exe')))throw Error('La entrada automática y sus capacidades no coinciden.');
+if(entryCap.automaticEntry!==true||entryCap.stopWatcher!==true||entryCap.mainDeployGate!==true||entryCap.splashKeyStart!==true||entryCap.absolutePointer!==true||entryCap.restartRecovery!==true||entryCap.sha256!==hash(path.join(root,'bin/WardogsEntry.exe')))throw Error('La entrada automática y sus capacidades no coinciden.');
 const stamp=new Date().toISOString().replace(/[^0-9]/g,'');
 const build=path.join(root,'dist','portable-'+stamp),folder=path.join(build,'FarmDogs');
 fs.mkdirSync(folder,{recursive:true});
@@ -27,13 +27,14 @@ for(const member of ['LICENSE.txt','NOTICE.txt']){
  fs.mkdirSync(path.join(folder,'licenses'),{recursive:true});fs.writeFileSync(path.join(folder,'licenses','WebView2-'+member),contents);
 }
 fs.writeFileSync(path.join(folder,'LEEME.txt'),[
- 'FARMDOGS LAUNCHER - versión de prueba para Windows x64',
+ 'FARMDOGS LAUNCHER 0.5.4 - Windows x64',
+ 'Entrada automática, equipo elegido, anti-AFK opcional al desplegar y actualizaciones automáticas.',
  '',
  'Extrae esta carpeta completa y abre FarmDogs.exe con doble clic.',
  'Conserva las carpetas bin, src y public junto al ejecutable. Node está incluido.',
  'Usa WebView2 de Windows; Steam y Wardogs deben estar instalados.',
  '',
- 'Cuatro secciones: Entrar, Seedear, Elegir equipo y Mi VIP.',
+ 'Cuatro secciones: JUGAR, SEEDING, EQUIPO y MI VIP.',
  'Anti-AFK tiene un acceso directo visible en todas las secciones para una ausencia breve dentro de cualquier partida de Wardogs.',
  'Elige 5, 15 o 30 minutos o una duración propia; puedes ajustar tiempo entre pasos y duración de cada paso.',
  'Confirma que estás desplegado y con las manos vacías, pulsa Activar anti-AFK y vuelve al juego. No requiere Steam en la app, servidor elegido ni población.',
@@ -45,20 +46,28 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'El autoclic no necesita Steam conectado a la app.',
  'En Elegir equipo, elige azul/rojo/verde y pulsa Esperar equipo.',
  'En Entrar, elige servidor y equipo y pulsa Entrar automáticamente. FarmDogs abre Wardogs, recorre sus menús, escribe el ID y confirma el destino.',
+ 'En JUGAR, marca Activar anti-AFK al desplegar para prepararlo en la misma entrada. Usa los ajustes de Anti-AFK; su duración empieza al confirmar el despliegue, no durante la cola.',
+ 'Es opcional y no necesita Steam conectado a la app ni población mínima. Espera HUD válido, manos vacías y juego delante; F8 y Detener conservan parada.',
  'Puedes usar Elegir equipo por separado si prefieres entrar tú al servidor. Al aparecer el selector, FarmDogs reconoce la tarjeta y empieza a clicar automáticamente.',
  'No necesitas teclas de inicio, colocar el cursor ni guardar coordenadas.',
  'Cancelar detiene la espera o los clics; F8 conserva la parada de emergencia.',
  'Mantiene clics continuos al intervalo elegido. El color apagado o el equilibrio no pausan el bucle.',
  'Se detiene automáticamente al leer DESPLEGANDO. Esa lectura trabaja en paralelo con los clics.',
- 'Una vez clicando, cambiar el foco o la resolución detiene definitivamente ese intento. Para volver a probar, pulsa Esperar equipo.',
+ 'El modo automático pausa sin clicar al perder el foco o con modificadores; al volver exige reconocer de nuevo el selector de la misma ventana y tamaño.',
+ 'Mover el ratón o un color apagado no cancelan. No bloquea el ratón: mientras clica vuelve a situarlo sobre el equipo. F8/Cancelar sí terminan.',
+ 'La ventana del launcher es compacta y fija; se minimiza al ceder el foco inicial autorizado al juego. No recupera el foco indefinidamente.',
+ 'Si Wardogs tiene permisos superiores al controlador, informa para cerrar FarmDogs por completo y abrirla como administrador, o abrir ambos normalmente.',
  'Después de DESPLEGANDO, el autoclic se desactiva y puedes preparar seeding.',
- 'El usuario ha confirmado que el selector automático funciona en el juego. El ensayo anterior instrumentado por F6 sigue conservado como historial.',
- 'Selecciona servidor y duración, pulsa Iniciar seeding y completa la entrada y el despliegue en Wardogs.',
+ 'El usuario ha confirmado en el juego el recorrido de entrada, equipo, despliegue y anti-AFK opcional.',
+ 'En Seeding, selecciona servidor, equipo y duración y pulsa Entrar y seedear. FarmDogs completa la entrada y el despliegue.',
  'Si falla el portapapeles, la apertura sigue y el ID permanece visible para copiarlo manualmente.',
  'Continuar seeding conserva un ciclo ya confirmado por tu cuenta aunque se cierren nuevas admisiones; no vuelve a abrir el juego.',
  'El movimiento espera por defecto a 20 jugadores, presencia de tu cuenta y HUD con manos vacías en primer plano.',
  'Si ya estás desplegado, marca la casilla de confirmación manual para usar movimiento sin conectar Steam a la app.',
  'F8 o Detener sesión cancelan el automatismo. La entrada, equipo y despliegue se verifican antes de preparar el movimiento.',
+ 'Si un reinicio confirmado interrumpe un seeding con entrada propia verificada, puede recuperar una sola vez el mismo servidor y equipo sin ampliar el plazo.',
+ 'Espera datos válidos del servidor y no vuelve a abrir Steam ni recupera el foco. F8 o Detener cancelan también esa espera.',
+ 'No recupera expulsiones AFK, mensajes desconocidos, cambios de ID ni sesiones con presencia confirmada sólo de forma manual.',
  'También puedes programar cuándo se prepara la sesión; el PC y el servicio deben seguir encendidos.',
  'El modo por actividad vigila los cinco servidores, elige un destino y prepara una sola sesión.',
  'Cobro antes de caducar puede proteger los retos semanales; actívalo con Steam conectado en la app.',
@@ -66,13 +75,19 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'No cobra el premio actual al activar la protección. Los resultados inciertos requieren revisión.',
  '',
  'La recepción automática de avisos de Discord todavía NO está conectada.',
- 'No se ha validado el ciclo automático completo en partida activa de Spain ni un VIP nuevo.',
+ 'La versión base superó 579 pruebas automáticas. El usuario confirmó entrada, equipo, despliegue y anti-AFK opcional en el juego.',
+ 'En un ensayo anterior hubo 25 minutos de partida activa sin expulsión observada y un día nuevo de VIP por sedeo verificado. Hubo pausas de lectura y una reanudación manual.',
+ 'Quedan pendientes pruebas reales completas de entrada por actividad, recuperación tras reinicio y esperas muy largas por cola o equipo.',
+ 'Si el monitor de seguridad deja de responder, se detienen las entradas. No significa que hayas pulsado F8.',
+ 'El reconocimiento puede pausar o fallar. No se garantiza evitar cualquier expulsión ni conseguir VIP.',
  'Reglas de premios: https://wardogsspain.com/vip',
  '',
  'Los datos que cree la app se guardan en data junto a ella. Este paquete no contiene data, cuentas, cookies, historial ni capturas.',
  'Node incluye su LICENSE completo en bin/runtime. WebView2 incluye LICENSE y NOTICE en licenses.',
  'FarmDogs comprueba nuevas versiones públicas de wasonidas/FarmDogs en GitHub, verifica el ZIP y espera a estar inactiva para instalar.',
- 'La actualización conserva data y el perfil Steam y vuelve a abrir FarmDogs sin reactivar una sesión anterior.'
+ 'La actualización conserva data y el perfil Steam y vuelve a abrir FarmDogs sin reactivar una sesión anterior.',
+ 'Deja marcada Actualizar automáticamente en la tarjeta Actualizaciones. Las betas no se instalan solas.',
+ 'Si tu versión antigua no muestra Actualizaciones, descarga una vez el ZIP nuevo y conserva tu carpeta data al sustituir los archivos. No compartas data.'
 ].join('\r\n'),'utf8');
 const payload=[...files,'LEEME.txt','licenses/WebView2-LICENSE.txt','licenses/WebView2-NOTICE.txt'].sort();
 const manifest={format:'wardogs-portable-v1',application:'FarmDogs',version:JSON.parse(fs.readFileSync(path.join(root,'package.json'))).version,createdAt:new Date().toISOString(),platform:'win32-x64',privateDataIncluded:false,files:payload.map(relative=>({path:relative,sha256:hash(path.join(folder,relative))}))};

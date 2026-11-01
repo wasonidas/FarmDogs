@@ -78,13 +78,16 @@ internal sealed class DesktopWindow : Form
 
     public DesktopWindow(bool hiddenTest)
     {
-        selfTest=hiddenTest;Text="FarmDogs Launcher";ClientSize=new Size(1000,790);MinimumSize=new Size(780,650);StartPosition=FormStartPosition.CenterScreen;
+        selfTest=hiddenTest;Text="FarmDogs Launcher";FormBorderStyle=FormBorderStyle.FixedSingle;MaximizeBox=false;MinimizeBox=true;StartPosition=FormStartPosition.Manual;AutoScaleMode=AutoScaleMode.None;
+        var layout=DesktopAppearance.CompactLayout(Screen.FromPoint(Cursor.Position).WorkingArea,SizeFromClientSize(Size.Empty));ClientSize=layout.ClientSize;Location=layout.Location;MinimumSize=Size;MaximumSize=Size;Icon=DesktopAppearance.LoadIcon();
         rewards=new RewardBridge(http,root,readerId,()=>authView==null?null:authView.CoreWebView2,()=>reading&&!exiting&&!selfTest&&!authNavigating,message=>SetStatus("reward_protection",message));
         BackColor=Color.FromArgb(16,22,21);Font=new Font("Segoe UI",9);
         view.Dock=DockStyle.Fill;Controls.Add(view);
-        var bar=new ToolStrip {GripStyle=ToolStripGripStyle.Hidden,Dock=DockStyle.Top};
-        var home=new ToolStripButton("FarmDogs Launcher");home.Click+=(s,e)=>{if(view.CoreWebView2!=null)view.CoreWebView2.Navigate(DesktopProtocol.LocalBase+"/mini");};
-        var account=new ToolStripButton("Cuenta Steam");account.Click+=async(s,e)=>await OpenAccount();
+        var bar=new ToolStrip {GripStyle=ToolStripGripStyle.Hidden,Dock=DockStyle.Top,AutoSize=false,Height=31,CanOverflow=false,Padding=new Padding(7,2,7,2),BackColor=DesktopAppearance.Background,ForeColor=DesktopAppearance.Text,Renderer=new DesktopToolbarRenderer()};
+        var home=new ToolStripButton("Inicio");home.Click+=(s,e)=>{if(view.CoreWebView2!=null)view.CoreWebView2.Navigate(DesktopProtocol.LocalBase+"/mini");};
+        var account=new ToolStripButton("Steam");account.Click+=async(s,e)=>await OpenAccount();
+        foreach(var item in new ToolStripItem[]{home,account,stop}){item.ForeColor=DesktopAppearance.Text;item.Margin=new Padding(0,0,5,0);item.Padding=new Padding(6,0,6,0);}
+        status.AutoSize=false;status.Width=Math.Max(80,ClientSize.Width-300);status.ForeColor=DesktopAppearance.Muted;status.AutoToolTip=true;status.TextAlign=ContentAlignment.MiddleLeft;
         stop.Enabled=false;stop.Click+=async(s,e)=>await StopReading();
         bar.Items.AddRange(new ToolStripItem[]{home,account,stop,new ToolStripSeparator(),status});Controls.Add(bar);
         poll.Tick+=async(s,e)=>{await ReadAccount();await rewards.ReadAsync();};
@@ -119,6 +122,7 @@ internal sealed class DesktopWindow : Form
             finally{closeHttp.Dispose();}
         };
     }
+    protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);DesktopAppearance.DarkTitleBar(Handle);}
     public async Task InitializeView()
     {
         var profile=Path.Combine(root,"data",selfTest?"webview-selftest":"webview-profile");

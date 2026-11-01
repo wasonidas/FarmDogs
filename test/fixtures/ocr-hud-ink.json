@@ -1,0 +1,156 @@
+{
+  "format": "wardogs-image-text-v1",
+  "width": 2560,
+  "height": 1440,
+  "language": "es-ES",
+  "source": {
+    "kind": "file",
+    "sha256": "a48e4f9a32d08ceaf151c845d78e17e087a0606ac5ab1a8cb8684a2091904cff",
+    "capturedAt": null,
+    "captureMethod": "file_decode"
+  },
+  "captureFreshnessVerified": false,
+  "wordCoordinateSpace": "original_image_pixels",
+  "lines": [
+    {
+      "text": "FISTs",
+      "pass": "hud_hands_ink",
+      "words": [
+        {
+          "text": "FISTs",
+          "x": 2472.3449348394633,
+          "y": 1210.815688451523,
+          "width": 39.53646488775803,
+          "height": 17.17249699778722,
+          "polygon": [
+            [
+              2472.3449348394633,
+              1214.0372854198172
+            ],
+            [
+              2510.709909920569,
+              1210.815688451523
+            ],
+            [
+              2511.8813997272214,
+              1224.7665884810162
+            ],
+            [
+              2473.5164246461154,
+              1227.9881854493103
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "text": "100",
+      "pass": "hud_health_ink",
+      "words": [
+        {
+          "text": "100",
+          "x": 2440.4450635061253,
+          "y": 1359.8097040265864,
+          "width": 29.647874769107602,
+          "height": 17.937532234540413,
+          "polygon": [
+            [
+              2441.680794263839,
+              1359.8097040265864
+            ],
+            [
+              2470.092938275233,
+              1362.04578825483
+            ],
+            [
+              2468.8572075175193,
+              1377.7472362611268
+            ],
+            [
+              2440.4450635061253,
+              1375.5111520328833
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "text": "042NE",
+      "pass": "hud_compass_text_detail",
+      "words": [
+        {
+          "text": "042NE",
+          "x": 1248.139645959899,
+          "y": 37.46827240217962,
+          "width": 64.7562960279945,
+          "height": 18.678224865724275,
+          "polygon": [
+            [
+              1248.5846540811328,
+              37.46827240217962
+            ],
+            [
+              1312.8959419878936,
+              39.15232274331942
+            ],
+            [
+              1312.4509338666599,
+              56.1464972679039
+            ],
+            [
+              1248.139645959899,
+              54.46244692676409
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "ocrPasses": [
+    {
+      "name": "hud_hands_ink",
+      "text": "FISTs",
+      "language": "es-ES",
+      "preprocessing": "luma_threshold_150_inverted",
+      "interpolation": "cubic",
+      "x": 2468,
+      "y": 1211,
+      "width": 50,
+      "height": 20,
+      "scale": 6,
+      "padding": 32,
+      "textAngle": -4.800000000000035,
+      "lineCount": 1
+    },
+    {
+      "name": "hud_health_ink",
+      "text": "100",
+      "language": "es-ES",
+      "preprocessing": "luma_threshold_170_inverted",
+      "interpolation": "cubic",
+      "x": 2420,
+      "y": 1356,
+      "width": 60,
+      "height": 32,
+      "scale": 4,
+      "padding": 32,
+      "textAngle": 4.499999999999964,
+      "lineCount": 1
+    },
+    {
+      "name": "hud_compass_text_detail",
+      "text": "042NE",
+      "language": "es-ES",
+      "preprocessing": null,
+      "interpolation": "cubic",
+      "x": 1244,
+      "y": 36,
+      "width": 75,
+      "height": 23,
+      "scale": 6,
+      "padding": 32,
+      "textAngle": 1.499999999999963,
+      "lineCount": 1
+    }
+  ]
+}

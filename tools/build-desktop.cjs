@@ -3,6 +3,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..');
+const {buildIcon}=require('./build-icon.cjs');
 const version='1.0.4314.35';
 const sha512='cOaiVqP3BmQHMnxGpZzANM22tUXgycrisyJHjIGNzIaMsm8iXj7Kx+ceYg+RbYwJtzT009qfcFTocvVLY+ekMw==';
 async function build(){
@@ -23,10 +24,11 @@ async function build(){
  }
  const compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
  const output=path.join(bin,process.argv.includes('--staging')?'FarmDogsApp.next.exe':'FarmDogsApp.exe');
- execFileSync(compiler,['/nologo','/codepage:65001','/platform:x64','/target:winexe','/out:'+output,
+ const icon=buildIcon();
+ execFileSync(compiler,['/nologo','/codepage:65001','/platform:x64','/target:winexe','/out:'+output,'/win32icon:'+icon,'/resource:'+icon+',FarmDogs.AppIcon',
   '/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Net.Http.dll','/r:System.Web.Extensions.dll',
   '/r:'+path.join(bin,'Microsoft.Web.WebView2.Core.dll'),'/r:'+path.join(bin,'Microsoft.Web.WebView2.WinForms.dll'),
-  path.join(root,'native','DesktopProtocol.cs'),path.join(root,'native','AccountReadScript.cs'),path.join(root,'native','DesktopClose.cs'),path.join(root,'native','DesktopEntryFocus.cs'),path.join(root,'native','RewardBridge.cs'),path.join(root,'native','ForegroundAlert.cs'),path.join(root,'native','AppShutdown.cs'),path.join(root,'native','DesktopApp.cs')],{cwd:root,stdio:'inherit',windowsHide:true});
+  path.join(root,'native','DesktopProtocol.cs'),path.join(root,'native','DesktopAppearance.cs'),path.join(root,'native','AccountReadScript.cs'),path.join(root,'native','DesktopClose.cs'),path.join(root,'native','DesktopEntryFocus.cs'),path.join(root,'native','RewardBridge.cs'),path.join(root,'native','ForegroundAlert.cs'),path.join(root,'native','AppShutdown.cs'),path.join(root,'native','DesktopApp.cs')],{cwd:root,stdio:'inherit',windowsHide:true});
  console.log('Built: '+output);
  execFileSync(compiler,['/nologo','/codepage:65001','/platform:x64','/target:exe','/out:'+path.join(bin,'DesktopProtocolTests.exe'),'/r:System.Net.Http.dll','/r:System.Web.Extensions.dll',path.join(root,'native','DesktopProtocol.cs'),path.join(root,'native','DesktopProtocolTests.cs')],{cwd:root,stdio:'inherit',windowsHide:true});
  execFileSync(path.join(bin,'DesktopProtocolTests.exe'),[],{cwd:root,stdio:'inherit',windowsHide:true});

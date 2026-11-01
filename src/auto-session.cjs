@@ -33,10 +33,19 @@ function createAutoSession({root,dataDir,now,monoNow,launcher,getInputs,event,re
  function tickInternal(){
   if(closed||!active())return;
   if(startedMono!==null&&(monoNow()<startedMono||monoNow()-startedMono>=allowedMonoMs)){stop('Fin de la duración elegida.','expired');return;}
-  const input=getInputs(current.server,current.purpose||'seeding'),screen=reader.view();const decision=advanceAutoSeeding(current,{...input,screen},now());
+  const input=getInputs(current.server,current.purpose||'seeding'),screen=reader.view(),at=now();const decision=advanceAutoSeeding(current,{...input,screen},at);
   const changed=current.status!==decision.session.status;current=decision.session;
+  // A current unknown scene can still prove foreground. Clarify only the
+  // diagnosis; the existing decision keeps its state and movement command.
+  const screenAge=at-Date.parse(screen?.capturedAt);
+  if(current.status==='waiting_game'&&screen?.status==='verified_capture'&&screen.scene==='unknown'&&screen.gameForeground===true&&Number.isInteger(screen.gamePid)&&screen.gamePid>0&&Number.isFinite(screenAge)&&screenAge>=0&&screenAge<=5000&&(current.presenceMode!=='entry'||screen.gamePid===current.entryProof.gamePid&&screen.gameWindow===current.entryProof.gameWindow)){
+   const prefix=current.purpose!=='break'&&current.presenceMode==='manual'?'Prueba sin lectura Steam: ':'';
+   current={...current,reason:prefix+'Wardogs está en primer plano, pero aún no se reconoce el HUD del personaje desplegado.'};
+  }
   if(changed){atomicJson(file,current);event('auto_seeding_state',{purpose:current.purpose||'seeding',server:current.server,status:current.status});}
-  if(decision.command==='stop')command('stop',{},!active());
+  // A verified restart revokes the old movement lease without impersonating an
+  // operator F8. A real F8 during the recovery handoff must remain distinguishable.
+  if(decision.command==='stop')command('stop',{},!active()&&current.disconnect?.cause!=='server_restart');
   else if(['moving','starting_movement'].includes(decision.session.status))command('start',screen);
   else if(input.movement?.autoSessionId!==current.id)command('watch');
   // Loss of presence/source/controller must not blind the passive reader just

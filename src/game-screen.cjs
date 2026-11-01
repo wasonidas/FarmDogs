@@ -23,6 +23,15 @@ function classifyGameScreen(report,{expectedServer=null}={}){
  const message=exact(/^(?:MENSAJE DEL SERVIDOR|SERVER MESSAGE)$/).length>0;
  const afk=expelled&&/SE TE HA DESCONECTADO DEL SERVIDOR POR INACTIVIDAD\b|DISCONNECTED FROM THE SERVER FOR INACTIVITY\b/.test(all);
  const restart=message&&/SERVIDOR SE ESTA REINICIANDO\b|SERVER IS RESTARTING\b/.test(all);
+ // Recovery needs the complete observed modal, not the broader diagnostic
+ // substring above. EI is the single documented OCR alias for El in the real
+ // archived restart modal. This signal alone never grants input.
+ const restartHeaders=exact(/^MENSAJE DEL SERVIDOR$/),restartMessages=exact(/^(?:EL|EI) SERVIDOR SE ESTA REINICIANDO\.?$/);
+ const restartButtons=exact(/^CONTINUAR$/);
+ const orderedRestart=restartHeaders.length===1&&restartMessages.length===1&&restartButtons.length===1&&next.length===1&&
+  restartHeaders[0].bounds.y+restartHeaders[0].bounds.height<restartMessages[0].bounds.y&&
+  restartMessages[0].bounds.y+restartMessages[0].bounds.height<restartButtons[0].bounds.y;
+ const restartConflict=allRows.some(row=>/INACTIVIDAD|INACTIVITY|^(?:EXPULSADO|KICKED|SELECCIONAR EQUIPO|SELECT TEAM|SELECCIONAR FACCION|SELECT FACTION|CARGANDO|LOADING|DESPLEGANDO|DEPLOYING|ENTRANDO|ENTERING)$|ESCRIBE UN MENSAJE|TYPE A MESSAGE/.test(row.text));
  const header=exact(/^[¿?]?(?:UNIRSE AL SERVIDOR DEL JUEGO|JOIN GAME SERVER)[?]?$/);
  const join=exact(/^(?:UNIRSE A LA PARTIDA|JOIN GAME)$/);
  const cancel=exact(/^(?:CANCELAR|CANCEL)$/);
@@ -40,7 +49,7 @@ function classifyGameScreen(report,{expectedServer=null}={}){
  if((afk&&restart)||((afk||restart)&&joinModal))return unknown('Lectura con estados contradictorios.');
  const result=(phase,reason,button=null)=>({phase,reason,inputAllowed:false,activeMatchVerified:false,buttonCandidate:button?{bounds:button.bounds}:null});
  if(next.length===1&&afk)return result('afk_kick','El mensaje visible indica inactividad.',next[0]);
- if(next.length===1&&restart)return result('server_restart','El mensaje visible indica reinicio del servidor.',next[0]);
+ if(next.length===1&&restart)return {...result('server_restart','El mensaje visible indica reinicio del servidor.',next[0]),...(orderedRestart&&!restartConflict&&!expelled&&header.length===0&&join.length===0&&cancel.length===0?{restartConfirmed:true,restartAnchors:{header:restartHeaders[0].bounds,message:restartMessages[0].bounds,button:restartButtons[0].bounds}}:{})};
  if(joinModal){
   const server=serverRows[0].server;
   if(expectedServer!==null&&(!Number.isInteger(expectedServer)||expectedServer<1||expectedServer>5))return unknown('Servidor esperado no válido.');

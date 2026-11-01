@@ -51,6 +51,7 @@ namespace WardogsSeeding {
  }
  public interface ITeamClickerButtonInput {void Button(bool down);}
  public sealed class TeamClickerOperatorStopException:InvalidOperationException {public TeamClickerOperatorStopException():base("Detenido con F8.") {}}
+ public sealed class TeamClickerContextPauseException:InvalidOperationException {public TeamClickerContextPauseException(string message):base(message) {}}
  public interface ITeamClickerAnyPlatform {
   Dictionary<string,TeamClickerTarget> CaptureAnyTargets(TeamClickerFrame frame,DateTime now);
   Dictionary<string,TeamClickerTarget> AvailableTargets(TeamClickerFrame frame,DateTime now);
@@ -93,7 +94,7 @@ namespace WardogsSeeding {
   TeamClickerFrame attemptFrame;
   double leaseMono,nextClickMono,nextRecognitionMono,lastMono;
   DateTime attemptStartedUtc,firstClickUtc,actualTeamSinceUtc;
-  bool armed,active,running,waitingForSelector,targetsChanged;
+  bool armed,active,running,waitingForSelector,targetsChanged,pausedForContext;
   string reason="Autoclic desactivado.",error,operatorStoppedSessionId,attemptId,actualTeam;
   int count;
   long controlEpoch;
@@ -114,9 +115,14 @@ namespace WardogsSeeding {
   public bool TargetsChanged {get{return targetsChanged;}}
   public Dictionary<string,TeamClickerTarget> Targets {get{return targets;}}
   public void TargetsSaved(){targetsChanged=false;}
-  public void Stop(string message){controlEpoch++;active=false;running=false;waitingForSelector=false;attemptFrame=null;reason=message;}
+  public void Stop(string message){controlEpoch++;active=false;running=false;waitingForSelector=false;pausedForContext=false;attemptFrame=null;reason=message;}
   void CancelAutomatic(string message){if(Automatic)automaticStops[command.sessionId]=message;armed=false;Stop(message);}
   void StopAttempt(string message){if(Automatic)CancelAutomatic(message);else Stop(message);}
+  void ContextChanged(string message,double mono){
+   if(!Automatic){StopAttempt(message);return;}
+   if(!pausedForContext){controlEpoch++;nextRecognitionMono=mono;}
+   pausedForContext=true;running=false;waitingForSelector=true;error=null;reason=message+" Se reconocera de nuevo el selector al volver a la misma ventana de Wardogs.";
+  }
   public void Fail(string message){if(Automatic)CancelAutomatic(message);else{armed=false;Stop(message);}error=message;}
   public void EmergencyStop(){operatorStoppedSessionId=command==null?null:command.sessionId;string message="Detenido con F8. Activa de nuevo el autoclic en la app.";if(Automatic)CancelAutomatic(message);else{armed=false;Stop(message);}}
   bool Lease(DateTime now,double mono){
@@ -129,6 +135,8 @@ namespace WardogsSeeding {
    if(values==null||values.Count!=3)return false;
    foreach(string team in new[]{"blue","red","green"}){TeamClickerTarget value;if(!values.TryGetValue(team,out value)||value==null||!value.Valid()||value.width!=frame.Width||value.height!=frame.Height)return false;}return true;
   }
+  static bool FreshTarget(TeamClickerTarget value,DateTime began,DateTime ended){DateTime captured;return value!=null&&DateTime.TryParse(value.capturedAt,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind,out captured)&&captured.Kind==DateTimeKind.Utc&&captured>=began&&captured<=ended;}
+  static bool FreshTargets(string team,TeamClickerTarget target,Dictionary<string,TeamClickerTarget> all,DateTime began,DateTime ended){if(team!="any")return FreshTarget(target,began,ended);if(all==null)return false;foreach(var value in all.Values)if(!FreshTarget(value,began,ended))return false;return true;}
   ITeamClickerAnyPlatform AnyPlatform {get{var native=platform as ITeamClickerAnyPlatform;if(native==null)throw new InvalidOperationException("Este controlador no admite equipo aleatorio.");return native;}}
   void SaveTargets(string team,TeamClickerTarget target,Dictionary<string,TeamClickerTarget> all){
    if(team=="any")foreach(var item in all)targets[item.Key]=item.Value;else targets[team]=target;
@@ -170,22 +178,24 @@ namespace WardogsSeeding {
   }
   void RecognizeForAttempt(DateTime now,double mono){
    string expectedSession=command.sessionId,expectedAttempt=attemptId,expectedTeam=command.selectedTeam;
+   long expectedEpoch=controlEpoch;bool needsFresh=pausedForContext;
    double began=elapsedNow();TeamClickerTarget target=null;Dictionary<string,TeamClickerTarget> all=null;string unavailable=null;
    try{if(expectedTeam=="any")all=AnyPlatform.CaptureAnyTargets(attemptFrame,now);else target=platform.CaptureTarget(attemptFrame,now,expectedTeam);}catch(TeamClickerOperatorStopException){EmergencyStop();return;}catch(Exception ex){unavailable=ex.Message;}
    double elapsed=elapsedNow()-began;
    if(Double.IsNaN(elapsed)||Double.IsInfinity(elapsed)||elapsed<0){Fail("El reloj del reconocimiento no es valido.");return;}
-   if(!active||!armed||command.sessionId!=expectedSession||attemptId!=expectedAttempt||command.selectedTeam!=expectedTeam)return;
+   if(!active||!armed||controlEpoch!=expectedEpoch||command.sessionId!=expectedSession||attemptId!=expectedAttempt||command.selectedTeam!=expectedTeam)return;
    if(!Lease(now.AddMilliseconds(elapsed),mono+elapsed))return;
-   if(!SameFrame(platform.ForegroundGame(),attemptFrame)){Stop("Autoclic detenido: Wardogs ha perdido el foco o ha cambiado su ventana.");return;}
-   if(platform.ModifiersDown()){Stop("Autoclic detenido por una tecla modificadora.");return;}
+   if(!SameFrame(platform.ForegroundGame(),attemptFrame)){ContextChanged("Wardogs ha perdido el foco o ha cambiado su ventana.",mono+elapsed);return;}
+   if(platform.ModifiersDown()){ContextChanged("Esperando que sueltes las teclas modificadoras.",mono+elapsed);return;}
    bool verified=expectedTeam=="any"?ValidAnyTargets(all,attemptFrame):target!=null&&target.Valid()&&target.width==attemptFrame.Width&&target.height==attemptFrame.Height;
+   if(needsFresh&&!FreshTargets(expectedTeam,target,all,now,now.AddMilliseconds(elapsed)))verified=false;
    // Only initial acquisition waits for structural proof. Once acquired, the
    // click loop continues through a hidden/disabled color until positive entry.
    if(!verified){
     running=false;waitingForSelector=true;nextRecognitionMono=mono+elapsed+RecognitionIntervalMs;error=null;
     reason="Esperando poder reconocer las tarjetas del selector."+(String.IsNullOrEmpty(unavailable)?"":" "+unavailable);return;
    }
-   SaveTargets(expectedTeam,target,all);running=true;waitingForSelector=false;error=null;
+   SaveTargets(expectedTeam,target,all);running=true;waitingForSelector=false;pausedForContext=false;error=null;
    nextClickMono=mono+elapsed;reason="Tarjeta reconocida. Intentando entrar hasta detectar DESPLEGANDO.";
   }
   public void Toggle(DateTime now,double mono){
@@ -230,9 +240,9 @@ namespace WardogsSeeding {
    try{
     if(Automatic&&!active){AcquireAutomatically(now,mono);return;}
     if(!active)return;
-    if(platform.ModifiersDown()){StopAttempt("Autoclic detenido por una tecla modificadora. Activa de nuevo la seleccion en la app.");return;}
+    if(platform.ModifiersDown()){ContextChanged("Esperando que sueltes las teclas modificadoras.",mono);return;}
     var frame=platform.ForegroundGame();
-    if(!SameFrame(frame,attemptFrame)){StopAttempt("Autoclic detenido: Wardogs ha perdido el foco o ha cambiado su ventana. Activa de nuevo la seleccion en la app.");return;}
+    if(!SameFrame(frame,attemptFrame)){ContextChanged("Wardogs ha perdido el foco o ha cambiado su ventana.",mono);return;}
     if(waitingForSelector||!running){if(mono>=nextRecognitionMono)RecognizeForAttempt(now,mono);return;}
     if(mono<nextClickMono)return;
     string team=command.selectedTeam;TeamClickerTarget target;
@@ -242,7 +252,7 @@ namespace WardogsSeeding {
      if(Double.IsNaN(elapsed)||Double.IsInfinity(elapsed)||elapsed<0){Fail("El reloj del reconocimiento no es valido.");return;}
      if(!active||!armed||controlEpoch!=epoch||command.sessionId!=session||attemptId!=attempt)return;
      if(!Lease(now.AddMilliseconds(elapsed),mono+elapsed))return;
-     if(!SameFrame(platform.ForegroundGame(),attemptFrame)||platform.ModifiersDown()){StopAttempt("Autoclic detenido: Wardogs ha perdido el foco o hay una tecla modificadora.");return;}
+     if(!SameFrame(platform.ForegroundGame(),attemptFrame)||platform.ModifiersDown()){ContextChanged("Wardogs ha perdido el foco o hay una tecla modificadora.",mono+elapsed);return;}
      var choices=new List<string>();
      foreach(string color in new[]{"blue","red","green"}){TeamClickerTarget value;if(available!=null&&available.TryGetValue(color,out value)&&value!=null&&value.Valid()&&value.width==frame.Width&&value.height==frame.Height)choices.Add(color);}
      nextClickMono=mono+elapsed+command.intervalMs;
@@ -252,12 +262,12 @@ namespace WardogsSeeding {
      target=available[team];targets[team]=target;now=now.AddMilliseconds(elapsed);
     }else {target=targets[team];nextClickMono=mono+command.intervalMs;}
     platform.Click(frame,target);if(actualTeam!=team)actualTeamSinceUtc=now;actualTeam=team;if(count==0)firstClickUtc=now;count++;reason=Automatic?"Intentando entrar al equipo "+team+". Esperando DESPLEGANDO.":"Autoclic activo. F6 o F8 para detener.";
-   }catch(TeamClickerOperatorStopException){EmergencyStop();}catch(Exception ex){StopAttempt(ex.Message);error=ex.Message;}
+   }catch(TeamClickerOperatorStopException){EmergencyStop();}catch(TeamClickerContextPauseException ex){if(Automatic&&command.selectedTeam=="any")actualTeam=null;ContextChanged(ex.Message,mono);}catch(Exception ex){StopAttempt(ex.Message);error=ex.Message;}
   }
   public object View(DateTime now,int pid){
    var points=new Dictionary<string,object>();foreach(string team in new[]{"blue","red","green"})points[team]=targets.ContainsKey(team)?targets[team].PublicView():new{configured=false};
    string done=null,completedTeam=null,automaticStop=null;if(command!=null){completed.TryGetValue(command.sessionId,out done);completedTeams.TryGetValue(command.sessionId,out completedTeam);automaticStops.TryGetValue(command.sessionId,out automaticStop);}
-   return new{format="wardogs-team-clicker-state-v1",at=now.ToString("o"),pid=pid,sessionId=command==null?null:command.sessionId,startMode=command==null?"hotkey":command.StartMode,automaticWaiting=AutomaticWaiting,requiresHotkeys=RequiresHotkeys,armed=armed,active=active,running=running,waitingForSelector=waitingForSelector,attemptId=attemptId,attemptStartedAt=attemptId==null?null:attemptStartedUtc.ToString("o"),completedAttemptId=done,selectedTeam=command==null?"blue":command.selectedTeam,requestedTeam=command==null?null:command.selectedTeam,actualTeam=done==null?actualTeam:completedTeam,completedActualTeam=completedTeam,intervalMs=command==null?20:command.intervalMs,toggleKey=Automatic?null:"F6",captureKey=Automatic?null:"F9",reason=reason,error=error,count=count,gamePid=active&&attemptFrame!=null?attemptFrame.Pid:0,gameWindow=active&&attemptFrame!=null?attemptFrame.Window:0L,endAt=(string)null,operatorStoppedSessionId=operatorStoppedSessionId,automaticStoppedSessionId=automaticStop==null?null:command.sessionId,automaticStopReason=automaticStop,targets=points};
+   return new{format="wardogs-team-clicker-state-v1",at=now.ToString("o"),pid=pid,sessionId=command==null?null:command.sessionId,startMode=command==null?"hotkey":command.StartMode,automaticWaiting=AutomaticWaiting,requiresHotkeys=RequiresHotkeys,armed=armed,active=active,running=running,waitingForSelector=waitingForSelector,pausedForContext=pausedForContext,attemptId=attemptId,attemptStartedAt=attemptId==null?null:attemptStartedUtc.ToString("o"),completedAttemptId=done,selectedTeam=command==null?"blue":command.selectedTeam,requestedTeam=command==null?null:command.selectedTeam,actualTeam=done==null?actualTeam:completedTeam,completedActualTeam=completedTeam,intervalMs=command==null?20:command.intervalMs,toggleKey=Automatic?null:"F6",captureKey=Automatic?null:"F9",reason=reason,error=error,count=count,gamePid=active&&attemptFrame!=null?attemptFrame.Pid:0,gameWindow=active&&attemptFrame!=null?attemptFrame.Window:0L,endAt=(string)null,operatorStoppedSessionId=operatorStoppedSessionId,automaticStoppedSessionId=automaticStop==null?null:command.sessionId,automaticStopReason=automaticStop,targets=points};
   }
  }
 }

@@ -14,7 +14,7 @@ function normalizeScreen(report,now,directory,{classify=classifyGameScreen}={}){
  if(report?.format!=='wardogs-image-text-v1'||s?.kind!=='foreground_game'||s.captureMethod!=='foreground_client_screen_copy'||!UUID.test(s.frameId||'')||!Number.isInteger(s.gamePid)||s.gamePid<1||!Number.isSafeInteger(s.window)||s.window<1||!Number.isFinite(age)||age<0||age>5000||!Number.isFinite(end)||end<Date.parse(s.capturedAt)||end-Date.parse(s.capturedAt)>2000)return unknown(unavailableReasons[report?.reason]||report?.reason||'No hay una captura reciente del juego.');
  if(typeof s.path!=='string'||path.dirname(path.resolve(s.path))!==path.resolve(directory)||path.basename(s.path)!=='game-frame-'+s.frameId+'.png')return unknown('Procedencia de captura sin confirmar.');
  const classified=classify(report);
- return {status:'verified_capture',scene:classified.phase,gameForeground:true,gamePid:s.gamePid,gameWindow:s.window,frameId:s.frameId,capturedAt:s.capturedAt,reason:classified.reason,occlusionVerified:false,selectorPending:classified.selectorPending===true,entryConfirmed:classified.entryConfirmed===true};
+ return {status:'verified_capture',scene:classified.phase,gameForeground:true,gamePid:s.gamePid,gameWindow:s.window,frameId:s.frameId,capturedAt:s.capturedAt,reason:classified.reason,occlusionVerified:false,selectorPending:classified.selectorPending===true,entryConfirmed:classified.entryConfirmed===true,...(classified.phase==='server_restart'&&classified.restartConfirmed===true?{restartConfirmed:true}:{})};
 }
 function createScreenReader({root,dataDir,run=promisify(execFile),now=Date.now,directory=path.join(dataDir,'screen-monitor'),classify=classifyGameScreen}={}){
  let last=null,busy=false,abort=null,generation=0,lastObservedAt=null;

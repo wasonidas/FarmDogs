@@ -40,6 +40,74 @@ const focusJobId='55555555-5555-4555-8555-555555555555';
 function deferredHost(a){a.hostEvent({kind:'host_entry_focus_support',supported:true,deferred:true});}
 function automaticSample(){const s=sample();s.capabilities.automaticEntry=true;s.capabilities.deferredEntryFocus=true;return s;}
 
+test('entrar con anti-AFK: casilla opcional conserva la entrada compatible sin iniciar movimiento desde la interfaz',async()=>{
+ const initial=automaticSample();initial.capabilities.entryAntiAfk=true;const a=await app({initial});
+ assert.equal(a.node('entry-anti-afk').checked,false);assert.equal(a.node('entry-anti-afk').disabled,false);assert.match(a.node('entry-anti-afk-help').textContent,/Opcional/);
+ await a.click('play');assert.deepEqual(a.posts().map(row=>[row.route,row.body]),[['/api/entry/start',{server:1,expectedJoinId:joinId,team:'blue',seeding:false,durationMinutes:120}]]);
+});
+
+test('entrar con anti-AFK: envía ajustes propios una sola vez y el backend confirma despliegue, sin Steam ni población mínima',async()=>{
+ const initial=automaticSample();initial.capabilities.entryAntiAfk=true;initial.servers=initial.servers.map(s=>({...s,players:1,seedingActive:false}));initial.account={};
+ const id='99999999-9999-4999-8999-999999999999';
+ const a=await app({initial,onPost:(route,body,state)=>({...state,entry:{id,server:body.server,team:body.team,seeding:body.seeding,antiAfk:body.antiAfk,antiAfkSettings:body.antiAfkSettings,status:'waiting_game',endAt:'2026-10-31T12:00:00Z',reason:'Esperando Wardogs.'}})});
+ a.node('break-duration').value='45';a.node('break-interval').value='20';a.node('break-hold').value='750';assert.equal(a.node('break-confirm').checked,false);
+ await a.change('entry-anti-afk',true);assert.match(a.node('entry-anti-afk-help').textContent,/45 min.*20 s.*750 ms/);assert.match(a.node('entry-anti-afk-help').textContent,/La cola no consume/);assert.match(a.node('entry-anti-afk-help').textContent,/Manos vacías/);
+ a.update({...a.current,now:'2026-10-31T10:00:01Z'});assert.equal(a.node('entry-anti-afk').checked,true);assert.equal(a.posts().length,0);
+ await a.click('play');assert.deepEqual(a.posts().map(row=>[row.route,row.body]),[['/api/entry/start',{server:1,expectedJoinId:joinId,team:'blue',seeding:false,durationMinutes:120,antiAfk:true,antiAfkSettings:{durationMinutes:45,intervalSeconds:20,holdMs:750}}]]);
+ assert.equal(a.node('entry-anti-afk').disabled,true);assert.equal(a.node('entry-anti-afk').checked,true);assert.equal(a.posts().some(row=>row.route==='/api/movement/start'),false);assert.match(a.node('notice-text').textContent,/45 min tras confirmar el despliegue/);
+ // Changing future pause settings never rewrites the entry already accepted.
+ a.node('break-duration').value='5';a.node('break-interval').value='300';a.update({...a.current,now:'2026-10-31T10:01:00Z'});assert.match(a.node('entry-anti-afk-help').textContent,/45 min.*20 s/);assert.equal(a.posts().length,1);
+ a.update({...a.current,entry:{...a.current.entry,status:'starting_seeding'}});assert.equal(a.node('entry-progress-state').textContent,'Preparando anti-AFK');assert.equal(a.posts().length,1);
+});
+
+test('entrar con anti-AFK: un servicio anterior o un controlador ausente no promete ni envía la opción',async()=>{
+ for(const kind of ['legacy','movement','entry']){
+  const initial=automaticSample();initial.capabilities.entryAntiAfk=kind!=='legacy';if(kind==='movement')initial.localTools.automaticMovement=false;if(kind==='entry')initial.capabilities.automaticEntry=false;
+  const a=await app({initial});assert.equal(a.node('entry-anti-afk').disabled,true,kind);assert.equal(a.node('entry-anti-afk').checked,false);assert.equal(a.posts().length,0);
+  // A selection from a previously compatible state cannot be silently dropped.
+  a.node('entry-anti-afk').checked=true;a.update(a.current);assert.equal(a.node('play').disabled,true,kind);assert.equal(a.posts().length,0);
+ }
+});
+
+test('entrar con anti-AFK: valida ajustes, refleja la opción del intento activo y no conserva controles utilizables sin conexión',async()=>{
+ const initial=automaticSample();initial.capabilities.entryAntiAfk=true;const a=await app({initial});await a.change('entry-anti-afk',true);
+ a.node('break-duration').value='0';for(const f of a.node('break-duration').listeners.get('input'))await f();assert.equal(a.node('play').disabled,true);assert.match(a.node('entry-anti-afk-help').textContent,/Revisa duración/);assert.equal(a.posts().length,0);
+ await a.click('break-15');assert.equal(a.node('play').disabled,false);assert.match(a.node('entry-anti-afk-help').textContent,/15 min/);
+ a.update({...a.current,entry:{id:'99999999-9999-4999-8999-999999999999',server:1,team:'green',antiAfk:false,status:'joining',endAt:'2026-10-31T12:00:00Z',reason:'En cola.'}});assert.equal(a.node('entry-anti-afk').checked,false);assert.equal(a.node('entry-anti-afk').disabled,true);assert.match(a.node('entry-anti-afk-help').textContent,/no tiene anti-AFK/);
+ await a.disconnect();assert.equal(a.node('entry-anti-afk').disabled,true);assert.equal(a.node('play').disabled,true);assert.match(a.node('entry-anti-afk-help').textContent,/Sin conexión/);assert.equal(a.posts().length,0);
+});
+
+test('entrar con anti-AFK: perder capacidad después de marcar conserva la intención y bloquea Play sin enviar una entrada reducida',async()=>{
+ const initial=automaticSample();initial.capabilities.entryAntiAfk=true;const a=await app({initial});await a.change('entry-anti-afk',true);assert.equal(a.node('play').disabled,false);
+ const legacy={...a.current,capabilities:{...a.current.capabilities,entryAntiAfk:false}};a.update(legacy);assert.equal(a.node('entry-anti-afk').checked,true);assert.equal(a.node('entry-anti-afk').disabled,false);assert.equal(a.node('play').disabled,true);assert.match(a.node('entry-anti-afk-help').textContent,/Actualiza FarmDogs/);assert.equal(a.posts().length,0);
+ await a.disconnect();assert.equal(a.node('entry-anti-afk').checked,true);assert.equal(a.node('play').disabled,true);assert.equal(a.posts().length,0);
+ a.update(initial);assert.equal(a.node('entry-anti-afk').checked,true);assert.equal(a.node('entry-anti-afk').disabled,false);assert.equal(a.node('play').disabled,false);assert.equal(a.posts().length,0);
+ a.update(legacy);await a.change('entry-anti-afk',false);assert.equal(a.node('entry-anti-afk').checked,false);assert.equal(a.node('entry-anti-afk').disabled,true);assert.equal(a.node('play').disabled,false);await a.click('play');assert.equal(a.posts().length,1);assert.equal(Object.hasOwn(a.posts()[0].body,'antiAfk'),false);assert.equal(Object.hasOwn(a.posts()[0].body,'antiAfkSettings'),false);
+});
+
+test('interfaz compacta: anti-AFK se prepara bajo demanda y abre sus controles al comenzar sin imponer el plegado en cada lectura',async()=>{
+ const a=await app();assert.equal(!!a.node('break-options').open,false);assert.equal(a.posts().length,0);
+ a.node('break-options').open=true;a.update(a.current);assert.equal(a.node('break-options').open,true);
+ const moving={purpose:'break',status:'moving',durationMinutes:15,intervalSeconds:30,holdMs:500,endAt:'2026-10-31T10:15:00Z',reason:'En marcha.'};
+ a.node('break-options').open=false;a.update({...a.current,autoSeeding:moving});assert.equal(a.node('break-options').open,true);assert.equal(a.node('break-stop').disabled,false);assert.equal(a.node('break-stop').hidden,false);
+ a.node('break-options').open=false;a.update({...a.current,now:'2026-10-31T10:00:02Z'});assert.equal(a.node('break-options').open,false);assert.equal(a.node('break-stop').hidden,false);assert.equal(a.posts().length,0);
+});
+
+test('espera de equipo: enseña el plazo backend y lo reduce sin anunciar cuándo habrá hueco ni enviar entradas',async()=>{
+ const initial=automaticSample();initial.entry={id:'99999999-9999-4999-8999-999999999999',server:1,team:'green',status:'choosing_team',reason:'Esperando verde.',endAt:'2026-10-31T10:30:00Z'};initial.teamClicker={...initial.teamClicker,enabled:true,ownerId:initial.entry.id,ownerEndAt:initial.entry.endAt,running:true,count:75};
+ const a=await app({initial});assert.equal(a.node('entry-wait-limit').hidden,false);assert.match(a.node('entry-wait-limit').textContent,/Quedan 30:00/);assert.match(a.node('entry-wait-limit').textContent,/aunque esté apagado/);assert.match(a.node('entry-wait-limit').textContent,/No se puede predecir/);assert.match(a.node('clicker-limit').textContent,/Quedan 30:00/);
+ a.update({...a.current,now:'2026-10-31T10:29:59Z'});assert.match(a.node('entry-wait-limit').textContent,/Quedan 0:01/);
+ a.update({...a.current,now:'2026-10-31T10:31:00Z'});assert.match(a.node('entry-wait-limit').textContent,/Quedan 0:00/);assert.doesNotMatch(a.node('entry-wait-limit').textContent,/Quedan -/);
+ a.update({...a.current,entry:{...a.current.entry,status:'completed'},teamClicker:{...a.current.teamClicker,enabled:false,running:false,entryConfirmation:{status:'confirmed'}}});assert.equal(a.node('entry-wait-limit').hidden,true);assert.equal(a.node('clicker-limit').hidden,true);assert.equal(a.posts().length,0);
+});
+
+test('espera de equipo: selector independiente no inventa límite y una desconexión retira el contador de entrada',async()=>{
+ const initial=automaticSample();initial.teamClicker={...initial.teamClicker,enabled:true,running:true};const a=await app({initial});assert.match(a.node('clicker-limit').textContent,/no tiene una duración máxima configurada/);assert.match(a.node('clicker-limit').textContent,/Cancelar\/F8/);assert.doesNotMatch(a.node('clicker-limit').textContent,/Quedan/);
+ a.update({...a.current,entry:{id:'99999999-9999-4999-8999-999999999999',server:1,team:'green',status:'joining',reason:'En cola.',endAt:'2026-10-31T10:30:00Z'}});assert.equal(a.node('entry-wait-limit').hidden,false);assert.match(a.node('entry-wait-limit').textContent,/cola.*plazo/);
+ a.update({...a.current,now:'fecha-no-válida'});assert.doesNotMatch(a.node('entry-wait-limit').textContent,/Quedan/);assert.match(a.node('entry-wait-limit').textContent,/Fin de la sesión/);
+ await a.disconnect();assert.equal(a.node('entry-wait-limit').hidden,true);assert.equal(a.node('clicker-limit').hidden,true);assert.equal(a.posts().length,0);
+});
+
 test('programación: el gesto real arma antes de POST y liga el permiso al UUID del trabajo',async()=>{
  let a;a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>{
   assert.equal(route,'/api/opening/schedule');assert.equal(body.initialFocus,'desktop');
@@ -169,6 +237,22 @@ test('interfaz entrada: elige servidor y equipo sin portapapeles, muestra progre
  for(const control of ['play','auto-start','clicker-save','break-start','entry-team','server-2'])assert.equal(a.node(control).disabled,true,control);
  await a.click('entry-stop');assert.equal(a.node('entry-progress-state').textContent,'Detenido');assert.equal(a.node('play').disabled,false);assert.equal(a.posts().length,2);
  assert.equal(a.node('entry-guidance').hidden,true);
+});
+
+test('interfaz recuperación: conserva parada del hijo y bloquea otras tareas sin pedir foco ni iniciar otra entrada',async()=>{
+ const initial=automaticSample(),id='99999999-9999-4999-8999-999999999999';
+ initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',server:1,status:'error',reason:'Reinicio confirmado.'};
+ initial.entry={id,server:1,joinId,team:'green',seeding:true,status:'recovering_source',reason:'Esperando dos lecturas válidas del mismo servidor.',endAt:'2026-10-31T12:00:00Z',recovery:{id:'77777777-7777-4777-8777-777777777777'}};
+ const a=await app({initial,host:true,onPost(route,body,s){
+  assert.equal(route,'/api/entry/stop');assert.equal(body.expectedSessionId,id);
+  return {...s,entry:{...s.entry,status:'cancelled',reason:'Recuperación detenida.'}};
+ }});
+ assert.equal(a.node('entry-progress-state').textContent,'Esperando al servidor');assert.match(a.node('entry-progress-server').textContent,/Reconexión/);
+ assert.equal(a.node('entry-stage-game').dataset.state,'done');assert.equal(a.node('entry-stage-server').dataset.state,'current');
+ assert.equal(a.node('auto-status').textContent,'Recuperando seeding');assert.match(a.node('auto-detail').textContent,/dos lecturas válidas/);
+ for(const control of ['play','auto-start','activity-start','clicker-save','break-start','server-2'])assert.equal(a.node(control).disabled,true,control);
+ assert.equal(a.posts().length,0);assert.equal(a.hostMessages.some(m=>/host_entry_focus_(?:arm|job_arm|bind)/.test(m.kind)),false);
+ await a.click('entry-stop');assert.equal(a.node('entry-progress-state').textContent,'Detenido');assert.equal(a.node('play').disabled,false);assert.equal(a.posts().length,1);
 });
 
 test('interfaz entrada: seeding completo usa equipo elegido y no pide Steam ni entrada manual',async()=>{
@@ -338,6 +422,29 @@ test('interfaz: elegir color prepara espera automática y DESPLEGANDO la termina
  assert.equal(a.node('clicker-state').textContent,'Intentando entrar');assert.match(a.node('clicker-detail').textContent,/75 clics.*DESPLEGANDO/);
  a.update({...a.current,teamClicker:{...a.current.teamClicker,enabled:false,active:false,running:false,completedAttemptId:'55555555-5555-4555-8555-555555555555',entryConfirmation:{status:'confirmed'}}});
  assert.equal(a.node('clicker-state').textContent,'Equipo elegido');assert.match(a.node('clicker-detail').textContent,/DESPLEGANDO.*desactivado/);assert.equal(a.node('clicker-stop').disabled,true);assert.equal(a.node('clicker-save').disabled,false);assert.equal(a.posts().length,1);
+});
+
+test('selector: una pausa de contexto muestra el motivo exacto y el retorno no solicita un inicio nuevo',async()=>{
+ const initial=sample(),reason='Wardogs no está delante. Volveré a reconocer el selector al regresar.';initial.teamClicker={...initial.teamClicker,enabled:true,pausedForContext:true,waitingAutomatic:true,active:false,running:false,count:75,reason};
+ const a=await app({initial,onPost(route,body,s){assert.equal(route,'/api/team-clicker/stop');return {...s,teamClicker:{...s.teamClicker,enabled:false,active:false,running:false,waitingAutomatic:false,reason:'Espera cancelada por el usuario.'}};}});
+ assert.equal(a.node('clicker-state').textContent,'En pausa · volverá a continuar');assert.equal(a.node('clicker-detail').textContent,reason);assert.equal(a.node('clicker-stop').disabled,false);assert.equal(a.posts().length,0);
+ a.update({...a.current,teamClicker:{...a.current.teamClicker,pausedForContext:false,waitingAutomatic:false,active:true,running:true,count:76}});assert.equal(a.node('clicker-state').textContent,'Intentando entrar');assert.match(a.node('clicker-detail').textContent,/76 clics.*DESPLEGANDO/);assert.equal(a.posts().length,0);
+ a.update({...a.current,teamClicker:{...a.current.teamClicker,pausedForContext:true,active:false,running:false,reason}});await a.click('clicker-stop');assert.equal(a.node('clicker-state').textContent,'Desactivado');assert.equal(a.node('clicker-detail').textContent,'Espera cancelada por el usuario.');assert.equal(a.posts().length,1);
+ a.update({...a.current,teamClicker:{...a.current.teamClicker,pausedForContext:false}});assert.equal(a.node('clicker-state').textContent,'Desactivado');assert.equal(a.posts().length,1);
+});
+
+test('selector de entrada: una pausa propia conserva el motivo del controlador sin sustituirlo por la guía genérica',async()=>{
+ const initial=automaticSample(),id='99999999-9999-4999-8999-999999999999',reason='El selector ha cambiado de tamaño. Esperando reconocerlo de nuevo.';initial.entry={id,server:1,team:'green',status:'choosing_team',reason:'Eligiendo equipo.',endAt:'2026-10-31T10:30:00Z'};initial.teamClicker={...initial.teamClicker,enabled:true,ownerId:id,ownerEndAt:initial.entry.endAt,pausedForContext:true,waitingAutomatic:true,reason};
+ const a=await app({initial});assert.equal(a.node('clicker-state').textContent,'En pausa · volverá a continuar');assert.equal(a.node('clicker-detail').textContent,reason);assert.match(a.node('entry-wait-limit').textContent,/Quedan 30:00/);assert.equal(a.posts().length,0);
+ a.update({...a.current,teamClicker:{...a.current.teamClicker,ownerId:'otro-intento'}});assert.match(a.node('clicker-detail').textContent,/entrada automática/);assert.equal(a.posts().length,0);
+});
+
+test('selector: la pausa requiere booleano vigente y no sobrevive a desactivar, completar o perder el servicio',async()=>{
+ const initial=sample();initial.teamClicker={...initial.teamClicker,enabled:true,pausedForContext:'true',waitingAutomatic:true,reason:'Motivo anterior.'};const a=await app({initial});assert.equal(a.node('clicker-state').textContent,'Esperando selector');
+ const withoutFlag={...a.current.teamClicker};delete withoutFlag.pausedForContext;a.update({...a.current,teamClicker:withoutFlag});assert.equal(a.node('clicker-state').textContent,'Esperando selector');
+ a.update({...a.current,teamClicker:{...a.current.teamClicker,enabled:false,waitingAutomatic:false,pausedForContext:true,reason:'Detenido con F8.'}});assert.equal(a.node('clicker-state').textContent,'Desactivado');assert.equal(a.node('clicker-detail').textContent,'Detenido con F8.');
+ a.update({...a.current,teamClicker:{...a.current.teamClicker,entryConfirmation:{status:'confirmed'}}});assert.equal(a.node('clicker-state').textContent,'Equipo elegido');assert.match(a.node('clicker-detail').textContent,/DESPLEGANDO/);
+ a.update({...initial,teamClicker:{...initial.teamClicker,pausedForContext:true}});assert.equal(a.node('clicker-state').textContent,'En pausa · volverá a continuar');await a.disconnect();assert.equal(a.node('clicker-state').textContent,'No disponible');assert.doesNotMatch(a.node('clicker-detail').textContent,/volverá a continuar/);assert.equal(a.posts().length,0);
 });
 
 test('interfaz: cancelar espera no la reactiva y cambiar color espera al desarme',async()=>{

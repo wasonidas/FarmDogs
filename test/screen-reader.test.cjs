@@ -9,6 +9,13 @@ const {classifyTeamEntry}=require('../src/team-clicker-entry.cjs');
 const hud=require('./fixtures/ocr-gameplay-hud.json');
 const now=Date.parse('2026-10-30T10:00:00Z'),directory=path.join(os.tmpdir(),'screen-monitor');
 function sample(){const r=structuredClone(hud);const frameId='55555555-5555-4555-8555-555555555555';r.source={kind:'foreground_game',captureMethod:'foreground_client_screen_copy',frameId,gamePid:1234,window:5678,capturedAt:new Date(now-1000).toISOString(),captureFinishedAt:new Date(now-900).toISOString(),path:path.join(directory,'game-frame-'+frameId+'.png')};return r;}
+
+test('lector: la prueba estricta de reinicio exige procedencia fresca y no acepta banderas del JSON',()=>{
+ const raw=structuredClone(require('./fixtures/ocr-restart-modal.json'));raw.source=sample().source;
+ assert.equal(normalizeScreen(raw,now,directory).restartConfirmed,true);
+ for(const edit of [r=>r.source.kind='file',r=>r.source.capturedAt=new Date(now-5001).toISOString(),r=>r.source.path=path.join(directory,'..','outside.png'),r=>r.lines.find(l=>/reiniciando/.test(l.text)).text='El servidor se está reiniciando. Otro mensaje']){const invalid=structuredClone(raw);invalid.restartConfirmed=true;edit(invalid);assert.notEqual(normalizeScreen(invalid,now,directory).restartConfirmed,true);}
+ const forged=sample();forged.restartConfirmed=true;assert.equal(normalizeScreen(forged,now,directory).restartConfirmed,undefined);
+});
 test('lector: una captura propia reciente conserva su adquisición y clasifica sin dar permiso de entrada',()=>{
  const r=normalizeScreen(sample(),now,directory);assert.equal(r.status,'verified_capture');assert.equal(r.scene,'gameplay_hud');assert.equal(r.capturedAt,new Date(now-1000).toISOString());assert.equal(r.occlusionVerified,false);
 });

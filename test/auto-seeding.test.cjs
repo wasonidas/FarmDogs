@@ -1,6 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {createAutoSeeding,advanceAutoSeeding,isAdmittedSeedingContinuation}=require('../src/auto-seeding.cjs');
+const {randomUUID}=require('node:crypto');
 const now=Date.parse('2026-10-30T10:00:00Z');
 const session=()=>createAutoSeeding({server:2,durationMinutes:60},now);
 const inputs=()=>({server:{number:2,trusted:true,players:20,seedingActive:true},account:{seedingFresh:true,seeding:{servidor:2,estado:'aguantando',dentro:true}},screen:{status:'verified_capture',scene:'gameplay_hud',capturedAt:new Date(now).toISOString(),gameForeground:true,gamePid:6612},movement:{available:true,status:'stopped',armed:false}});
@@ -109,6 +110,27 @@ test('prueba manual: cambiar de ventana, F8 y duración siguen deteniendo movimi
 
 const breakSession=()=>createAutoSeeding({purpose:'break',durationMinutes:5,intervalSeconds:30,holdMs:400,confirmedDeployed:true},now);
 
+test('anti-AFK tras entrada: prueba interna de servidor/ventana sustituye sólo a la confirmación manual',()=>{
+ const proof={entryId:randomUUID(),server:2,joinId:randomUUID(),gamePid:1234,gameWindow:5678,confirmedAt:new Date(now-1000).toISOString()};
+ const s=createAutoSeeding({purpose:'break',server:2,durationMinutes:5,intervalSeconds:17,holdMs:700,presenceMode:'entry'},now,{trustedEntry:proof});
+ assert.equal(s.purpose,'break');assert.equal(s.presenceMode,'entry');assert.equal(s.entryId,proof.entryId);assert.deepEqual(s.entryProof,proof);assert.equal(s.confirmedDeployed,undefined);assert.equal(s.confirmedServer,null);assert.equal(s.startPlayers,null);assert.equal(s.thresholdObservedAt,null);assert.equal(s.endAt,new Date(now+300000).toISOString());
+ const i={movement:{available:true,status:'stopped',armed:false},screen:{status:'verified_capture',scene:'gameplay_hud',gameForeground:true,gamePid:1234,gameWindow:5678,capturedAt:new Date(now).toISOString()}};
+ assert.equal(advanceAutoSeeding(s,i,now).command,'start');assert.equal(advanceAutoSeeding(s,i,now).session.thresholdObservedAt,null);
+ for(const alter of [p=>delete p.entryId,p=>p.server=1,p=>p.gamePid=0,p=>p.gameWindow=0,p=>p.confirmedAt=new Date(now-5001).toISOString(),p=>p.confirmedAt=new Date(now+1).toISOString()]){const p=structuredClone(proof);alter(p);assert.throws(()=>createAutoSeeding({purpose:'break',server:2,durationMinutes:5,presenceMode:'entry'},now,{trustedEntry:p}),/entrada automática/);}
+ assert.throws(()=>createAutoSeeding({purpose:'break',server:2,durationMinutes:5,presenceMode:'entry',entryProof:proof,trustedEntry:proof,confirmedDeployed:true},now),/entrada automática/);
+});
+
+test('anti-AFK de entrada conserva vínculo, HUD reciente, F8 y fin sin generar recuperación de seeding',()=>{
+ const proof={entryId:randomUUID(),server:2,joinId:randomUUID(),gamePid:1234,gameWindow:5678,confirmedAt:new Date(now).toISOString()};
+ const create=()=>createAutoSeeding({purpose:'break',server:2,durationMinutes:5,presenceMode:'entry'},now,{trustedEntry:proof});
+ const input=()=>({movement:{available:true,status:'stopped',armed:false},screen:{status:'verified_capture',scene:'gameplay_hud',gameForeground:true,gamePid:1234,gameWindow:5678,capturedAt:new Date(now).toISOString()}});
+ for(const alter of [i=>i.screen.gamePid=999,i=>i.screen.gameWindow=999,i=>i.screen.gameForeground=false,i=>i.screen.capturedAt=new Date(now-5001).toISOString(),i=>i.screen.scene='unknown']){const i=input();alter(i);assert.notEqual(advanceAutoSeeding(create(),i,now).command,'start');}
+ for(const alter of [s=>s.entryId=randomUUID(),s=>s.entryProof=null,s=>s.server=1,s=>s.confirmedDeployed=true,s=>s.deploymentConfirmedAt=s.createdAt+'x']){const s=create();alter(s);assert.equal(advanceAutoSeeding(s,input(),now).session.status,'error');}
+ const stopped=create(),i=input();i.movement.autoOperatorStopped=stopped.id;const result=advanceAutoSeeding(stopped,i,now);assert.equal(result.session.status,'cancelled');delete i.movement.autoOperatorStopped;assert.notEqual(advanceAutoSeeding(result.session,i,now).command,'start');
+ assert.equal(advanceAutoSeeding(create(),input(),now+300000).session.status,'expired');
+ const restart=input();Object.assign(restart.screen,{scene:'server_restart',restartConfirmed:true,frameId:randomUUID()});const ended=advanceAutoSeeding(create(),restart,now);assert.equal(ended.session.status,'error');assert.equal(ended.command,'stop');assert.equal(ended.session.disconnect,undefined);
+});
+
 test('movimiento temporal: no depende de servidor, población, cuenta Steam ni admisión',()=>{
  const s=breakSession();assert.equal(s.purpose,'break');assert.equal(s.server,null);assert.equal(s.startPlayers,null);assert.equal(s.confirmedDeployed,true);assert.doesNotMatch(s.reason,/Steam|población|seeding|VIP/);
  const i=inputs();delete i.server;delete i.account;
@@ -140,4 +162,14 @@ test('movimiento temporal: F8, fin y otro controlador no permiten continuar',()=
  let r=advanceAutoSeeding(s,i,now);assert.equal(r.session.status,'cancelled');assert.equal(r.command,'stop');delete i.movement.autoOperatorStopped;assert.notEqual(advanceAutoSeeding(r.session,i,now).command,'start');
  r=advanceAutoSeeding(breakSession(),i,now+5*60000);assert.equal(r.session.status,'expired');assert.equal(r.command,'stop');assert.match(r.session.reason,/movimiento temporal/);
  i.movement={available:true,armed:true,status:'running',autoSessionId:'other'};r=advanceAutoSeeding(breakSession(),i,now);assert.equal(r.session.status,'error');assert.equal(r.command,'stop');
+});
+
+test('entrada propia: sólo el reinicio estricto fresco deja una evidencia de recuperación; nunca una expulsión AFK',()=>{
+ const proof={entryId:randomUUID(),server:2,joinId:randomUUID(),gamePid:1234,gameWindow:5678,confirmedAt:new Date(now).toISOString()};
+ const create=()=>createAutoSeeding({server:2,durationMinutes:30,presenceMode:'entry'},now,{trustedEntry:proof});
+ const input=()=>({...inputs(),screen:{status:'verified_capture',scene:'server_restart',restartConfirmed:true,gameForeground:true,gamePid:1234,gameWindow:5678,frameId:randomUUID(),capturedAt:new Date(now).toISOString()}});
+ const s=create(),i=input(),r=advanceAutoSeeding(s,i,now);assert.equal(r.session.status,'error');assert.equal(r.command,'stop');assert.deepEqual(r.session.disconnect,{cause:'server_restart',confirmed:true,entryId:proof.entryId,seedingId:s.id,server:2,joinId:proof.joinId,gamePid:1234,gameWindow:5678,frameId:i.screen.frameId,capturedAt:i.screen.capturedAt});assert.equal(r.session.operatorStopped,false);
+ for(const alter of [i=>i.screen.restartConfirmed=false,i=>delete i.screen.restartConfirmed,i=>i.screen.scene='afk_kick',i=>i.screen.scene='server_message_unknown',i=>i.screen.frameId='old',i=>i.screen.gameWindow=999,i=>i.screen.capturedAt=new Date(now-5001).toISOString(),i=>i.account.seeding.servidor=1]){const i=input();alter(i);assert.equal(advanceAutoSeeding(create(),i,now).session.disconnect,undefined);}
+ assert.equal(advanceAutoSeeding(manualSession(),input(),now).session.disconnect,undefined);
+ const stopped=create();stopped.operatorStopped=true;assert.equal(advanceAutoSeeding(stopped,input(),now).session.disconnect,undefined);
 });
