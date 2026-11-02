@@ -87,9 +87,10 @@ input[readonly]{color:#c8cecd;border-color:#3b4447}
 .section-head h3{margin:0}
 .state-label{color:var(--accent);font-size:12px;font-weight:600;line-height:1.45;text-align:right}
 .card .session-detail{min-height:41px;margin-bottom:18px;font-size:13px}
-.mode-picker{display:grid;grid-template-columns:.75fr .9fr 1.5fr;gap:0;margin:20px 0;padding:3px;border:1px solid #3e484b;border-radius:2px;background:#101416}
+.mode-picker{display:grid;grid-template-columns:.7fr .9fr 1.25fr 1.1fr;gap:0;margin:20px 0;padding:3px;border:1px solid #3e484b;border-radius:2px;background:#101416}
 .mode-picker button{min-height:39px;padding:8px 6px;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:16px}
 .mode-picker button[aria-pressed=true]{background:#e9ebe5;color:#191d1f}
+.maximum-plan{padding:10px 12px;border-left:3px solid var(--accent);background:#242519;color:var(--text);font-size:12px;line-height:1.6}
 .check{display:flex;align-items:flex-start;gap:10px;margin:12px 0;color:var(--muted);font-size:12px;line-height:1.5;cursor:pointer}
 .check input{flex:none;margin:4px 0 0}
 .check strong{display:block;color:var(--text);font-size:12px;font-weight:500}

@@ -27,7 +27,7 @@ for(const member of ['LICENSE.txt','NOTICE.txt']){
  fs.mkdirSync(path.join(folder,'licenses'),{recursive:true});fs.writeFileSync(path.join(folder,'licenses','WebView2-'+member),contents);
 }
 fs.writeFileSync(path.join(folder,'LEEME.txt'),[
- 'FARMDOGS LAUNCHER 0.5.4 - Windows x64',
+ 'FARMDOGS LAUNCHER '+JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version+' - Windows x64',
  'Entrada automática, equipo elegido, anti-AFK opcional al desplegar y actualizaciones automáticas.',
  '',
  'Extrae esta carpeta completa y abre FarmDogs.exe con doble clic.',
@@ -70,6 +70,11 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'No recupera expulsiones AFK, mensajes desconocidos, cambios de ID ni sesiones con presencia confirmada sólo de forma manual.',
  'También puedes programar cuándo se prepara la sesión; el PC y el servicio deben seguir encendidos.',
  'El modo por actividad vigila los cinco servidores, elige un destino y prepara una sola sesión.',
+ 'Sedeo máximo permite también servidores vacíos: prioriza el elegible con más jugadores por debajo del umbral oficial tras dos lecturas recientes.',
+ 'Elige SEEDING > Sedeo máximo, ajusta su duración (12 horas iniciales) y pulsa Iniciar sedeo máximo. La hora de fin incluye búsqueda, entrada y permanencia.',
+ 'Mueve desde 1 jugador tras entrada/HUD verificados, con manos vacías y juego delante; conserva tus ajustes de intervalo y paso. F8 o Detener cancelan.',
+ 'Mantiene el servidor elegido para conservar el ciclo. No cambia entre servidores ni escucha llamadas de Discord.',
+ 'Los puntos mensuales por horas y los días VIP por llenado son recompensas distintas. No garantiza VIP ni muestra puntos estimados como recibidos.',
  'Cobro antes de caducar puede proteger los retos semanales; actívalo con Steam conectado en la app.',
  'Espera al plazo final publicado por Wardogs y cobra con el margen elegido. Necesita PC y app encendidos.',
  'No cobra el premio actual al activar la protección. Los resultados inciertos requieren revisión.',

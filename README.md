@@ -8,7 +8,7 @@ FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automát
 
 [Descargar el ZIP para Windows](https://github.com/wasonidas/FarmDogs/releases/latest/download/FarmDogs-portable.zip) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-**FarmDogs Launcher 0.5.4** reúne las mejoras de entrada automática, selección de equipo y reconocimiento del personaje en una ventana más compacta, con icono propio. El usuario confirmó el recorrido completo de entrada, elección de equipo y anti-AFK de esta versión.
+**FarmDogs Launcher 0.5.5** añade **Sedeo máximo**: permite entrar también en servidores vacíos para acumular tiempo de sedeo mientras espera un llenado, con 12 horas iniciales ajustables y movimiento tras verificar el despliegue incluso estando solo. Conserva las mejoras de entrada, equipo y anti-AFK de 0.5.4 que el usuario confirmó en el juego. El nuevo modo todavía necesita una prueba nocturna real; no garantiza premios.
 
 En **JUGAR**, marca **Activar anti-AFK al desplegar** si quieres que el movimiento quede preparado al entrar. Usa los ajustes de Anti-AFK y su duración empieza al desplegar, sin consumir la espera en cola. La casilla es opcional, no necesita conectar Steam a FarmDogs ni esperar población y solo actúa tras verificar la entrada y el personaje con manos vacías.
 
@@ -42,7 +42,7 @@ La instalación espera a que no haya entrada, movimiento, autoclic, búsqueda, p
 | --- | --- | --- |
 | **Anti-AFK** | Movimiento temporal para una ausencia breve en tu partida actual. | No |
 | **JUGAR** | Ver servidores y clan; elegir destino/equipo y completar la entrada por ID. | No para entrar; sí para identificar tu clan |
-| **SEEDING** | Completar la entrada y preparar movimiento ahora, a una hora o al detectar actividad. | No para la cadena de entrada; sí para consultar presencia privada y premios |
+| **SEEDING** | Entrar y preparar movimiento ahora, a una hora, por actividad o con Sedeo máximo para aprovechar también servidores vacíos. | No para la cadena de entrada; sí para consultar presencia privada y premios |
 | **EQUIPO** | Intentar entrar automáticamente en azul, rojo o verde. | No |
 | **MI VIP** | Consultar cuenta, progreso y premios pendientes. | Sí |
 
@@ -119,12 +119,21 @@ Elige servidor en **JUGAR**, después abre **SEEDING**. En **Equipo al entrar** 
 - **Ahora:** pulsa **Entrar y seedear** para completar entrada, equipo y despliegue, y preparar el movimiento.
 - **A una hora:** programa fecha y hora de Madrid. Con **Activar también el movimiento automático**, la entrada entrega el control a seeding; sin marcarlo, termina después del despliegue.
 - **Al haber actividad:** pulsa **Buscar servidor**. Observa la API pública, confirma actividad en dos lecturas válidas y elige un destino que esté empezando a llenarse. Por defecto busca entre 1 y 19 jugadores. Después completa la misma cadena de entrada con el equipo elegido.
+- **Sedeo máximo:** pulsa **Iniciar sedeo máximo**. Comprueba dos lecturas oficiales recientes y elige el servidor que admita sedeo con más jugadores por debajo de su umbral público. Si sólo hay servidores vacíos, también puede entrar en uno. No reutiliza un mínimo anterior de 16 jugadores. Empieza con **720 minutos (12 horas)** al elegirlo por primera vez; puedes cambiar la duración antes de iniciar y ver la hora de fin.
 
-El movimiento de seeding espera el umbral configurado —**20 jugadores por defecto**—, entrada o presencia confirmada y una captura reciente del personaje desplegado con manos vacías. La cadena de entrada verificada identifica el servidor, proceso y ventana sin exigir conectar la cuenta web de Steam a FarmDogs. El umbral de movimiento no determina la regla del premio VIP.
+### Sedeo máximo: puntos y oportunidad de llenado
+
+El objetivo es aprovechar también los minutos con poca gente. Las [reglas publicadas por Wardogs Spain](https://wardogsspain.com/seeding) distinguen **3 puntos mensuales por hora** con menos de 20 jugadores, incluso solo, de los **8 puntos por llenado**. El día VIP de llenado requiere entrar antes de 20 y permanecer hasta 50 según la regla oficial actual; los puntos del ranking se premian al terminar el mes. Un punto de clasificación no equivale a un día VIP inmediato.
+
+En este modo, el movimiento espera entrada y HUD verificados, pero **no espera a 20 jugadores**: se prepara desde 1 para que también sirva durante el calentamiento. Conserva tu intervalo entre pasos y la duración de cada paso. Mantén el personaje con las manos vacías, Wardogs delante y el PC despierto; F8 o Detener cancelan sin rearmado.
+
+La duración es un **presupuesto total** que incluye búsqueda, entrada y permanencia. La app abierta no significa que siga trabajando tras la hora de fin. Una vez elegido el destino, conserva ese servidor para no abandonar un ciclo; **no rota automáticamente a otro servidor** después de un premio. Tampoco lee llamadas de Discord ni garantiza su bonificación. La cuenta conectada permite consultar el progreso y los premios oficiales; este modo no inventa un contador de puntos recibidos a partir del tiempo local.
+
+En los otros modos, el movimiento de seeding espera el umbral configurado —**20 jugadores por defecto**—, entrada o presencia confirmada y una captura reciente del personaje desplegado con manos vacías. La cadena de entrada verificada identifica el servidor, proceso y ventana sin exigir conectar la cuenta web de Steam a FarmDogs. El umbral de movimiento no determina la regla del premio VIP.
 
 Si ya estás dentro, marca **Ya estoy desplegado en el #…** y pulsa **Activar movimiento**: no abre de nuevo el juego y utiliza tu confirmación para esa sesión. Con Steam conectado a FarmDogs también puede comprobarse presencia privada. La confirmación manual y la cadena visual no comprueban por sí mismas progreso ni premios.
 
-El equipo de Seedear se conserva para Ahora, A una hora y Al haber actividad. Cambiar ese ajuste no cambia de equipo a un personaje ya desplegado.
+El equipo de Seedear se conserva para Ahora, A una hora, Al haber actividad y Sedeo máximo. Cambiar ese ajuste no cambia de equipo a un personaje ya desplegado.
 
 Si se cierran nuevas admisiones, pero la cuenta y el servidor siguen confirmando tu ciclo, aparece **Continuar seeding**. La sesión puede continuar sin abrir otra vez el juego.
 

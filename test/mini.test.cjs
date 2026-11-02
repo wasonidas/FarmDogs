@@ -23,11 +23,11 @@ class Element{
 function sample(){return {token:'test-token',now:'2026-10-31T10:00:00Z',capabilities:{standaloneMovement:true},config:{selectedServer:1},source:{lastSuccessAt:'2026-10-31T10:00:00Z',error:null},servers:Array.from({length:5},(_,i)=>({number:i+1,trusted:true,joinId,players:25,capacity:100,map:'Prueba',seedingActive:true,status:'above_entry_threshold'})),seedingContinuity:{},account:{vipFresh:false,seedingFresh:false},movement:{available:false},localTools:{game:true,movement:true,automaticMovement:true},autoSeeding:null,activity:null,opening:null,watch:null,rewards:null,teamClicker:{available:true,automaticSelectionAvailable:true,automaticAnyTeamAvailable:true,enabled:false,startMode:'automatic',team:'blue',intervalMs:20,targets:{}},diagnostics:{}};}
 async function app({initial=sample(),clipboardFails=false,onPost,host=false}={}){
  const elements=new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(match=>[match[1],new Element()]));
- for(const [id,node]of elements){const tag=[...html.matchAll(/<[^>]+>/g)].find(match=>match[0].includes(`id="${id}"`))?.[0]||'';node.value=tag.match(/\bvalue="([^"]*)"/)?.[1]||'';node.checked=/\schecked(?:\s|>)/.test(tag);}
+ for(const [id,node]of elements){const tag=[...html.matchAll(/<[^>]+>/g)].find(match=>match[0].includes(`id="${id}"`))?.[0]||'';node.value=tag.match(/\bvalue="([^"]*)"/)?.[1]||'';node.checked=/\schecked(?:\s|>)/.test(tag);const mode=tag.match(/\bdata-seed-mode="([^"]*)"/)?.[1];if(mode)node.dataset.seedMode=mode;}
  const radios=['blue','red','green'].map(team=>Object.assign(new Element(),{value:team,checked:team==='blue'}));
  for(const radio of radios){radio._checked=radio.checked;Object.defineProperty(radio,'checked',{get(){return this._checked;},set(value){if(value)for(const peer of radios)peer._checked=false;this._checked=!!value;}});}
  const node=id=>{assert.ok(elements.has(id),`ID real del HTML: ${id}`);return elements.get(id);};
- const document={getElementById:node,querySelectorAll(selector){if(selector==='input[name="clicker-team"]')return radios;if(selector==='input[name="clicker-team"],#clicker-interval')return [...radios,node('clicker-interval')];assert.ok(['[data-go-tab]','[data-seed-mode]'].includes(selector));return [];},querySelector(selector){if(selector==='input[name="clicker-team"]:checked')return radios.find(r=>r.checked);const team=selector.match(/\[value="(blue|red|green)"\]/)?.[1];assert.ok(team);return radios.find(r=>r.value===team);}};
+ const document={getElementById:node,querySelectorAll(selector){if(selector==='input[name="clicker-team"]')return radios;if(selector==='input[name="clicker-team"],#clicker-interval')return [...radios,node('clicker-interval')];if(selector==='[data-seed-mode]')return [...elements.values()].filter(node=>node.dataset.seedMode);assert.equal(selector,'[data-go-tab]');return [];},querySelector(selector){if(selector==='input[name="clicker-team"]:checked')return radios.find(r=>r.checked);const team=selector.match(/\[value="(blue|red|green)"\]/)?.[1];assert.ok(team);return radios.find(r=>r.value===team);}};
  let current=initial,copies=0;const requests=[],hostMessages=[],hostListeners=[],hostWindowListeners=new Map();
  const mockWindow=host?{addEventListener:(name,handler)=>hostWindowListeners.set(name,handler),crypto:{randomUUID:()=> '44444444-4444-4444-8444-444444444444'},chrome:{webview:{postMessage:msg=>hostMessages.push(msg),addEventListener:(kind,handler)=>hostListeners.push(handler)}}}:{};
  const context=vm.createContext({document,window:mockWindow,navigator:{clipboard:{writeText:async()=>{copies++;if(clipboardFails)throw Error('Portapapeles remoto ocupado');}}},console,Intl,Date,Number,Object,Set,fetch:async(route,options={})=>{const request={route,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,headers:options.headers};requests.push(request);if(request.method==='POST'&&onPost)current=await onPost(route,request.body,current)||current;return {ok:true,json:async()=>current};},setInterval:()=>0});
@@ -122,6 +122,69 @@ test('actividad: el permiso nativo se arma sin fijar un destino antes de las lec
  const a=await app({initial:automaticSample(),host:true,onPost:(route,body,current)=>{assert.equal(route,'/api/activity/start');assert.equal(body.initialFocus,'desktop');return {...current,activity:{id:focusJobId,status:'watching'}};}});
  deferredHost(a);await a.click('activity-start',{isTrusted:true});
  const armed=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_arm'),bound=a.hostMessages.find(m=>m.kind==='host_entry_focus_job_bind');assert.ok(armed);assert.ok(bound);assert.equal(armed.jobKind,'activity');assert.equal(armed.server,undefined);assert.equal(armed.joinId,undefined);assert.equal(bound.ownerId,focusJobId);
+});
+
+test('sedeo máximo: elección explícita propone doce horas editables y no utiliza el filtro antiguo de 16 jugadores',async()=>{
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;
+ const a=await app({initial,onPost:(route,body,s)=>{assert.equal(route,'/api/activity/start');return {...s,activity:{id:focusJobId,strategy:body.strategy,status:'watching',reason:'Confirmando un servidor que puntúe, incluso vacío.',durationMinutes:body.durationMinutes,minPlayers:0,maxEntryPlayers:99,seeding:body.seeding,endAt:'2026-10-31T16:00:00Z'}};}});
+ a.node('activity-min').value='16';a.node('activity-max').value='19';
+ assert.equal(a.node('auto-duration').value,'120');await a.click('seed-choice-maximum');
+ assert.equal(Number(a.node('auto-duration').value),720);assert.equal(a.node('seed-choice-maximum').attributes['aria-pressed'],'true');assert.equal(a.node('seed-mode-maximum').hidden,false);assert.equal(a.node('seed-mode-activity').hidden,true);assert.equal(a.node('auto-players-setting').hidden,true);assert.equal(a.node('auto-players').disabled,true);assert.match(a.node('maximum-plan').textContent,/720 min.*fin previsto.*23:00.*Madrid/);assert.equal(a.posts().length,0);
+ a.node('auto-duration').value='360';a.node('auto-interval').value='25';a.node('auto-hold').value='700';a.node('seed-team').value='green';
+ await a.click('seed-choice-activity');assert.equal(a.node('auto-players-setting').hidden,false);assert.equal(a.node('auto-players').disabled,false);assert.equal(a.node('activity-min').value,'16');await a.click('seed-choice-maximum');assert.equal(a.node('auto-duration').value,'360');
+ await a.click('maximum-start');assert.deepEqual(a.posts().map(p=>[p.route,p.body]),[['/api/activity/start',{strategy:'maximum',durationMinutes:360,minPlayers:0,maxEntryPlayers:99,team:'green',seeding:{durationMinutes:360,startPlayers:1,intervalSeconds:25,holdMs:700}}]]);
+ assert.equal(a.node('activity-min').value,'16');assert.equal(a.node('activity-max').value,'19');assert.match(a.node('maximum-plan').textContent,/activo.*Quedan 360:00.*17:00:00/);assert.equal(a.node('maximum-stop').disabled,false);assert.equal(a.node('maximum-start').disabled,true);assert.equal(a.node('auto-status').textContent,'Sedeo máximo');assert.match(a.node('notice-text').textContent,/servidor vacío/);
+});
+
+test('sedeo máximo: requiere capacidad explícita y conserva la exclusión de otros automatismos y actualizaciones',async()=>{
+ const initial=automaticSample(),a=await app({initial});await a.click('seed-choice-maximum');assert.equal(a.node('maximum-start').disabled,true);assert.match(a.node('maximum-help').textContent,/Actualiza FarmDogs/);
+ for(const handler of a.node('maximum-start').listeners.get('click')||[])await handler();assert.equal(a.posts().length,0);
+ initial.capabilities.maximumSeeding=true;a.update(initial);assert.equal(a.node('maximum-start').disabled,false);
+ for(const change of [{teamClicker:{...initial.teamClicker,enabled:true}},{autoSeeding:{purpose:'break',status:'moving'}},{opening:{status:'scheduled'}},{update:{status:'installing'}}]){a.update({...initial,...change});assert.equal(a.node('maximum-start').disabled,true);}
+ a.update({...initial,teamClicker:{...initial.teamClicker,automaticAnyTeamAvailable:false}});assert.equal(a.node('maximum-start').disabled,true);a.node('seed-team').value='blue';await a.change('seed-team',false);assert.equal(a.node('maximum-start').disabled,false);assert.equal(a.posts().length,0);
+});
+
+test('sedeo máximo: carga la vigilancia vigente con su plazo real y distingue expiración de app abierta',async()=>{
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Esperando dos lecturas recientes.',durationMinutes:480,minPlayers:0,maxEntryPlayers:99,seeding:{startPlayers:1,intervalSeconds:45,holdMs:800},team:'red',endAt:'2026-10-31T18:00:00Z'};
+ const a=await app({initial});assert.equal(Number(a.node('auto-duration').value),480);assert.equal(a.node('seed-mode-maximum').hidden,false);assert.equal(a.node('seed-team').value,'red');assert.match(a.node('maximum-plan').textContent,/activo.*480:00.*19:00:00/);assert.equal(a.node('maximum-stop').disabled,false);assert.equal(a.posts().length,0);
+ a.update({...initial,now:'2026-10-31T18:00:01Z',activity:{...initial.activity,status:'expired',reason:'Fin del tiempo de sedeo máximo.'}});assert.equal(a.node('auto-status').textContent,'Tiempo terminado');assert.match(a.node('auto-detail').textContent,/No está buscando servidores/);assert.match(a.node('activity-state').textContent,/búsqueda está detenida aunque la app siga abierta/);assert.equal(a.node('maximum-stop').disabled,true);assert.equal(a.node('maximum-start').disabled,false);assert.equal(a.posts().length,0);
+});
+
+test('sedeo máximo: prepared mantiene plazo y parada solo para la entrada y movimiento propios',async()=>{
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;const entryId='99999999-9999-4999-8999-999999999999';
+ initial.activity={id:focusJobId,strategy:'maximum',status:'prepared',reason:'Mantiene el mismo servidor.',durationMinutes:720,endAt:'2026-10-31T22:00:00Z',selectedServer:2};initial.entry={id:entryId,server:2,seeding:true,status:'completed',reason:'Entrada completada.',endAt:initial.activity.endAt};initial.entryOrigin={kind:'activity',ownerId:focusJobId,entryId};initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',entryId,server:2,status:'moving',reason:'Automatismo en marcha.',durationMinutes:720,startPlayers:1,intervalSeconds:60,holdMs:500,endAt:initial.activity.endAt};
+ const a=await app({initial});assert.equal(a.node('seed-mode-maximum').hidden,false);assert.match(a.node('maximum-plan').textContent,/activo.*720:00/);assert.equal(a.node('maximum-stop').disabled,false);assert.equal(a.node('auto-status').textContent,'En marcha');assert.match(a.node('auto-detail').textContent,/Automatismo en marcha/);
+ a.update({...initial,autoSeeding:{...initial.autoSeeding,entryId:'otro-intento'}});assert.doesNotMatch(a.node('maximum-plan').textContent,/Sedeo máximo activo/);assert.equal(a.node('maximum-stop').disabled,true);assert.equal(a.posts().length,0);
+ a.update({...initial,entry:{...initial.entry,status:'choosing_team'}});assert.equal(a.node('maximum-stop').disabled,false);assert.match(a.node('maximum-plan').textContent,/activo/);
+ a.update({...initial,entryOrigin:{...initial.entryOrigin,entryId:'otro-intento'}});assert.equal(a.node('maximum-stop').disabled,true);assert.doesNotMatch(a.node('maximum-plan').textContent,/Sedeo máximo activo/);
+});
+
+test('sedeo máximo: prepared histórico muestra la parada, error o fin real del movimiento y no una conservación futura',async()=>{
+ const entryId='99999999-9999-4999-8999-999999999999';
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'prepared',reason:'Conservando este servidor hasta el final.',durationMinutes:720,endAt:'2026-10-31T22:00:00Z'};initial.entry={id:entryId,status:'completed',reason:'Entrada completada.'};initial.entryOrigin={kind:'activity',ownerId:focusJobId,entryId};initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',entryId,status:'moving',reason:'Automatismo en marcha.',durationMinutes:720,startPlayers:1,intervalSeconds:60,holdMs:500,endAt:initial.activity.endAt};
+ const a=await app({initial});assert.match(a.node('activity-state').textContent,/Automatismo en marcha/);assert.doesNotMatch(a.node('activity-state').textContent,/Conservando/);
+ for(const [status,reason]of [['cancelled','Movimiento detenido con F8.'],['error','La pantalla indica que terminó la conexión verificada.'],['expired','Fin de la sesión de seeding.']]){
+  a.update({...initial,autoSeeding:{...initial.autoSeeding,status,reason}});assert.match(a.node('activity-state').textContent,/Sedeo máximo (detenido|terminado)/);assert.ok(a.node('activity-state').textContent.includes(reason));assert.match(a.node('activity-state').textContent,/No hay búsqueda activa/);assert.doesNotMatch(a.node('activity-state').textContent,/Conservando|fin.*23:00/);assert.equal(a.node('maximum-stop').disabled,true);assert.match(a.node('maximum-plan').textContent,/No hay búsqueda activa/);
+ }
+ a.update({...initial,autoSeeding:{...initial.autoSeeding,entryId:'sesión-ajena',reason:'NO ATRIBUIR ESTE MOTIVO'}});assert.match(a.node('activity-state').textContent,/No hay búsqueda activa/);assert.doesNotMatch(a.node('activity-state').textContent,/NO ATRIBUIR|Conservando/);assert.equal(a.posts().length,0);
+ a.update({...initial,entry:{...initial.entry,status:'error',reason:'No se pudo entrar en el equipo.'},autoSeeding:null});assert.match(a.node('activity-state').textContent,/No se pudo entrar en el equipo.*No hay búsqueda activa/);assert.equal(a.posts().length,0);
+});
+
+test('sedeo máximo: el umbral impuesto de uno no reemplaza el ajuste normal anterior al volver a Ahora',async()=>{
+ for(const normal of [20,16]){
+  const initial=automaticSample();initial.capabilities.maximumSeeding=true;const a=await app({initial});a.node('auto-players').value=String(normal);await a.click('seed-choice-maximum');
+  const entryId='99999999-9999-4999-8999-999999999999',activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Confirmando servidor.',durationMinutes:720,minPlayers:0,maxEntryPlayers:99,seeding:{startPlayers:1,intervalSeconds:60,holdMs:500},endAt:'2026-10-31T22:00:00Z'};
+  a.update({...initial,activity});assert.equal(Number(a.node('auto-players').value),normal);
+  const progress={...initial,activity:{...activity,status:'prepared'},entry:{id:entryId,server:1,status:'completed'},entryOrigin:{kind:'activity',ownerId:focusJobId,entryId},autoSeeding:{purpose:'seeding',entryId,server:1,status:'moving',durationMinutes:720,startPlayers:1,intervalSeconds:60,holdMs:500,endAt:activity.endAt,reason:'En marcha.'}};
+  a.update(progress);assert.equal(Number(a.node('auto-players').value),normal);
+  a.update({...progress,autoSeeding:{...progress.autoSeeding,status:'cancelled',reason:'Detenido.'}});await a.click('seed-choice-manual');assert.equal(a.node('auto-players-setting').hidden,false);assert.equal(a.node('auto-players').disabled,false);assert.equal(Number(a.node('auto-players').value),normal);
+  await a.click('auto-start');assert.equal(a.posts().at(-1).route,'/api/seeding/start');assert.equal(a.posts().at(-1).body.startPlayers,normal);
+ }
+});
+
+test('sedeo máximo: Detener conserva propietario de actividad y no vuelve a iniciar tras cancelación o desconexión',async()=>{
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Buscando.',durationMinutes:720,seeding:{startPlayers:1,intervalSeconds:60,holdMs:500},endAt:'2026-10-31T22:00:00Z'};
+ const a=await app({initial,onPost:(route,body,s)=>{assert.equal(route,'/api/activity/stop');assert.equal(body.expectedJobId,focusJobId);return {...s,activity:{...s.activity,status:'cancelled',reason:'Detenido.'}};}});await a.click('maximum-stop');assert.equal(a.posts().length,1);assert.equal(a.node('maximum-stop').disabled,true);assert.match(a.node('notice-text').textContent,/No se reactivarán solas/);a.update({...a.current,now:'2026-10-31T11:00:00Z'});assert.equal(a.posts().length,1);await a.disconnect();assert.equal(a.node('maximum-start').disabled,true);assert.match(a.node('maximum-plan').textContent,/Sin conexión/);assert.equal(a.posts().length,1);
 });
 
 test('foco diferido: web, host legado y eventos sintéticos conservan la ruta driver',async()=>{

@@ -7,11 +7,11 @@ const {EventEmitter}=require('node:events');
 const {createObserver}=require('../src/server.cjs');
 const joinId='0665a9c0-80b7-4f32-ad47-f36b70367f10';
 const request={server:1,expectedJoinId:joinId,team:'red',durationMinutes:5,startPlayers:20,intervalSeconds:30,holdMs:400};
-async function fixture(t,{players=25,sourceConfigured=true,sourceName='[ESP] wardogsspain.com | #1',movementAvailable=true}={}){
+async function fixture(t,{players=25,sourceConfigured=true,sourceName='[ESP] wardogsspain.com | #1',movementAvailable=true,automaticEntryAvailable=true}={}){
  const dir=await fsp.mkdtemp(path.join(os.tmpdir(),'farmdogs-entry-api-'));
  let utc=Date.parse('2026-10-31T15:00:00Z'),mono=0,driverState=null,population=players,gameLaunch=async()=>{},scene='gameplay_hud',restartConfirmed=false,sourceStale=false;
  const calls=[];
- const entryDriver={available:()=>true,recoveryAvailable:()=>true,view:()=>driverState?{...driverState,at:new Date(utc).toISOString(),capturedAt:new Date(utc).toISOString()}:null,blocking:()=>false,
+ const entryDriver={available:()=>automaticEntryAvailable,recoveryAvailable:()=>true,view:()=>driverState?{...driverState,at:new Date(utc).toISOString(),capturedAt:new Date(utc).toISOString()}:null,blocking:()=>false,
   start:async input=>{calls.push('entry');driverState={sessionId:input.id,server:input.server,joinId:input.joinId,phase:'navigating',chainConfirmed:false,gamePid:1234,gameWindow:5678,frameId:'55555555-5555-4555-8555-555555555555'};},
   tick:async()=>{},checkReady:async ownerId=>driverState?.sessionId===ownerId,stop:({ownerId})=>{if(driverState?.sessionId===ownerId)calls.push('entry-stop');}
  };
@@ -122,6 +122,35 @@ test('API entrada: programación y actividad usan el mismo flujo con el presupue
  await f.post('/api/seeding/stop');assert.equal((await f.state()).entry.status,'cancelled');
  assert.equal((await f.post('/api/activity/start',{durationMinutes:5,serverNumbers:[1],team:'green'})).status,200);await f.service.tick();f.advance(30000);await f.service.refresh();await f.service.tick();s=await f.state();
  assert.equal(s.activity.status,'prepared');assert.equal(s.entry.server,1);assert.equal(s.entry.team,'green');assert.equal(s.entry.endAt,s.activity.endAt);assert.match(s.activity.reason,/Entrada automática/);assert.equal(s.autoSeeding,null);assert.equal(f.calls.filter(x=>x==='game').length,2);
+});
+
+test('API sedeo máximo: entra en un vacío con plazo de doce horas y entrega movimiento al desplegar solo, sin Steam web',async t=>{
+ const f=await fixture(t,{players:0});f.nativeMovement();assert.equal((await f.state()).capabilities.maximumSeeding,true);
+ const response=await f.post('/api/activity/start',{strategy:'maximum',durationMinutes:720,minPlayers:16,maxEntryPlayers:19,serverNumbers:[1],team:'green',initialFocus:'desktop',seeding:{startPlayers:20,intervalSeconds:30,holdMs:400}});
+ assert.equal(response.status,200);let s=await f.state();const job=s.activity;assert.equal(job.strategy,'maximum');assert.equal(job.minPlayers,0);assert.equal(job.maxEntryPlayers,99);assert.equal(job.seeding.startPlayers,1);assert.equal(job.endAt,'2026-11-01T03:00:00.000Z');assert.equal(s.entry,null);
+ await f.service.tick();assert.equal((await f.state()).entry,null);f.advance(30000);await f.service.refresh();f.nativeMovement();await f.service.tick();s=await f.state();
+ assert.equal(s.activity.status,'prepared');assert.equal(s.entry.server,1);assert.equal(s.entry.team,'green');assert.equal(s.entry.startPlayers,1);assert.equal(s.entry.endAt,job.endAt);assert.equal(s.autoSeeding,null);assert.deepEqual(s.entryOrigin,{kind:'activity',ownerId:job.id,entryId:s.entry.id});
+ f.players(1);f.advance(30000);await f.service.refresh();f.nativeMovement();f.phase('team_selector');await f.service.tick();await f.completeTeam();s=await f.state();
+ assert.equal(s.entry.status,'completed');assert.equal(s.account.available,false);assert.equal(s.autoSeeding.presenceMode,'entry');assert.equal(s.autoSeeding.server,1);assert.equal(s.autoSeeding.startPlayers,1);assert.equal(s.autoSeeding.intervalSeconds,30);assert.equal(s.autoSeeding.holdMs,400);assert.equal(s.autoSeeding.endAt,job.endAt);assert.equal(s.autoSeeding.status,'starting_movement');assert.equal(s.update.installBlocked,true);
+ const command=JSON.parse(fs.readFileSync(path.join(f.dir,'movement-command.json'),'utf8'));assert.equal(command.kind,'start');assert.equal(command.sessionId,s.autoSeeding.id);assert.equal(command.endAt,job.endAt);assert.equal(command.gamePid,s.autoSeeding.entryProof.gamePid);
+ f.screen('unknown');f.nativeMovement({armed:true,autoSessionId:s.autoSeeding.id});await f.service.tick();s=await f.state();assert.equal(s.autoSeeding.status,'waiting_game');assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'movement-command.json'),'utf8')).kind,'stop');
+ f.screen('gameplay_hud');f.nativeMovement();await f.service.tick();assert.equal((await f.state()).autoSeeding.status,'starting_movement');
+ f.advance(719*60000);f.nativeMovement();await f.service.tick();s=await f.state();assert.equal(s.autoSeeding.status,'expired');assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'movement-command.json'),'utf8')).kind,'stop');assert.equal(f.calls.filter(call=>call==='game').length,1);
+});
+
+test('API sedeo máximo: requiere componentes automáticos antes de preparar vigilancia y rechaza estrategia inválida',async t=>{
+ for(const config of [{automaticEntryAvailable:false},{movementAvailable:false}]){
+  const f=await fixture(t,{players:0,...config});assert.equal((await f.state()).capabilities.maximumSeeding,false);
+  assert.equal((await f.post('/api/activity/start',{strategy:'maximum',durationMinutes:720})).status,400);assert.equal((await f.state()).activity,null);assert.deepEqual(f.calls,[]);
+ }
+ const f=await fixture(t,{players:0});assert.equal((await f.post('/api/activity/start',{strategy:'anything',durationMinutes:720})).status,400);assert.equal((await f.state()).activity,null);assert.deepEqual(f.calls,[]);
+});
+
+test('API sedeo máximo: Detener conserva la propiedad del trabajo y no rearma ni cancela otra entrada',async t=>{
+ const f=await fixture(t,{players:1});f.nativeMovement();assert.equal((await f.post('/api/activity/start',{strategy:'maximum',durationMinutes:720,serverNumbers:[1],team:'red'})).status,200);const job=(await f.state()).activity;
+ await f.service.tick();f.advance(30000);await f.service.refresh();f.nativeMovement();await f.service.tick();f.phase('team_selector');await f.service.tick();await f.completeTeam();let s=await f.state();assert.equal(s.autoSeeding.status,'starting_movement');
+ assert.equal((await f.post('/api/activity/stop',{expectedJobId:job.id})).status,200);s=await f.state();assert.equal(s.entry.status,'cancelled');assert.equal(s.autoSeeding.status,'cancelled');f.advance(30000);await f.service.refresh();f.nativeMovement();await f.service.tick();assert.equal(f.calls.filter(call=>call==='game').length,1);
+ await f.post('/api/entry/start',{...request,seeding:false});const own=(await f.state()).entry;assert.equal((await f.post('/api/activity/stop',{expectedJobId:job.id})).status,200);s=await f.state();assert.equal(s.entry.id,own.id);assert.equal(s.entry.status,own.status);assert.equal(s.entryOrigin.kind,'manual');
 });
 
 test('API entrada: Detener actividad no cancela una entrada manual que no le pertenece',async t=>{

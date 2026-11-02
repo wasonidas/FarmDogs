@@ -8,7 +8,7 @@ const when=v=>v&&Number.isFinite(Date.parse(v))?date.format(new Date(v)):'—';
 let state=null,selected=null,busy=false,polling=false,settingsInitialized=false,rewardSettingsInitialized=false,manualConfirmedServer=null,clickerSettingsInitialized=false,pendingClickerDraft=null,breakSettingsInitialized=false,entryTeamInitialized=false,updateRequestPending=false,mutationEpoch=0;
 let desktopEntryFocusSupported=false,desktopEntryFocusId=null,desktopEntryFocusIntent=null,noticeKind=null;
 let deferredEntryFocusSupported=false,deferredEntryFocusIntent=null;
-let seedTeamInitialized=false,breakWasRunning=false;
+let seedTeamInitialized=false,breakWasRunning=false,seedMode='manual',maximumDurationInitialized=false,displayedActivityId=null,normalStartPlayers=null;
 function sessionLimit(endAt,now){const end=Date.parse(endAt),current=Date.parse(now);if(!Number.isFinite(end))return 'Límite de sesión sin comprobar.';if(!Number.isFinite(current))return `Fin de la sesión: ${at(endAt)}.`;const seconds=Math.max(0,Math.ceil((end-current)/1000));return `Quedan ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')} · fin ${at(endAt)}.`;}
 const autoActive=s=>s&&!['cancelled','expired','error','interrupted'].includes(s.status);
 const entryRunning=s=>s&&!['completed','cancelled','expired','error','interrupted'].includes(s.status);
@@ -34,7 +34,35 @@ const tabNames=['enter','seed','team','vip'];
 function showTab(name,focus=false){if(!tabNames.includes(name))return;for(const key of tabNames){const current=key===name;$('tab-'+key).setAttribute('aria-selected',String(current));$('tab-'+key).tabIndex=current?0:-1;$('panel-'+key).hidden=!current;}if(focus)$('tab-'+name).focus();}
 for(const name of tabNames){$('tab-'+name).addEventListener('click',()=>showTab(name));$('tab-'+name).addEventListener('keydown',event=>{const index=tabNames.indexOf(name);let next;if(event.key==='ArrowRight')next=(index+1)%tabNames.length;else if(event.key==='ArrowLeft')next=(index+tabNames.length-1)%tabNames.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=tabNames.length-1;else return;event.preventDefault();showTab(tabNames[next],true);});}
 for(const button of document.querySelectorAll('[data-go-tab]'))button.addEventListener('click',()=>showTab(button.dataset.goTab,true));
-for(const button of document.querySelectorAll('[data-seed-mode]'))button.addEventListener('click',()=>{for(const other of document.querySelectorAll('[data-seed-mode]'))other.setAttribute('aria-pressed',String(other===button));for(const mode of ['manual','schedule','activity'])$('seed-mode-'+mode).hidden=mode!==button.dataset.seedMode;});
+function setSeedMode(mode,{applyDefault=false}={}){
+ if(!['manual','schedule','activity','maximum'].includes(mode))return;
+ if(mode==='maximum'&&seedMode!=='maximum')normalStartPlayers=$('auto-players').value;
+ if(mode!=='maximum'&&seedMode==='maximum')$('auto-players').value=normalStartPlayers??20;
+ seedMode=mode;
+ if(mode==='maximum'&&applyDefault&&!maximumDurationInitialized&&!entryRunning(state?.entry)&&!autoActive(state?.autoSeeding)&&!activityRunning(state?.activity)&&!['scheduled','launching'].includes(state?.opening?.status)){$('auto-duration').value=720;maximumDurationInitialized=true;}
+ for(const other of document.querySelectorAll('[data-seed-mode]'))other.setAttribute('aria-pressed',String(other.dataset.seedMode===mode));
+ for(const name of ['manual','schedule','activity','maximum'])$('seed-mode-'+name).hidden=name!==mode;
+}
+for(const button of document.querySelectorAll('[data-seed-mode]'))button.addEventListener('click',()=>{if(busy||button.disabled)return;setSeedMode(button.dataset.seedMode,{applyDefault:true});controls();});
+function maximumOwnedEntry(){const job=state?.activity,origin=state?.entryOrigin,entry=state?.entry;return job?.strategy==='maximum'&&origin?.kind==='activity'&&origin.ownerId===job.id&&origin.entryId===entry?.id?entry:null;}
+function maximumPreparedState(){
+ if(state?.activity?.strategy!=='maximum'||state.activity.status!=='prepared')return null;
+ const entry=maximumOwnedEntry(),session=state.autoSeeding,ownedSession=entry&&session?.purpose!=='break'&&session?.entryId===entry.id;
+ if(entryRunning(entry))return {active:true,reason:`Entrada automática: ${entry.reason||'En curso.'}`};
+ if(ownedSession&&autoActive(session))return {active:true,reason:session.reason||'Sesión de sedeo en curso.'};
+ const child=ownedSession?session:entry,ended=child?.status==='expired';
+ return {active:false,reason:`Sedeo máximo ${ended?'terminado':'detenido'}. ${child?.reason||'Su entrada y movimiento ya no están activos.'} No hay búsqueda activa.`};
+}
+function renderMaximumPlan(){
+ const job=state?.activity,entry=maximumOwnedEntry(),session=state?.autoSeeding,ownedSession=entry&&session?.purpose!=='break'&&session?.entryId===entry.id;
+ const liveJob=job?.strategy==='maximum'&&(activityRunning(job)||entryRunning(entry)||(ownedSession&&autoActive(session)));
+ const end=liveJob?job.endAt:null,minutes=Number($('auto-duration').value),now=Date.parse(state?.now),validDuration=Number.isInteger(minutes)&&minutes>=1&&minutes<=720;
+ const prepared=maximumPreparedState();
+ $('maximum-plan').textContent=liveJob?`Sedeo máximo activo. ${sessionLimit(end,state?.now)} Hora de Madrid. El plazo incluye búsqueda, entrada y estancia.`:!state?'Sin conexión: no se puede comprobar una sesión ni iniciar otra.':prepared&&!prepared.active?prepared.reason:validDuration&&Number.isFinite(now)?`${minutes} min en total · fin previsto ${when(new Date(now+minutes*60000).toISOString())}, hora de Madrid. Puedes ajustar la duración antes de iniciar.`:'Elige una duración entre 1 y 720 minutos.';
+ const maximum=seedMode==='maximum';$('auto-players-setting').hidden=maximum;$('auto-players').disabled=$('auto-players').disabled||maximum;
+ $('seed-threshold-help').textContent=maximum?'Sedeo máximo mueve desde el despliegue, incluso solo, con HUD reciente y Wardogs delante. La población no confirma un premio.':'El umbral de movimiento no determina cuándo ganas VIP.';
+ $('maximum-help').textContent=!state?'Sin conexión con FarmDogs.':state.capabilities?.maximumSeeding!==true?'Actualiza FarmDogs para disponer del modo máximo y de su entrada automática.':'Suma puntos mensuales mientras ayudas a llenar. Un día VIP requiere completar las condiciones del servidor; mantiene el mismo servidor para conservar el ciclo. No gasta puntos ni cobra premios pendientes.';
+}
 $('notice-close').addEventListener('click',()=>{$('notice').hidden=true;noticeKind=null;});
 const teamNames={blue:'azul',red:'rojo',green:'verde'};
 const entryTeamNames={any:'aleatorio',...teamNames};
@@ -185,20 +213,24 @@ function controls(){
  $('auto-stop').disabled=busy||(!entering&&!(running&&!isBreak(state?.autoSeeding))&&!plannedSeeding&&!detecting);for(const id of ['auto-duration','auto-players','auto-interval','auto-hold','activity-min','activity-max'])$(id).disabled=busy||entering||running||planned||detecting||!state;
  $('activity-start').disabled=busy||entering||planned||running||detecting||clickerEnabled||active.has(state?.watch?.status)||!state?.localTools?.automaticMovement||!state?.localTools?.game;
  $('activity-stop').disabled=busy||!detecting;
+ $('maximum-start').disabled=$('activity-start').disabled||state?.capabilities?.maximumSeeding!==true;
+ const maximumEntry=maximumOwnedEntry(),maximumSession=maximumEntry&&state?.autoSeeding?.purpose!=='break'&&state?.autoSeeding?.entryId===maximumEntry.id&&running;
+ $('maximum-stop').disabled=busy||!(state?.activity?.strategy==='maximum'&&detecting||entryRunning(maximumEntry)||maximumSession);
  $('reward-save').disabled=busy||!state?.rewards;$('reward-enabled').disabled=busy||!state?.rewards;$('reward-lead').disabled=busy||!state?.rewards;
  clickerControls();breakControls();
  const anyReady=state?.teamClicker?.automaticAnyTeamAvailable===true,seedAnyBlocked=fullEntry&&seedingTeam()==='any'&&!anyReady;
  $('seed-team-help').textContent=seedAnyBlocked?'Actualiza el selector para usar Aleatorio o elige azul, rojo o verde.':'Aleatorio busca entrar antes. Elige un color si quieres coincidir con tu clan. No cambia tu equipo si ya estás desplegado.';
- if(seedAnyBlocked){$('schedule').disabled=true;$('activity-start').disabled=true;if(!manual&&!continuing){$('auto-start').disabled=true;$('auto-start-help').textContent='Elige un color o actualiza el selector para entrar en el primer equipo disponible.';}}
+ if(seedAnyBlocked){$('schedule').disabled=true;$('activity-start').disabled=true;$('maximum-start').disabled=true;if(!manual&&!continuing){$('auto-start').disabled=true;$('auto-start-help').textContent='Elige un color o actualiza el selector para entrar en el primer equipo disponible.';}}
  if(fullEntry&&entryTeam()==='any'&&!anyReady){$('play').disabled=true;$('entry-help').textContent='Actualiza el selector para usar Aleatorio o elige un color.';}
  updateControls();
  if(state?.update?.status==='installing'){
-  for(const id of ['play','entry-team','entry-anti-afk','seed-team','auto-start','schedule','activity-start','break-start','clicker-save','adjust','manual-presence','connect-account','reward-save'])$(id).disabled=true;
+  for(const id of ['play','entry-team','entry-anti-afk','seed-team','auto-start','schedule','activity-start','maximum-start','break-start','clicker-save','adjust','manual-presence','connect-account','reward-save'])$(id).disabled=true;
   for(let i=1;i<=5;i++)$('server-'+i).disabled=true;
  }
+ renderMaximumPlan();
 }
 function movementSettings(){return {durationMinutes:Number($('auto-duration').value),startPlayers:Number($('auto-players').value),intervalSeconds:Number($('auto-interval').value),holdMs:Number($('auto-hold').value)};}
-function validMovementSettings(){return ['auto-duration','auto-players','auto-interval','auto-hold'].every(id=>$(id).reportValidity());}
+function validMovementSettings(maximum=false){return (maximum?['auto-duration','auto-interval','auto-hold']:['auto-duration','auto-players','auto-interval','auto-hold']).every(id=>$(id).reportValidity());}
 function renderServerClan(row,presence,server){
  const indicator=row.querySelector('.clan-presence'),label=row.querySelector('.clan-label');
  const observed=presence?.servers?.[String(server?.number)],count=observed?.reportedCount;
@@ -227,7 +259,8 @@ function render(s){
  $('source').textContent=`Consulta ${at(s.source.lastSuccessAt)}`;
  for(let number=1;number<=5;number++)renderServerClan($('server-'+number),s.clanPresence,s.servers.find(server=>server.number===number));
  for(const server of s.servers){const row=$('server-'+server.number);row.setAttribute('aria-pressed',String(selected===server.number));row.querySelector('.map').textContent=server.map||'Mapa sin confirmar';row.querySelector('.players').textContent=server.trusted?`${server.players} / ${server.capacity}`:'—';row.querySelector('.status').textContent=s.seedingContinuity?.[server.number]===true?'Tu ciclo sigue en curso; nuevas entradas cerradas':serverLabels[server.status]||server.message||'Sin confirmar';}
- const detecting=activityRunning(s.activity);
+ const detecting=activityRunning(s.activity),ownedMaximumEntry=maximumOwnedEntry(),maximumRunning=entryRunning(ownedMaximumEntry)||(ownedMaximumEntry&&s.autoSeeding?.purpose!=='break'&&s.autoSeeding?.entryId===ownedMaximumEntry.id&&autoActive(s.autoSeeding));
+ if((detecting||maximumRunning)&&s.activity.id!==displayedActivityId){displayedActivityId=s.activity.id;setSeedMode(s.activity.strategy==='maximum'?'maximum':'activity');if(s.activity.strategy==='maximum')maximumDurationInitialized=true;}
  $('entry-title').textContent=detecting&&!s.activity.selectedServer?'Elección automática':`Servidor #${selected}`;$('seed-destination').textContent=detecting&&!s.activity.selectedServer?'Elección automática':`Servidor #${selected}`;$('join-id').value=detecting&&!s.activity.selectedServer?'Se elegirá al detectar actividad':target()?.joinId||'Sin ID reciente confirmado';
  const a=s.account;
  $('vip').textContent=a.vipFresh&&a.vip?.comprobado?(a.vip.permanente||a.vip.sinCaducidad?'VIP permanente':a.vip.tiene?'VIP activo':'Sin VIP activo'):'Sin lectura reciente';
@@ -241,9 +274,18 @@ function render(s){
  const aSession=isBreak(s.autoSeeding)?null:s.autoSeeding,planned=['scheduled','launching'].includes(j?.status),plannedSeeding=planned&&j.seeding;
  $('auto-status').textContent=!s.localTools?.automaticMovement?'No disponible':plannedSeeding?'Programado':aSession?autoLabels[aSession.status]||aSession.status:'Detenido';$('auto-detail').textContent=!s.localTools?.automaticMovement?toolReason('automaticMovement','El controlador de movimiento no está disponible. Reinstala el portable completo conservando data.'):plannedSeeding?`Preparará la sesión el ${when(j.scheduledAt)}. La duración empieza a esa hora.`:aSession?autoActive(aSession)?`${aSession.reason} · fin ${at(aSession.endAt)}`:`Sesión anterior: ${aSession.reason}`:s.localTools?.automaticMovement?'Al iniciar, esperará población y tu personaje desplegado.':'El controlador de movimiento no está disponible.';
  const displayedSettings=entryRunning(s.entry)?s.entry:detecting?{durationMinutes:s.activity.durationMinutes,...s.activity.seeding}:plannedSeeding||(aSession&&(!settingsInitialized||autoActive(aSession))?aSession:null);
- if(displayedSettings){for(const [id,key]of [['auto-duration','durationMinutes'],['auto-players','startPlayers'],['auto-interval','intervalSeconds'],['auto-hold','holdMs']])$(id).value=displayedSettings[key];}if(planned)$('prepare-seeding').checked=!!j.seeding;settingsInitialized=true;
- $('activity-state').textContent=s.activity?`${s.activity.reason} · límite ${at(s.activity.endAt)}`:'Sin búsqueda activa.';$('activity-state').hidden=!s.activity;
- if(detecting){$('activity-min').value=s.activity.minPlayers;$('activity-max').value=s.activity.maxEntryPlayers;if(!autoActive(aSession)){$('auto-status').textContent='Vigilando';$('auto-detail').textContent='Esperando actividad pública para elegir servidor.';}}
+ if(displayedSettings){
+  const maximumSettings=detecting&&s.activity.strategy==='maximum'||entryRunning(ownedMaximumEntry)||ownedMaximumEntry&&aSession?.entryId===ownedMaximumEntry.id;
+  for(const [id,key]of [['auto-duration','durationMinutes'],['auto-players','startPlayers'],['auto-interval','intervalSeconds'],['auto-hold','holdMs']]){
+   if(id==='auto-players'&&maximumSettings)continue;
+   $(id).value=displayedSettings[key];if(id==='auto-players')normalStartPlayers=displayedSettings[key];
+  }
+ }if(planned)$('prepare-seeding').checked=!!j.seeding;settingsInitialized=true;
+ const activityFinished=['expired','cancelled','error','interrupted'].includes(s.activity?.status),activityTime=activityFinished&&s.activity?.finishedAt?s.activity.finishedAt:s.activity?.endAt;
+ $('activity-state').textContent=s.activity?`${s.activity.reason} · ${activityFinished&&s.activity.finishedAt?'Terminó':activityFinished?'Límite previsto':'Fin'} ${when(activityTime)}, hora de Madrid${s.activity.status==='expired'?'. La búsqueda está detenida aunque la app siga abierta.':''}`:'Sin búsqueda activa.';$('activity-state').hidden=!s.activity;
+ const maximumPrepared=maximumPreparedState();if(maximumPrepared)$('activity-state').textContent=maximumPrepared.active?`${maximumPrepared.reason} · fin ${when(s.activity.endAt)}, hora de Madrid.`:maximumPrepared.reason;
+ if(detecting){if(s.activity.strategy!=='maximum'){$('activity-min').value=s.activity.minPlayers;$('activity-max').value=s.activity.maxEntryPlayers;}if(!autoActive(aSession)){$('auto-status').textContent=s.activity.strategy==='maximum'?'Sedeo máximo':'Vigilando';$('auto-detail').textContent=s.activity.strategy==='maximum'?`${s.activity.reason} ${sessionLimit(s.activity.endAt,s.now)}`:'Esperando actividad pública para elegir servidor.';}}
+ if(s.activity?.strategy==='maximum'&&s.activity.status==='expired'&&!entryRunning(s.entry)&&!autoActive(aSession)){$('auto-status').textContent='Tiempo terminado';$('auto-detail').textContent=`Sedeo máximo terminó el ${when(s.activity.endAt)}, hora de Madrid. No está buscando servidores. Inicia una sesión nueva para continuar.`;}
  const rewards=s.rewards;
  if(rewards&&!rewardSettingsInitialized){$('reward-enabled').checked=rewards.enabled;$('reward-lead').value=rewards.leadMinutes;rewardSettingsInitialized=true;}
  if(!rewards)$('reward-status').textContent='Lector de premios sin actualizar.';
@@ -284,8 +326,24 @@ $('adjust').addEventListener('click',async()=>{if(busy)return;busy=true;controls
 $('manual-presence').addEventListener('change',()=>{manualConfirmedServer=$('manual-presence').checked?selected:null;controls();});
 $('auto-start').addEventListener('click',async event=>{if(busy||$('auto-start').disabled||!validMovementSettings())return;const server=target();if(!server)return;const manual=$('manual-presence').checked&&manualConfirmedServer===server.number,continuing=!manual&&state.seedingContinuity?.[server.number]===true,automatic=state.capabilities?.automaticEntry===true&&!manual&&!continuing,focusId=automatic?armDesktopEntryFocus(event,server):null;busy=true;controls();let copied=true;try{if(!manual&&!continuing&&!automatic){try{await navigator.clipboard.writeText(server.joinId);}catch{copied=false;}}const result=await post('/api/seeding/start',{server:server.number,expectedJoinId:server.joinId,...movementSettings(),team:seedingTeam(),...(manual?{presenceMode:'manual',confirmedServer:server.number}:{}),...(focusId?{initialFocus:'desktop'}:{})});bindDesktopEntryFocus(focusId,result);notice(manual?'Prueba sin Steam preparada. Vuelve al juego con manos vacías; espera población y HUD. La presencia la has confirmado tú y los premios quedan sin comprobar.':continuing?`Sesión preparada para continuar tu ciclo del #${server.number}. Vuelve al juego desplegado; esperará la población configurada y el HUD.`:automatic?`Entrará al #${server.number}, elegirá el equipo ${entryTeamNames[seedingTeam()]} y preparará el seeding. Deja Wardogs en primer plano; F8 o Detener cancelan.`:copied?'ID copiado y sesión preparada. Completa la entrada; el movimiento se activará automáticamente al comenzar.':'Sesión preparada. Copia el ID del campo para entrar; después el movimiento será automático.');}catch(e){cancelDesktopEntryFocus(focusId);notice(e.message);}finally{busy=false;controls();}});
 $('auto-stop').addEventListener('click',async()=>{if(busy)return;const focusId=deferredEntryFocusIntent?.id;busy=true;controls();try{cancelDeferredEntryFocus(focusId);await post('/api/seeding/stop',{});notice('Sesión detenida. No volverá a iniciar movimiento hasta que pulses Iniciar seeding.');}catch(e){notice(e.message);}finally{busy=false;controls();}});
-$('activity-start').addEventListener('click',async event=>{if(busy||!validMovementSettings()||!$('activity-min').reportValidity()||!$('activity-max').reportValidity())return;const automatic=state.capabilities?.automaticEntry===true,focusId=automatic?armDeferredEntryFocus(event,'activity'):null;busy=true;controls();try{const result=await post('/api/activity/start',{durationMinutes:movementSettings().durationMinutes,minPlayers:Number($('activity-min').value),maxEntryPlayers:Number($('activity-max').value),team:seedingTeam(),seeding:movementSettings(),...(focusId?{initialFocus:'desktop'}:{})});const stopped=bindDeferredEntryFocus(focusId,'activity',result.activity);notice(stopped?'Vigilancia detenida con F8.':automatic?'Vigilancia activada. Elegirá un servidor tras dos lecturas válidas, entrará y preparará el seeding. '+(focusId?'Deja el PC despierto. Puedes detener la búsqueda aquí; F8 cancela la entrada cuando comience.':'Deja Wardogs en primer plano cuando se abra. Usa Detener búsqueda para cancelar.')+'':'Vigilancia activada. Elegirá un servidor tras dos lecturas válidas; la entrada y el despliegue siguen asistidos.');}catch(e){cancelDeferredEntryFocus(focusId);notice(e.message);}finally{busy=false;controls();}});
-$('activity-stop').addEventListener('click',async()=>{if(busy)return;const ownerId=state?.activity?.id,focusId=deferredEntryFocusIntent?.jobKind==='activity'&&deferredEntryFocusIntent.ownerId===ownerId?deferredEntryFocusIntent.id:null;busy=true;controls();try{cancelDeferredEntryFocus(focusId);await post('/api/activity/stop',ownerId&&state?.capabilities?.deferredEntryFocus===true?{expectedJobId:ownerId}:{});notice('Vigilancia y sesión detenidas.');}catch(e){notice(e.message);}finally{busy=false;controls();}});
+async function startActivity(event,maximum=false){
+ if(busy||$(maximum?'maximum-start':'activity-start').disabled||!validMovementSettings(maximum)||(!maximum&&(!$('activity-min').reportValidity()||!$('activity-max').reportValidity())))return;
+ const automatic=state.capabilities?.automaticEntry===true,focusId=automatic?armDeferredEntryFocus(event,'activity'):null,settings=movementSettings();
+ if(maximum)settings.startPlayers=1;
+ busy=true;controls();
+ try{
+  const result=await post('/api/activity/start',{durationMinutes:settings.durationMinutes,...(maximum?{strategy:'maximum',minPlayers:0,maxEntryPlayers:99}:{minPlayers:Number($('activity-min').value),maxEntryPlayers:Number($('activity-max').value)}),team:seedingTeam(),seeding:settings,...(focusId?{initialFocus:'desktop'}:{})});
+  const stopped=bindDeferredEntryFocus(focusId,'activity',result.activity);
+  notice(stopped?'Vigilancia detenida con F8.':maximum?`Sedeo máximo preparado hasta ${when(result.activity?.endAt)}, hora de Madrid. Puede entrar en un servidor vacío y mover al personaje tras reconocer el despliegue. Mantiene el servidor para conservar el ciclo. Deja el PC despierto y Wardogs delante; F8 o Detener cancelan.`:automatic?'Vigilancia activada. Elegirá un servidor tras dos lecturas válidas, entrará y preparará el seeding. '+(focusId?'Deja el PC despierto. Puedes detener la búsqueda aquí; F8 cancela la entrada cuando comience.':'Deja Wardogs en primer plano cuando se abra. Usa Detener búsqueda para cancelar.')+'':'Vigilancia activada. Elegirá un servidor tras dos lecturas válidas; la entrada y el despliegue siguen asistidos.');
+ }catch(e){cancelDeferredEntryFocus(focusId);notice(e.message);}finally{busy=false;controls();}
+}
+$('activity-start').addEventListener('click',event=>startActivity(event));
+$('maximum-start').addEventListener('click',event=>startActivity(event,true));
+async function stopActivity(){if(busy)return;const ownerId=state?.activity?.id,focusId=deferredEntryFocusIntent?.jobKind==='activity'&&deferredEntryFocusIntent.ownerId===ownerId?deferredEntryFocusIntent.id:null;busy=true;controls();try{cancelDeferredEntryFocus(focusId);await post('/api/activity/stop',ownerId&&state?.capabilities?.deferredEntryFocus===true?{expectedJobId:ownerId}:{});notice('Vigilancia y sesión detenidas. No se reactivarán solas.');}catch(e){notice(e.message);}finally{busy=false;controls();}}
+$('activity-stop').addEventListener('click',stopActivity);
+$('maximum-stop').addEventListener('click',()=>{if(!$('maximum-stop').disabled)return stopActivity();});
+$('auto-duration').addEventListener('input',renderMaximumPlan);
+$('auto-players').addEventListener('input',()=>{if(seedMode!=='maximum')normalStartPlayers=$('auto-players').value;});
 $('reward-save').addEventListener('click',async()=>{if(busy||!$('reward-lead').reportValidity())return;busy=true;controls();try{await post('/api/rewards/config',{enabled:$('reward-enabled').checked,leadMinutes:Number($('reward-lead').value)});if(window.chrome?.webview)window.chrome.webview.postMessage({kind:'reward_cancel'});notice($('reward-enabled').checked?'Protección guardada: solo cobrará retos pendientes al acercarse su fecha final.':'Cobro automático desactivado.');}catch(e){notice(e.message);}finally{busy=false;controls();}});
 $('prepare-seeding').addEventListener('change',controls);
 $('schedule-form').addEventListener('submit',async event=>{event.preventDefault();if(busy)return;const prepare=$('prepare-seeding').checked,automatic=state.capabilities?.automaticEntry===true;if(prepare&&!validMovementSettings())return;const server=target();if(!server)return;const focusId=automatic?armDeferredEntryFocus(event,'scheduled',server):null;busy=true;controls();try{const result=await post('/api/opening/schedule',{server:server.number,expectedJoinId:server.joinId,team:seedingTeam(),madridStart:$('opening-at').value,onlyEligible:$('only-eligible').checked,...(prepare?{seeding:movementSettings()}:{}),...(focusId?{initialFocus:'desktop'}:{})});const stopped=bindDeferredEntryFocus(focusId,'scheduled',result.opening);notice(stopped?'Programación detenida con F8.':automatic?'Entrada automática'+(prepare?' y seeding':'')+' programada con el equipo '+entryTeamNames[seedingTeam()]+(focusId?'. Necesita el PC despierto. Puedes cancelar aquí; F8 cancela la entrada cuando comience.':'. Necesita el PC despierto y Wardogs en primer plano al entrar. Puedes cancelar la programación aquí.'):prepare?'Seeding programado con los ajustes actuales. A esa hora prepara el movimiento; la entrada sigue asistida.':'Apertura programada. Puedes cancelarla aquí; la entrada al servidor se completa en el juego.');}catch(e){cancelDeferredEntryFocus(focusId);notice(e.message);}finally{busy=false;controls();}});

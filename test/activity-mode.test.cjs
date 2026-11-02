@@ -124,3 +124,56 @@ test('actividad: una parada sigue siendo efectiva aunque falle su guardado',asyn
  const f=fixture();let release;f.prepare(()=>new Promise(resolve=>release=resolve));f.mode.start(input);await f.mode.tick();f.advance(30000);f.sample();const pending=f.mode.tick();f.failSave();
  assert.doesNotThrow(()=>f.mode.stop());assert.equal(f.mode.active(),false);assert.equal(f.prepares[0].isCurrent(),false);release();await pending;assert.equal(f.mode.view().status,'cancelled');assert.match(f.mode.view().persistenceError,/Disco/);
 });
+
+test('sedeo máximo: acepta un servidor vacío sólo tras dos lecturas frescas y mantiene su identidad',async()=>{
+ const f=fixture();f.rows([row(2,0)]);const started=f.mode.start({...input,strategy:'maximum',team:'any'});
+ assert.equal(started.strategy,'maximum');assert.equal(f.disk.strategy,'maximum');assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.seeding.startPlayers,1);
+ await f.mode.tick();await f.mode.tick();assert.equal(f.prepares.length,0);assert.equal(f.mode.view().samples[0].consecutiveSamples,1);
+ f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares.length,1);assert.equal(f.prepares[0].target.server,2);assert.equal(f.prepares[0].target.joinId,id);
+ assert.equal(f.prepares[0].session.settings.startPlayers,1);assert.equal(f.prepares[0].session.settings.team,'any');assert.equal(f.prepares[0].session.sessionEndAt,started.endAt);assert.match(f.mode.view().reason,/Sedeo máximo/);
+});
+
+test('sedeo máximo: ignora el mínimo anterior de 16 y el umbral de movimiento 20 sin alterar intervalo o paso',async()=>{
+ const f=fixture();f.rows([row(4,1)]);const started=f.mode.start({durationMinutes:720,strategy:'maximum',minPlayers:16,maxEntryPlayers:19,seeding:{startPlayers:20,intervalSeconds:45,holdMs:750}});
+ assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.endAt,'2026-10-30T22:00:00.000Z');assert.deepEqual(started.seeding,{startPlayers:1,intervalSeconds:45,holdMs:750});
+ await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].target.server,4);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:1,intervalSeconds:45,holdMs:750});
+});
+
+test('sedeo máximo: prioriza llenar antes que un vacío y reproduce la oportunidad nocturna sin exigir 16 jugadores',async()=>{
+ const f=fixture();f.rows([{...row(1,96),seedingActive:false},row(2,0),row(3,0),row(4,1),{...row(5,0),seedingActive:false}]);
+ f.mode.start({...input,strategy:'maximum',minPlayers:16,maxEntryPlayers:19});await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares.length,1);assert.equal(f.prepares[0].target.server,4);
+ const filling=fixture();filling.rows([row(1,0),row(2,19),row(3,5)]);filling.mode.start({...input,strategy:'maximum'});await filling.mode.tick();filling.advance(30000);filling.sample();await filling.mode.tick();assert.equal(filling.prepares[0].target.server,2);
+ const empty=fixture();empty.rows([{...row(1,0),seedingActive:false},row(2,0),row(3,0)]);empty.mode.start({...input,strategy:'maximum'});await empty.mode.tick();empty.advance(30000);empty.sample();await empty.mode.tick();assert.equal(empty.prepares[0].target.server,2);
+});
+
+test('sedeo máximo: vacío no permite entrar con fuente inválida, inactivo, lleno, umbral alcanzado o ID ausente',async()=>{
+ const bad=[r=>r.trusted=false,r=>r.online=false,r=>r.stale=true,r=>r.seedingActive=false,r=>r.players=-1,r=>r.players=20,r=>{r.players=1;r.capacity=1;},r=>r.joinId='bad',r=>r.sourceAt=new Date(initial-90001).toISOString(),r=>r.capacity=0];
+ for(const alter of bad){const f=fixture();const set=at=>{const r=row(2,0,at);alter(r);f.rows([r]);};set(initial);f.mode.start({...input,strategy:'maximum'});await f.mode.tick();f.advance(30000);set(initial+30000);await f.mode.tick();assert.equal(f.prepares.length,0);assert.equal(f.mode.view().samples.length,0);}
+ const threshold=fixture();threshold.rows([{...row(2,9),publicRule:{tope:9}}]);threshold.mode.start({...input,strategy:'maximum'});await threshold.mode.tick();threshold.advance(30000);threshold.sample();await threshold.mode.tick();assert.equal(threshold.prepares.length,0);
+});
+
+test('sedeo máximo: no abandona el servidor preparado aunque aparezca otro candidato mejor',async()=>{
+ const f=fixture();f.rows([row(2,0)]);f.mode.start({...input,strategy:'maximum'});await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.mode.view().status,'prepared');
+ f.advance(30000);f.rows([row(1,19,initial+60000),row(2,1,initial+60000)]);await f.mode.tick();assert.equal(f.prepares.length,1);assert.equal(f.mode.view().selectedServer,2);
+});
+
+test('sedeo máximo: su plazo total vence y no se convierte en vigilancia infinita con la ventana abierta',async()=>{
+ const f=fixture();f.rows([]);f.mode.start({durationMinutes:1,strategy:'maximum'});await f.mode.tick();assert.match(f.mode.view().reason,/también vacío/);
+ f.advance(60000,{wall:false});await f.mode.tick();assert.equal(f.mode.view().status,'expired');assert.match(f.mode.view().reason,/Sedeo máximo/);f.rows([row(2,0)]);await f.mode.tick();assert.equal(f.prepares.length,0);
+});
+
+test('sedeo máximo: cancelar durante la preparación revoca su continuación sin tocar un nuevo trabajo',async()=>{
+ const f=fixture();let release;f.prepare(()=>new Promise(resolve=>release=resolve));f.rows([row(2,0)]);const previous=f.mode.start({...input,strategy:'maximum'});await f.mode.tick();f.advance(30000);f.sample();const pending=f.mode.tick();assert.equal(f.mode.view().status,'launching');
+ f.mode.stop('Detenido con F8.');assert.equal(f.prepares[0].isCurrent(),false);const next=f.mode.start({...input,strategy:'activity'});assert.notEqual(next.id,previous.id);release();await pending;assert.deepEqual(f.mode.view(),next);assert.equal(f.prepares.length,1);
+});
+
+test('sedeo máximo: reiniciar interrumpe, y el modo de actividad antiguo sigue rechazando vacíos y mínimo cero',async()=>{
+ const maximum=fixture();maximum.rows([row(2,0)]);maximum.mode.start({...input,strategy:'maximum'});const restarted=maximum.build();assert.equal(restarted.view().status,'interrupted');assert.equal(restarted.view().strategy,'maximum');await restarted.tick();assert.equal(maximum.prepares.length,0);
+ for(const strategy of [undefined,'activity']){const f=fixture();f.rows([row(2,0)]);f.mode.start({...input,...(strategy?{strategy}:{})});assert.equal(f.mode.view().strategy,'activity');assert.equal(f.mode.view().minPlayers,1);await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares.length,0);assert.throws(()=>fixture().mode.start({...input,...(strategy?{strategy}:{}),minPlayers:0}));}
+});
+
+test('sedeo máximo: rechaza estrategia y duración inválidas antes de guardar o preparar',()=>{
+ for(const strategy of ['Maximum','max','',null,0,true,{}]){const f=fixture();assert.throws(()=>f.mode.start({...input,strategy}),/actividad o sedeo máximo/);assert.equal(f.mode.view(),null);assert.equal(f.disk,null);assert.equal(f.prepares.length,0);}
+ for(const durationMinutes of [0,721,null,1.5]){const f=fixture();assert.throws(()=>f.mode.start({durationMinutes,strategy:'maximum'}),/Duración/);assert.equal(f.mode.view(),null);assert.equal(f.disk,null);}
+ const badMovement=fixture();assert.throws(()=>badMovement.mode.start({...input,strategy:'maximum',seeding:{holdMs:1}}));assert.equal(badMovement.mode.view(),null);
+});
