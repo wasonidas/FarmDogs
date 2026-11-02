@@ -25,6 +25,39 @@ test('seeding automático: recuerda el umbral observado mientras se espera el de
  const i=inputs();i.screen.scene='main_menu';let r=advanceAutoSeeding(session(),i,now);assert.equal(r.command,null);assert.equal(r.session.status,'waiting_game');assert.equal(r.session.thresholdObservedAt,new Date(now).toISOString());
  i.server.players=19;i.screen.scene='gameplay_hud';r=advanceAutoSeeding(r.session,i,now);assert.equal(r.command,'start');assert.equal(r.session.startedMovementAt,null);
 });
+
+test('seeding automático: observar 20 antes del HUD no permite mover en un calentamiento posterior con un jugador',()=>{
+ const i=inputs();i.screen.scene='main_menu';let r=advanceAutoSeeding(session(),i,now);assert.equal(r.session.thresholdObservedAt,new Date(now).toISOString());
+ i.server.players=1;Object.assign(i.screen,{scene:'gameplay_hud',matchWaiting:true});r=advanceAutoSeeding(r.session,i,now);
+ assert.equal(r.session.status,'waiting_match');assert.equal(r.session.thresholdObservedAt,null);assert.equal(r.command,null);assert.match(r.session.reason,/Calentamiento/);
+ delete i.screen.matchWaiting;i.server.players=19;r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.status,'waiting_match');assert.equal(r.command,null);assert.equal(r.session.thresholdObservedAt,null);
+ i.server.players=20;r=advanceAutoSeeding(r.session,i,now);assert.equal(r.command,'start');assert.equal(r.session.status,'starting_movement');
+});
+
+test('seeding automático: cartel fresco de espera detiene movimiento incluso con 20 y obliga a observar de nuevo el umbral',()=>{
+ const i=inputs();let r=advanceAutoSeeding(session(),i,now);assert.equal(r.command,'start');i.movement={available:true,status:'running',armed:true,autoSessionId:r.session.id};
+ i.screen.matchWaiting=true;r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.status,'waiting_match');assert.equal(r.command,'stop');assert.equal(r.session.thresholdObservedAt,null);assert.equal(r.session.operatorStopped,false);
+ i.movement.armed=false;delete i.screen.matchWaiting;r=advanceAutoSeeding(r.session,i,now);assert.equal(r.command,'start');assert.equal(r.session.thresholdObservedAt,new Date(now).toISOString());
+ i.server.players=19;i.movement={available:true,status:'running',armed:true,autoSessionId:r.session.id};r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.status,'moving');assert.equal(r.command,null);assert.ok(r.session.thresholdObservedAt);
+});
+
+test('seeding automático: señal de calentamiento caducada, no verificada o ajena no borra el umbral observado',()=>{
+ const proof={entryId:randomUUID(),server:2,joinId:randomUUID(),gamePid:1234,gameWindow:5678,confirmedAt:new Date(now).toISOString()};
+ const create=()=>createAutoSeeding({server:2,durationMinutes:30,presenceMode:'entry'},now,{trustedEntry:proof});
+ const entryInput=()=>({...inputs(),screen:{status:'verified_capture',scene:'gameplay_hud',gameForeground:true,gamePid:1234,gameWindow:5678,capturedAt:new Date(now).toISOString()}});
+ for(const edit of [i=>i.screen.capturedAt=new Date(now-5001).toISOString(),i=>i.screen.capturedAt=new Date(now+1).toISOString(),i=>i.screen.status='unknown',i=>i.screen.scene='unknown',i=>i.screen.gameForeground=false,i=>i.screen.gamePid=999,i=>i.screen.gameWindow=999]){
+  const i=entryInput();let r=advanceAutoSeeding(create(),i,now);i.screen.matchWaiting=true;edit(i);r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.thresholdObservedAt,new Date(now).toISOString());assert.equal(r.session.status,'waiting_game');assert.notEqual(r.command,'start');
+ }
+ const i=entryInput();let r=advanceAutoSeeding(create(),i,now);i.screen.matchWaiting=true;r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.status,'waiting_match');assert.equal(r.session.thresholdObservedAt,null);
+ const strict=entryInput();strict.screen.matchWaiting='true';assert.equal(advanceAutoSeeding(create(),strict,now).command,'start');
+});
+
+test('seeding automático: la falta temporal de presencia, fuente o controlador no oculta un calentamiento fresco',()=>{
+ for(const edit of [i=>i.account.seedingFresh=false,i=>i.server.trusted=false,i=>i.movement.available=false]){
+  const i=inputs();let r=advanceAutoSeeding(session(),i,now);assert.ok(r.session.thresholdObservedAt);const reset=structuredClone(i);edit(reset);reset.screen.matchWaiting=true;r=advanceAutoSeeding(r.session,reset,now);assert.equal(r.session.thresholdObservedAt,null);assert.notEqual(r.command,'start');
+  i.server.players=1;r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.status,'waiting_match');assert.equal(r.command,null);assert.equal(r.session.thresholdObservedAt,null);
+ }
+});
 test('seeding automático: parada explícita y límite impiden rearmados posteriores',()=>{
  const s=session(),i=inputs();i.movement.autoOperatorStopped=s.id;let r=advanceAutoSeeding(s,i,now);assert.equal(r.session.status,'cancelled');delete i.movement.autoOperatorStopped;assert.notEqual(advanceAutoSeeding(r.session,i,now).command,'start');
  r=advanceAutoSeeding(session(),i,now+3600000);assert.equal(r.session.status,'expired');assert.equal(r.command,'stop');
@@ -137,6 +170,13 @@ test('movimiento temporal: no depende de servidor, población, cuenta Steam ni a
  let r=advanceAutoSeeding(s,i,now);assert.equal(r.command,'start');assert.equal(r.session.status,'starting_movement');assert.equal(r.session.thresholdObservedAt,null);
  i.server={number:5,trusted:false,players:0,seedingActive:false};i.account={seedingFresh:false};i.movement={available:true,status:'running',armed:true,autoSessionId:s.id};
  r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.status,'moving');assert.equal(r.command,null);assert.doesNotMatch(r.session.reason,/Steam|prueba|seeding|VIP/);
+});
+
+test('movimiento temporal independiente conserva su autorización aunque el HUD muestre calentamiento',()=>{
+ const i=inputs();delete i.server;delete i.account;i.screen.matchWaiting=true;let r=advanceAutoSeeding(breakSession(),i,now);assert.equal(r.command,'start');assert.equal(r.session.thresholdObservedAt,null);
+ i.movement={available:true,status:'running',armed:true,autoSessionId:r.session.id};r=advanceAutoSeeding(r.session,i,now);assert.equal(r.session.status,'moving');assert.equal(r.command,null);
+ const proof={entryId:randomUUID(),server:2,joinId:randomUUID(),gamePid:1234,gameWindow:5678,confirmedAt:new Date(now).toISOString()};
+ const entryBreak=createAutoSeeding({purpose:'break',server:2,durationMinutes:5,presenceMode:'entry'},now,{trustedEntry:proof});Object.assign(i.screen,{gamePid:1234,gameWindow:5678});i.movement={available:true,status:'stopped',armed:false};assert.equal(advanceAutoSeeding(entryBreak,i,now).command,'start');
 });
 
 test('movimiento temporal: exige autorización explícita y rechaza confirmaciones alteradas',()=>{

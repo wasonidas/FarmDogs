@@ -56,7 +56,10 @@ internal sealed class DesktopWindow : Form
     private readonly bool selfTest;
     private readonly ToolStripLabel status=new ToolStripLabel("Cuenta sin conectar");
     private readonly ToolStripButton stop=new ToolStripButton("Detener lectura");
-    private readonly System.Windows.Forms.Timer poll=new System.Windows.Forms.Timer {Interval=30000};
+    // Lightweight host wake-up; the policy permits network reads every 30s,
+    // and coalesces activation/sign-in requests without a browser timer.
+    private readonly System.Windows.Forms.Timer poll=new System.Windows.Forms.Timer {Interval=5000};
+    private readonly AccountRefreshPolicy accountReads=new AccountRefreshPolicy();
     private System.Windows.Forms.Timer showTimer;
     private System.Windows.Forms.Timer updateCloseTimer;
     private EventWaitHandle showRequest;
@@ -65,15 +68,19 @@ internal sealed class DesktopWindow : Form
     private Label authLocation;
     private CoreWebView2Environment environment;
     private string pendingId;
-    private DateTime pendingSince,nextRead;
+    private DateTime pendingSince,nextRewardPoll;
     private Dictionary<string,object> vipPart,seedPart,identityPart;
-    private bool reading,exiting,closeAllowed,importing;
+    private bool reading,exiting,closeAllowed,importing,accountOpening;
+    private int accountOpenIntent,accountDisconnects;
     private int handshakes;
     private Task importTask;
     private readonly RewardBridge rewards;
     private ForegroundAlertMonitor foregroundAlerts;
     private DesktopEntryFocus entryFocus;
     private bool authNavigating;
+    private bool returningFromSteam;
+    private int accountEpoch;
+    private ulong authNavigationId;
     private string state="disconnected",detail="Conecta Steam para actualizar tu cuenta.";
 
     public DesktopWindow(bool hiddenTest)
@@ -90,7 +97,8 @@ internal sealed class DesktopWindow : Form
         status.AutoSize=false;status.Width=Math.Max(80,ClientSize.Width-300);status.ForeColor=DesktopAppearance.Muted;status.AutoToolTip=true;status.TextAlign=ContentAlignment.MiddleLeft;
         stop.Enabled=false;stop.Click+=async(s,e)=>await StopReading();
         bar.Items.AddRange(new ToolStripItem[]{home,account,stop,new ToolStripSeparator(),status});Controls.Add(bar);
-        poll.Tick+=async(s,e)=>{await ReadAccount();await rewards.ReadAsync();};
+        poll.Tick+=async(s,e)=>{await ReadAccount();if(DateTime.UtcNow>=nextRewardPoll){nextRewardPoll=DateTime.UtcNow.AddSeconds(30);await rewards.ReadAsync();}};
+        if(!selfTest)Activated+=async(s,e)=>await RequestAccountRefresh(false);
         if(!selfTest)foregroundAlerts=new ForegroundAlertMonitor(this,root,message=>{
             if(!view.IsDisposed&&view.CoreWebView2!=null&&DesktopProtocol.IsLocal(view.CoreWebView2.Source))view.CoreWebView2.PostWebMessageAsJson(DesktopProtocol.Json.Serialize(message));
         });
@@ -101,7 +109,7 @@ internal sealed class DesktopWindow : Form
         FormClosing+=async(s,e)=>{
             if(closeAllowed)return;e.Cancel=true;if(exiting)return;exiting=true;
             await Task.Yield(); // Return the initial cancelled FormClosing before any final Close/Dispose.
-            reading=false;poll.Stop();pendingId=null;vipPart=null;seedPart=null;view.Enabled=false;
+            reading=false;accountEpoch++;accountOpenIntent++;accountReads.Stop();poll.Stop();pendingId=null;vipPart=null;seedPart=null;identityPart=null;view.Enabled=false;
             if(updateCloseTimer!=null){updateCloseTimer.Stop();updateCloseTimer.Dispose();updateCloseTimer=null;}
             if(showTimer!=null)showTimer.Stop();
             if(foregroundAlerts!=null){foregroundAlerts.Dispose();foregroundAlerts=null;}
@@ -137,7 +145,7 @@ internal sealed class DesktopWindow : Form
         view.CoreWebView2.WebMessageReceived+=async(s,e)=>{
             if(!DesktopProtocol.IsLocal(e.Source)||!DesktopProtocol.IsLocal(view.CoreWebView2.Source)||e.WebMessageAsJson.Length>2048)return;
             var msg=DesktopProtocol.Object(DesktopProtocol.Json.DeserializeObject(e.WebMessageAsJson));var kind=DesktopProtocol.Text(msg,"kind");
-            if(kind=="host_ready"){handshakes++;Publish();if(foregroundAlerts!=null)foregroundAlerts.Ready();if(entryFocus!=null)entryFocus.Ready();}
+            if(kind=="host_ready"){handshakes++;Publish();if(foregroundAlerts!=null)foregroundAlerts.Ready();if(entryFocus!=null)entryFocus.Ready();if(!selfTest)await RequestAccountRefresh(false);}
             else if(kind=="host_entry_focus_arm"&&!selfTest&&entryFocus!=null){object raw;int server=msg.TryGetValue("server",out raw)&&raw is int?(int)raw:0;entryFocus.Arm(DesktopProtocol.Text(msg,"id"),server,DesktopProtocol.Text(msg,"joinId"));}
             else if(kind=="host_entry_focus_bind"&&!selfTest&&entryFocus!=null)await entryFocus.Bind(DesktopProtocol.Text(msg,"id"),DesktopProtocol.Text(msg,"sessionId"));
             else if(kind=="host_entry_focus_stop"&&!selfTest&&entryFocus!=null)await entryFocus.StopFromKey(DesktopProtocol.Text(msg,"id"));
@@ -173,6 +181,8 @@ internal sealed class DesktopWindow : Form
     private async Task OpenAccount()
     {
         if(exiting)return;
+        if(accountOpening)return;
+        accountOpening=true;var openIntent=++accountOpenIntent;
         try
         {
             if(environment==null)throw new InvalidOperationException("La app todavía se está abriendo.");
@@ -183,80 +193,111 @@ internal sealed class DesktopWindow : Form
                 authForm.KeyDown+=(s,e)=>{if(e.KeyCode==Keys.F8)QueueEntryStop();};authView.KeyDown+=(s,e)=>{if(e.KeyCode==Keys.F8)QueueEntryStop();};
                 var header=new Panel {Dock=DockStyle.Top,Height=65};
                 authLocation=new Label {Dock=DockStyle.Fill,AutoEllipsis=true,Text="Inicia Steam una vez. Puedes ocultar esta ventana y mantener la lectura mientras la app esté abierta."};
-                var hide=new Button {Text="Ocultar y seguir leyendo",Dock=DockStyle.Right,Width=190};hide.Click+=(s,e)=>authForm.Hide();
+                var hide=new Button {Text="Ocultar y seguir leyendo",Dock=DockStyle.Right,Width=190};hide.Click+=async(s,e)=>{authForm.Hide();await RequestAccountRefresh(false);};
                 header.Controls.Add(authLocation);header.Controls.Add(hide);authForm.Controls.Add(header);
-                authForm.FormClosing+=(s,e)=>{if(!exiting){e.Cancel=true;authForm.Hide();}};
+                authForm.FormClosing+=async(s,e)=>{if(!exiting){e.Cancel=true;authForm.Hide();await RequestAccountRefresh(false);}};
                 authForm.Show(this);
                 await authView.EnsureCoreWebView2Async(environment);Configure(authView.CoreWebView2);
                 authView.CoreWebView2.NavigationStarting+=async(s,e)=>{
                     if(!DesktopProtocol.IsLoginNavigation(e.Uri)){e.Cancel=true;SetStatus("navigation_blocked","Continúa solo con Steam o Wardogs en esta ventana.");return;}
-                    authNavigating=true;
+                    authNavigating=true;authNavigationId=e.NavigationId;var epoch=++accountEpoch;pendingId=null;vipPart=null;seedPart=null;identityPart=null;
                     Uri u;if(Uri.TryCreate(e.Uri,UriKind.Absolute,out u))authLocation.Text="Dominio: "+u.Host+" · Ocultar conserva la lectura; Detener lectura la desconecta.";
-                    if(!DesktopProtocol.IsAccount(e.Uri)){pendingId=null;await rewards.DisconnectAsync();await DisconnectSnapshot();SetStatus("sign_in_required","Completa el inicio de sesión en la ventana de cuenta.");}
+                    if(!DesktopProtocol.IsAccount(e.Uri)){
+                        if(DesktopProtocol.IsSteamNavigation(e.Uri))returningFromSteam=true;
+                        // Hold the gate before the first await: a newer account
+                        // navigation may finish while reward disconnection runs.
+                        accountDisconnects++;
+                        try{await rewards.DisconnectAsync();await DisconnectSnapshot();if(epoch==accountEpoch)SetStatus("sign_in_required","Completa el inicio de sesión en la ventana de cuenta.");}
+                        finally{accountDisconnects--;}
+                    }
                 };
                 authView.CoreWebView2.NewWindowRequested+=(s,e)=>{e.Handled=true;if(DesktopProtocol.IsLoginNavigation(e.Uri))authView.CoreWebView2.Navigate(e.Uri);};
                 authView.CoreWebView2.WebMessageReceived+=async(s,e)=>{if(!await rewards.HandleAsync(e))await ReceivePart(e);};
-                authView.CoreWebView2.NavigationCompleted+=async(s,e)=>{authNavigating=false;if(reading&&DesktopProtocol.IsAccount(authView.CoreWebView2.Source)){await ReadAccount();await rewards.ReadAsync();}};
-                authView.CoreWebView2.Navigate(DesktopProtocol.AccountUrl);
+                authView.CoreWebView2.NavigationCompleted+=async(s,e)=>{
+                    if(e.NavigationId!=authNavigationId)return;
+                    authNavigating=false;
+                    if(reading&&DesktopProtocol.IsAccount(authView.CoreWebView2.Source)&&e.IsSuccess){var returned=returningFromSteam;returningFromSteam=false;await RequestAccountRefresh(returned);await rewards.ReadAsync();}
+                };
             }
             else {authForm.Show(this);authForm.Activate();}
-            reading=true;nextRead=DateTime.MinValue;poll.Start();SetStatus("connecting","Abre tu cuenta Steam para renovar VIP y seeding.");
-            await ReadAccount();
+            if(exiting||openIntent!=accountOpenIntent)return;
+            reading=true;poll.Start();SetStatus("connecting","Actualizando tu cuenta; el lector seguirá activo al ocultar esta ventana.");
+            if(String.IsNullOrEmpty(authView.CoreWebView2.Source)||authView.CoreWebView2.Source=="about:blank")authView.CoreWebView2.Navigate(DesktopProtocol.AccountUrl);
+            await RequestAccountRefresh(false);
             await rewards.ReadAsync();
         }
-        catch(Exception error){SetStatus("error",error.Message);}
+        catch(Exception error){if(!exiting&&openIntent==accountOpenIntent)SetStatus("error",error.Message);}
+        finally{accountOpening=false;}
+    }
+    private async Task RequestAccountRefresh(bool steamReturn)
+    {
+        if(exiting||!reading||selfTest)return;
+        accountReads.Request(steamReturn);await ReadAccount();
     }
     private async Task ReadAccount()
     {
-        if(exiting||!reading||authView==null||authView.CoreWebView2==null||!DesktopProtocol.IsAccount(authView.CoreWebView2.Source)||DateTime.UtcNow<nextRead||importing)return;
-        if(pendingId!=null&&DateTime.UtcNow-pendingSince<TimeSpan.FromSeconds(20))return;
+        if(exiting||!reading||authNavigating||authView==null||authView.CoreWebView2==null||!DesktopProtocol.IsAccount(authView.CoreWebView2.Source))return;
+        var epoch=accountEpoch;
+        if(pendingId!=null&&DateTime.UtcNow-pendingSince>=TimeSpan.FromSeconds(20)){
+            pendingId=null;vipPart=null;seedPart=null;identityPart=null;accountReads.Failure(DateTime.UtcNow,0);
+            await DisconnectSnapshot();if(reading&&!exiting&&epoch==accountEpoch)SetStatus("read_error","La cuenta tardó demasiado en responder. Se volverá a consultar sin abrir la ventana.");return;
+        }
+        if(!accountReads.TryBegin(DateTime.UtcNow,pendingId!=null||importing||accountDisconnects>0))return;
         pendingId=Guid.NewGuid().ToString("D");pendingSince=DateTime.UtcNow;vipPart=null;seedPart=null;identityPart=null;
-        var script=AccountReadScript.Build(pendingId);
+        var id=pendingId;var script=AccountReadScript.Build(id);
+        SetStatus("refreshing","Actualizando VIP y seeding; la ventana de cuenta puede seguir oculta.");
         bool failed=false;
-        try{await authView.CoreWebView2.ExecuteScriptAsync(script);}catch{failed=true;}
-        if(failed){pendingId=null;await DisconnectSnapshot();SetStatus("read_error","No se pudo consultar la cuenta. Vuelve a abrirla.");}
+        try{
+            var executing=authView.CoreWebView2.ExecuteScriptAsync(script);
+            if(await Task.WhenAny(executing,Task.Delay(20000))==executing)await executing;
+            else {failed=true;ObserveReadFailure(executing);}
+        }catch{failed=true;}
+        if(failed&&pendingId==id&&epoch==accountEpoch&&!exiting){pendingId=null;accountReads.Failure(DateTime.UtcNow,0);await DisconnectSnapshot();if(reading&&!exiting&&epoch==accountEpoch)SetStatus("read_error","No se pudo consultar la cuenta. Se volverá a intentar sin abrir la ventana.");}
     }
+    private static async void ObserveReadFailure(Task task){try{await task;}catch{}}
     private async Task ReceivePart(CoreWebView2WebMessageReceivedEventArgs args)
     {
-        Exception failure=null;
+        Exception failure=null;var readEpoch=accountEpoch;
         try
         {
-            if(exiting||!reading||authView==null||!DesktopProtocol.IsAccount(args.Source)||!DesktopProtocol.IsAccount(authView.CoreWebView2.Source)||args.WebMessageAsJson.Length>65536||pendingId==null||DateTime.UtcNow-pendingSince>TimeSpan.FromSeconds(20))return;
+            if(exiting||!reading||authNavigating||authView==null||!DesktopProtocol.IsAccount(args.Source)||!DesktopProtocol.IsAccount(authView.CoreWebView2.Source)||args.WebMessageAsJson.Length>65536||pendingId==null||DateTime.UtcNow-pendingSince>TimeSpan.FromSeconds(20))return;
             var msg=DesktopProtocol.Object(DesktopProtocol.Json.DeserializeObject(args.WebMessageAsJson));
             if(DesktopProtocol.Text(msg,"id")!=pendingId)return;
             var kind=DesktopProtocol.Text(msg,"kind");
-            if(kind=="account_error"){pendingId=null;await DisconnectSnapshot();SetStatus("read_error","No se pudo renovar la lectura de cuenta.");return;}
+            if(kind=="account_error"){pendingId=null;accountReads.Failure(DateTime.UtcNow,0);await DisconnectSnapshot();if(reading&&!exiting&&readEpoch==accountEpoch)SetStatus("read_error","No se pudo renovar la lectura de cuenta. Se volverá a intentar automáticamente.");return;}
             if(kind!="account_part")return;
             object code;if(!msg.TryGetValue("httpStatus",out code)||!(code is int))return;
-            if((int)code!=200){pendingId=null;nextRead=DateTime.UtcNow.AddSeconds((int)code==429?120:30);await DisconnectSnapshot();SetStatus((int)code==401?"sign_in_required":"read_error",(int)code==401?"Inicia Steam en la ventana de cuenta.":"La cuenta no responde; se volverá a consultar.");return;}
+            if((int)code!=200){pendingId=null;accountReads.Failure(DateTime.UtcNow,(int)code);await DisconnectSnapshot();if(reading&&!exiting&&readEpoch==accountEpoch)SetStatus((int)code==401?"sign_in_required":"read_error",(int)code==401?"Inicia Steam en la ventana de cuenta.":(int)code==429?"Wardogs limita las consultas. Se respetará una pausa de dos minutos.":"La cuenta no responde; se volverá a consultar.");return;}
             string endpoint=DesktopProtocol.Text(msg,"endpoint"),source=DesktopProtocol.Text(msg,"source");object data;
             if(!msg.TryGetValue("data",out data)||DesktopProtocol.Object(data)==null)return;
             var part=new Dictionary<string,object>{{"observedAt",DateTime.UtcNow.ToString("o")},{"source",source},{"data",data}};
             if(endpoint=="vip"&&source==DesktopProtocol.VipUrl)vipPart=part;else if(endpoint=="sedeo"&&source==DesktopProtocol.SeedUrl)seedPart=part;else if(endpoint=="identity"&&source==DesktopProtocol.IdentityUrl)identityPart=part;else return;
             if(vipPart==null||seedPart==null||identityPart==null||importing)return;
-            importing=true;var id=pendingId;pendingId=null;
+            importing=true;var epoch=accountEpoch;pendingId=null;
             try
             {
                 importTask=DesktopProtocol.PostLocal(http,"/api/account/import",new {format="wardogs-account-snapshot-v1",readerId=readerId,observedAt=DateTime.UtcNow.ToString("o"),vip=vipPart,seeding=seedPart,identity=identityPart});
                 await importTask;
-                if(reading){nextRead=DateTime.UtcNow.AddSeconds(25);SetStatus("connected","Cuenta actualizada · lectura cada 30 segundos.");}
+                if(reading&&!authNavigating&&epoch==accountEpoch&&DesktopProtocol.IsAccount(authView.CoreWebView2.Source)){accountReads.Success(DateTime.UtcNow);SetStatus("connected","Cuenta actualizada · lectura automática cada 30 segundos, también oculta.");}
                 else await DisconnectSnapshot();
             }
             finally{importing=false;}
         }
         catch(Exception error){failure=error;}
-        if(failure!=null){await DisconnectSnapshot();SetStatus("read_error",failure.Message);}
+        if(failure!=null&&reading&&!exiting&&readEpoch==accountEpoch){accountReads.Failure(DateTime.UtcNow,0);await DisconnectSnapshot();if(reading&&!exiting&&readEpoch==accountEpoch)SetStatus("read_error","No se pudo actualizar la cuenta en el servicio local. Se volverá a consultar.");}
     }
     private async Task DisconnectSnapshot()
     {
-        try{await DesktopProtocol.PostLocal(http,"/api/account/disconnect",new {readerId=readerId});}catch{}
+        accountDisconnects++;
+        try{await DesktopProtocol.PostLocal(http,"/api/account/disconnect",new {readerId=readerId});}catch{}finally{accountDisconnects--;}
     }
     private async Task StopReading()
     {
-        reading=false;poll.Stop();pendingId=null;vipPart=null;seedPart=null;
+        reading=false;accountOpenIntent++;var epoch=++accountEpoch;accountReads.Stop();poll.Stop();pendingId=null;vipPart=null;seedPart=null;identityPart=null;
         await rewards.DisconnectAsync();
         if(importTask!=null){try{await importTask;}catch{}}
-        await DisconnectSnapshot();SetStatus("disconnected","Lectura detenida. La sesión web se conserva en la app.");
+        if(reading||epoch!=accountEpoch)return;
+        await DisconnectSnapshot();if(!reading&&epoch==accountEpoch)SetStatus("disconnected","Lectura detenida. La sesión web se conserva en la app.");
     }
     public async Task VerifyHidden(string report,string runtime)
     {

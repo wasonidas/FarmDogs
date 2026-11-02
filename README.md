@@ -8,7 +8,7 @@ FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automát
 
 [Descargar el ZIP para Windows](https://github.com/wasonidas/FarmDogs/releases/latest/download/FarmDogs-portable.zip) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-**FarmDogs Launcher 0.5.5** añade **Sedeo máximo**: permite entrar también en servidores vacíos para acumular tiempo de sedeo mientras espera un llenado, con 12 horas iniciales ajustables y movimiento tras verificar el despliegue incluso estando solo. Conserva las mejoras de entrada, equipo y anti-AFK de 0.5.4 que el usuario confirmó en el juego. El nuevo modo todavía necesita una prueba nocturna real; no garantiza premios.
+**FarmDogs Launcher 0.5.6** ajusta **Sedeo máximo**: permite entrar también en servidores vacíos para acumular tiempo de sedeo mientras espera un llenado, con 12 horas iniciales ajustables. El personaje permanece quieto hasta alcanzar el umbral de movimiento configurado —20 jugadores por defecto— y reconocer su HUD reciente. Conserva las mejoras de entrada, equipo y anti-AFK de 0.5.4 que el usuario confirmó en el juego. El nuevo modo todavía necesita una prueba nocturna real; no garantiza premios.
 
 En **JUGAR**, marca **Activar anti-AFK al desplegar** si quieres que el movimiento quede preparado al entrar. Usa los ajustes de Anti-AFK y su duración empieza al desplegar, sin consumir la espera en cola. La casilla es opcional, no necesita conectar Steam a FarmDogs ni esperar población y solo actúa tras verificar la entrada y el personaje con manos vacías.
 
@@ -125,11 +125,11 @@ Elige servidor en **JUGAR**, después abre **SEEDING**. En **Equipo al entrar** 
 
 El objetivo es aprovechar también los minutos con poca gente. Las [reglas publicadas por Wardogs Spain](https://wardogsspain.com/seeding) distinguen **3 puntos mensuales por hora** con menos de 20 jugadores, incluso solo, de los **8 puntos por llenado**. El día VIP de llenado requiere entrar antes de 20 y permanecer hasta 50 según la regla oficial actual; los puntos del ranking se premian al terminar el mes. Un punto de clasificación no equivale a un día VIP inmediato.
 
-En este modo, el movimiento espera entrada y HUD verificados, pero **no espera a 20 jugadores**: se prepara desde 1 para que también sirva durante el calentamiento. Conserva tu intervalo entre pasos y la duración de cada paso. Mantén el personaje con las manos vacías, Wardogs delante y el PC despierto; F8 o Detener cancelan sin rearmado.
+En este modo, **entrar a un servidor vacío no activa el movimiento**: el personaje permanece quieto mientras acumula tiempo de sedeo y espera población. El movimiento espera el umbral que elijas —**20 jugadores por defecto, con mínimo de 20**—, la entrada verificada y un HUD reciente del personaje con manos vacías. Si reconoce el cartel «ESPERANDO JUGADORES» o «WAITING FOR PLAYERS», vuelve a esperar sin movimiento y exige de nuevo el umbral. Ese umbral es una condición operativa del automatismo; la población por sí sola no demuestra que la partida haya empezado ni que se haya ganado un premio. Conserva tu intervalo entre pasos y la duración de cada paso. Mantén Wardogs delante y el PC despierto; F8 o Detener cancelan sin rearmado.
 
 La duración es un **presupuesto total** que incluye búsqueda, entrada y permanencia. La app abierta no significa que siga trabajando tras la hora de fin. Una vez elegido el destino, conserva ese servidor para no abandonar un ciclo; **no rota automáticamente a otro servidor** después de un premio. Tampoco lee llamadas de Discord ni garantiza su bonificación. La cuenta conectada permite consultar el progreso y los premios oficiales; este modo no inventa un contador de puntos recibidos a partir del tiempo local.
 
-En los otros modos, el movimiento de seeding espera el umbral configurado —**20 jugadores por defecto**—, entrada o presencia confirmada y una captura reciente del personaje desplegado con manos vacías. La cadena de entrada verificada identifica el servidor, proceso y ventana sin exigir conectar la cuenta web de Steam a FarmDogs. El umbral de movimiento no determina la regla del premio VIP.
+En todos los modos de seeding, el movimiento espera el umbral configurado —**20 jugadores por defecto**—, entrada o presencia confirmada y una captura reciente del personaje desplegado con manos vacías. La cadena de entrada verificada identifica el servidor, proceso y ventana sin exigir conectar la cuenta web de Steam a FarmDogs. El umbral de movimiento no determina la regla del premio VIP.
 
 Si ya estás dentro, marca **Ya estoy desplegado en el #…** y pulsa **Activar movimiento**: no abre de nuevo el juego y utiliza tu confirmación para esa sesión. Con Steam conectado a FarmDogs también puede comprobarse presencia privada. La confirmación manual y la cadena visual no comprueban por sí mismas progreso ni premios.
 
@@ -180,6 +180,8 @@ Los avisos automáticos se deduplican y tienen un intervalo mínimo entre sonido
 ## MI VIP: cuenta de Steam y premios
 
 Conecta Steam desde **MI VIP** para consultar estado VIP, progreso, premios y asociación con tu clan. El inicio de sesión se realiza en la web oficial dentro del perfil WebView2 de la aplicación. Puedes **Ocultar y seguir leyendo** sin mantener visible esa ventana; **Detener lectura** desconecta el lector y conserva la sesión web. No necesitas una clave API de Steam ni copiar cookies desde otro navegador.
+
+Al volver del inicio de sesión de Steam, FarmDogs solicita una lectura nueva sin tener que cerrar y abrir la cuenta. También puede renovarla al volver al launcher o pulsar **Ocultar y seguir leyendo**; las solicitudes cercanas se agrupan y no duplican una lectura pendiente. La lectura periódica se mantiene aproximadamente cada 30 segundos. La interfaz se renueva al recibir datos nuevos y muestra cuándo está consultando. Si la web limita las consultas o devuelve un error, respeta la pausa antes de reintentar; no presenta datos antiguos como recién comprobados.
 
 La protección **Cobrar antes de caducar** espera a que Wardogs publique la **fecha final de cobro** y actúa con la antelación guardada, 15 minutos por defecto. No cobra el premio de la semana en curso solo por activarla. Necesita el PC y FarmDogs abiertos y una lectura autorizada de la cuenta. Un resultado incierto no se repite automáticamente.
 

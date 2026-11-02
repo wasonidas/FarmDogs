@@ -1,6 +1,6 @@
 {
   "name": "farmdogs",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "private": true,
   "description": "FarmDogs Launcher: servidores, clan, seeding, equipos y VIP de Wardogs",
   "engines": {

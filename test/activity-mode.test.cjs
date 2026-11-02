@@ -127,16 +127,18 @@ test('actividad: una parada sigue siendo efectiva aunque falle su guardado',asyn
 
 test('sedeo máximo: acepta un servidor vacío sólo tras dos lecturas frescas y mantiene su identidad',async()=>{
  const f=fixture();f.rows([row(2,0)]);const started=f.mode.start({...input,strategy:'maximum',team:'any'});
- assert.equal(started.strategy,'maximum');assert.equal(f.disk.strategy,'maximum');assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.seeding.startPlayers,1);
+ assert.equal(started.strategy,'maximum');assert.equal(f.disk.strategy,'maximum');assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.seeding.startPlayers,20);
  await f.mode.tick();await f.mode.tick();assert.equal(f.prepares.length,0);assert.equal(f.mode.view().samples[0].consecutiveSamples,1);
  f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares.length,1);assert.equal(f.prepares[0].target.server,2);assert.equal(f.prepares[0].target.joinId,id);
- assert.equal(f.prepares[0].session.settings.startPlayers,1);assert.equal(f.prepares[0].session.settings.team,'any');assert.equal(f.prepares[0].session.sessionEndAt,started.endAt);assert.match(f.mode.view().reason,/Sedeo máximo/);
+ assert.equal(f.prepares[0].session.settings.startPlayers,20);assert.equal(f.prepares[0].session.settings.team,'any');assert.equal(f.prepares[0].session.sessionEndAt,started.endAt);assert.match(f.mode.view().reason,/movimiento espera 20 jugadores/);
 });
 
-test('sedeo máximo: ignora el mínimo anterior de 16 y el umbral de movimiento 20 sin alterar intervalo o paso',async()=>{
- const f=fixture();f.rows([row(4,1)]);const started=f.mode.start({durationMinutes:720,strategy:'maximum',minPlayers:16,maxEntryPlayers:19,seeding:{startPlayers:20,intervalSeconds:45,holdMs:750}});
- assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.endAt,'2026-10-30T22:00:00.000Z');assert.deepEqual(started.seeding,{startPlayers:1,intervalSeconds:45,holdMs:750});
- await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].target.server,4);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:1,intervalSeconds:45,holdMs:750});
+test('sedeo máximo: ignora el mínimo de entrada anterior de 16 pero conserva el umbral de partida y los ajustes',async()=>{
+ for(const startPlayers of [20,30]){
+  const f=fixture();f.rows([row(4,1)]);const started=f.mode.start({durationMinutes:720,strategy:'maximum',minPlayers:16,maxEntryPlayers:19,seeding:{startPlayers,intervalSeconds:45,holdMs:750}});
+  assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.endAt,'2026-10-30T22:00:00.000Z');assert.deepEqual(started.seeding,{startPlayers,intervalSeconds:45,holdMs:750});
+  await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].target.server,4);assert.deepEqual(f.prepares[0].session.settings,{startPlayers,intervalSeconds:45,holdMs:750});
+ }
 });
 
 test('sedeo máximo: prioriza llenar antes que un vacío y reproduce la oportunidad nocturna sin exigir 16 jugadores',async()=>{
@@ -176,4 +178,5 @@ test('sedeo máximo: rechaza estrategia y duración inválidas antes de guardar 
  for(const strategy of ['Maximum','max','',null,0,true,{}]){const f=fixture();assert.throws(()=>f.mode.start({...input,strategy}),/actividad o sedeo máximo/);assert.equal(f.mode.view(),null);assert.equal(f.disk,null);assert.equal(f.prepares.length,0);}
  for(const durationMinutes of [0,721,null,1.5]){const f=fixture();assert.throws(()=>f.mode.start({durationMinutes,strategy:'maximum'}),/Duración/);assert.equal(f.mode.view(),null);assert.equal(f.disk,null);}
  const badMovement=fixture();assert.throws(()=>badMovement.mode.start({...input,strategy:'maximum',seeding:{holdMs:1}}));assert.equal(badMovement.mode.view(),null);
+ for(const startPlayers of [1,19]){const f=fixture();assert.throws(()=>f.mode.start({...input,strategy:'maximum',seeding:{startPlayers}}),/al menos 20 jugadores/);assert.equal(f.mode.view(),null);assert.equal(f.disk,null);assert.equal(f.prepares.length,0);}
 });

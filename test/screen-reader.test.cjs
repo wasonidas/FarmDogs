@@ -19,6 +19,14 @@ test('lector: la prueba estricta de reinicio exige procedencia fresca y no acept
 test('lector: una captura propia reciente conserva su adquisición y clasifica sin dar permiso de entrada',()=>{
  const r=normalizeScreen(sample(),now,directory);assert.equal(r.status,'verified_capture');assert.equal(r.scene,'gameplay_hud');assert.equal(r.capturedAt,new Date(now-1000).toISOString());assert.equal(r.occlusionVerified,false);
 });
+
+test('lector: propaga espera de partida sólo desde el cartel clasificado en una captura propia reciente',()=>{
+ const raw=sample(),text='ESPERANDO JUGADORES';raw.lines.push({text,pass:'warmup_context',words:[{text,x:raw.width*.35,y:raw.height*.20,width:raw.width*.30,height:raw.height*.025}]});
+ const result=normalizeScreen(raw,now,directory);assert.equal(result.status,'verified_capture');assert.equal(result.scene,'gameplay_hud');assert.equal(result.matchWaiting,true);assert.equal(result.capturedAt,raw.source.capturedAt);assert.equal(result.gamePid,1234);assert.equal(result.gameWindow,5678);
+ for(const edit of [r=>r.source.kind='file',r=>r.source.capturedAt=new Date(now-5001).toISOString(),r=>r.source.path=path.join(directory,'..','outside.png')]){const invalid=structuredClone(raw);edit(invalid);assert.equal(normalizeScreen(invalid,now,directory).matchWaiting,undefined);}
+ const forged=sample();forged.matchWaiting=true;assert.equal(normalizeScreen(forged,now,directory).matchWaiting,undefined);
+ for(const classified of [{phase:'gameplay_hud',matchWaiting:'true'},{phase:'unknown',matchWaiting:true},{phase:'team_selection',matchWaiting:true}])assert.equal(normalizeScreen(sample(),now,directory,{classify:()=>classified}).matchWaiting,undefined);
+});
 test('lector: archivos, ventanas distintas, fechas antiguas y rutas externas no renuevan la escena',()=>{
  for(const alter of [r=>r.source.kind='file',r=>r.source.gamePid=0,r=>r.source.capturedAt=new Date(now-6000).toISOString(),r=>r.source.capturedAt=new Date(now+1000).toISOString(),r=>r.source.path=path.join(directory,'..','outside.png')]){const r=sample();alter(r);assert.equal(normalizeScreen(r,now,directory).status,'unknown');}
  assert.equal(normalizeScreen({format:'wardogs-game-screen-unavailable-v1',reason:'game_not_foreground'},now,directory).gameForeground,false);

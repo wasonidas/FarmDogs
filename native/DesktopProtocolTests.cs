@@ -11,6 +11,9 @@ internal static class DesktopProtocolTests
         foreach(var u in new[]{"https://wardogsspain.com.evil/mi-cuenta","https://wardogsspain.com/otro","https://api.wardogsspain.com/mi-cuenta","http://wardogsspain.com/mi-cuenta","https://u:p@wardogsspain.com/mi-cuenta"})Check(!DesktopProtocol.IsAccount(u));
         Check(DesktopProtocol.IsLoginNavigation("https://steamcommunity.com/openid/login"));
         Check(DesktopProtocol.IsLoginNavigation("https://login.steampowered.com/login"));
+        Check(DesktopProtocol.IsSteamNavigation("https://steamcommunity.com/openid/login"));
+        Check(DesktopProtocol.IsSteamNavigation("https://login.steampowered.com/login"));
+        foreach(var u in new[]{"https://wardogsspain.com/mi-cuenta","https://api.wardogsspain.com/api/cuenta/yo","https://steamcommunity.com.evil/login","http://steamcommunity.com/login","https://steamcommunity.com:444/login"})Check(!DesktopProtocol.IsSteamNavigation(u));
         foreach(var u in new[]{"https://steamcommunity.com.evil/login","https://evilsteamcommunity.com/login","javascript:alert(1)","https://steamcommunity.com:444/login","https://u:p@steamcommunity.com/login"})Check(!DesktopProtocol.IsLoginNavigation(u));
         Console.WriteLine(count+" comprobaciones de origen de escritorio correctas.");return 0;
     }

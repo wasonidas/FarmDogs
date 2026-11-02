@@ -26,6 +26,11 @@ internal static class DesktopProtocol
         Uri u;if(!Uri.TryCreate(value,UriKind.Absolute,out u)||u.Scheme!="https"||!u.IsDefaultPort||u.UserInfo.Length!=0)return false;
         var h=u.IdnHost.ToLowerInvariant();return h=="wardogsspain.com"||h=="api.wardogsspain.com"||h=="steamcommunity.com"||h.EndsWith(".steamcommunity.com")||h=="steampowered.com"||h.EndsWith(".steampowered.com");
     }
+    public static bool IsSteamNavigation(string value)
+    {
+        if(!IsLoginNavigation(value))return false;var h=new Uri(value).IdnHost.ToLowerInvariant();
+        return h=="steamcommunity.com"||h.EndsWith(".steamcommunity.com")||h=="steampowered.com"||h.EndsWith(".steampowered.com");
+    }
     public static Dictionary<string,object> Object(object value) { return value as Dictionary<string,object>; }
     public static string Text(Dictionary<string,object> value,string key)
     {

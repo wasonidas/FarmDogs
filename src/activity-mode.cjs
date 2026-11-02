@@ -30,7 +30,8 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
   if(!Array.isArray(serverNumbers)||!serverNumbers.length||serverNumbers.length>5||new Set(serverNumbers).size!==serverNumbers.length||serverNumbers.some(number=>!Number.isInteger(number)||number<1||number>5))throw Error('Elige servidores distintos del 1 al 5.');
   if(input.seeding!==undefined&&(!input.seeding||typeof input.seeding!=='object'||Array.isArray(input.seeding)))throw Error('Ajustes de movimiento no válidos.');
   if(input.team!==undefined&&!['any','blue','red','green'].includes(input.team))throw Error('Elige equipo aleatorio, azul, rojo o verde.');
-  const at=now(),mono=monoNow(),raw=createAutoSeeding({...input.seeding,...(maximum?{startPlayers:1}:{}),server:1,durationMinutes},at);
+  const at=now(),mono=monoNow(),raw=createAutoSeeding({...input.seeding,server:1,durationMinutes},at);
+  if(maximum&&raw.startPlayers<20)throw Error('En Sedeo máximo el movimiento espera al menos 20 jugadores para el inicio de partida.');
   const endAt=limitEndAt(raw.endAt),end=Date.parse(endAt);
   if(!Number.isFinite(at)||!Number.isFinite(mono)||!Number.isFinite(end)||end<=at||end>Date.parse(raw.endAt))throw Error('El límite de la vigilancia no es válido o ya ha pasado.');
   const seeding=Object.fromEntries(['startPlayers','intervalSeconds','holdMs'].map(key=>[key,raw[key]]));
@@ -90,7 +91,7 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
    await prepare(selected.target,{remainingMinutes:Math.max(1,Math.ceil(remainingMs/60000)),sessionEndAt,initialFocus:job.initialFocus,settings:{...structuredClone(job.seeding),...(job.team?{team:job.team}:{})}},isCurrent);
    if(job?.id!==id||job.status!=='launching')return;
    if(!withinBudget()){finish('expired','Terminó el tiempo mientras se preparaba la entrada.');return;}
-   finish('prepared',job.strategy==='maximum'?(job.automaticEntry?`Sedeo máximo: entrada preparada en el #${selected.number}; movimiento desde el despliegue verificado, aunque estés solo. Se conserva ese servidor hasta el fin elegido.`:`Sedeo máximo preparado en el #${selected.number}. Completa la entrada y el despliegue; se conserva ese servidor hasta el fin elegido.`):(job.automaticEntry?`Entrada automática preparada en el #${selected.number}. Consulta su progreso; no se cambiará de servidor.`:`Sesión preparada en el #${selected.number}. Completa la entrada y el despliegue; no se cambia de servidor automáticamente.`));
+   finish('prepared',job.strategy==='maximum'?(job.automaticEntry?`Sedeo máximo: entrada preparada en el #${selected.number}; el movimiento espera ${job.seeding.startPlayers} jugadores y el despliegue verificado. Se conserva ese servidor hasta el fin elegido.`:`Sedeo máximo preparado en el #${selected.number}. Completa la entrada y el despliegue; el movimiento espera ${job.seeding.startPlayers} jugadores y se conserva ese servidor hasta el fin elegido.`):(job.automaticEntry?`Entrada automática preparada en el #${selected.number}. Consulta su progreso; no se cambiará de servidor.`:`Sesión preparada en el #${selected.number}. Completa la entrada y el despliegue; no se cambia de servidor automáticamente.`));
   }catch(error){
    if(job?.id!==id||!live.has(job.status))return;
    const next={...job,status:'error',reason:'No se pudo preparar la sesión: '+String(error.message||error).slice(0,500),finishedAt:new Date(now()).toISOString()};

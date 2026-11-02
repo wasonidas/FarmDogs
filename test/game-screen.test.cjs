@@ -182,3 +182,25 @@ test('pantalla: texto genérico o un estado manipulado no prueban partida activa
  const generic=structuredClone(restart);generic.lines=generic.lines.filter(line=>!/reiniciando/.test(line.text));assert.equal(classifyGameScreen(generic).phase,'server_message_unknown');
  for(const report of [null,{}, {...lookup,lines:[]}, {...lookup,format:'other'}]){const d=classifyGameScreen(report);assert.equal(d.phase,'unknown');assert.equal(d.activeMatchVerified,false);}
 });
+
+function warmupHud(text='ESPERANDO JUGADORES',bounds={}){
+ const report=structuredClone(hud),word={text,x:report.width*.35,y:report.height*.20,width:report.width*.30,height:report.height*.025,...bounds};
+ report.lines.push({text,pass:'warmup_context',words:[word]});return report;
+}
+
+test('pantalla: el cartel literal de calentamiento conserva HUD y añade sólo una señal negativa de espera',()=>{
+ for(const text of ['ESPERANDO JUGADORES','WAITING FOR PLAYERS']){
+  const report=warmupHud(text),result=classifyGameScreen(report);
+  assert.equal(result.phase,'gameplay_hud');assert.equal(result.matchWaiting,true);assert.equal(result.inputAllowed,false);assert.equal(result.activeMatchVerified,false);
+  // Repeated OCR passes of the same anchored banner do not invalidate waiting.
+  report.lines.push(structuredClone(report.lines.at(-1)));assert.equal(classifyGameScreen(report).matchWaiting,true);
+ }
+ assert.equal(classifyGameScreen(hud).matchWaiting,undefined);
+});
+
+test('pantalla: chat, texto parcial, geometría ajena o HUD incompleto no inventan calentamiento',()=>{
+ for(const text of ['CHAT: ESPERANDO JUGADORES','ESPERANDO','WAITING FOR PLAYER','PLAYERS','ESPERANDO JUGADORES...'])assert.equal(classifyGameScreen(warmupHud(text)).matchWaiting,undefined,text);
+ for(const bounds of [{x:0},{x:hud.width*.75},{y:hud.height*.02},{y:hud.height*.40},{height:hud.height*.20},{x:NaN}])assert.equal(classifyGameScreen(warmupHud('ESPERANDO JUGADORES',bounds)).matchWaiting,undefined,JSON.stringify(bounds));
+ const incomplete=warmupHud();incomplete.lines=incomplete.lines.filter(line=>line.text!=='FISTS');assert.equal(classifyGameScreen(incomplete).phase,'unknown');assert.equal(classifyGameScreen(incomplete).matchWaiting,undefined);
+ const forged=structuredClone(hud);forged.matchWaiting=true;assert.equal(classifyGameScreen(forged).matchWaiting,undefined);
+});

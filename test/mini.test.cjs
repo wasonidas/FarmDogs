@@ -40,6 +40,21 @@ const focusJobId='55555555-5555-4555-8555-555555555555';
 function deferredHost(a){a.hostEvent({kind:'host_entry_focus_support',supported:true,deferred:true});}
 function automaticSample(){const s=sample();s.capabilities.automaticEntry=true;s.capabilities.deferredEntryFocus=true;return s;}
 
+test('cuenta Steam: una importación confirmada por el host renueva los datos API sin volver a abrir el login',async()=>{
+ const initial=sample(),a=await app({initial,host:true});const before=a.requests.filter(row=>row.method==='GET').length;
+ assert.equal(a.node('vip').textContent,'Sin lectura reciente');initial.account={vipFresh:true,seedingFresh:false,vip:{comprobado:true,tiene:true,caduca:'2026-11-05T10:00:00Z'}};
+ a.hostEvent({kind:'host_account_status',state:'connected',reading:true,detail:'Cuenta actualizada.'});await new Promise(setImmediate);
+ assert.equal(a.requests.filter(row=>row.method==='GET').length,before+1);assert.equal(a.node('vip').textContent,'VIP activo');assert.equal(a.node('reader-status').textContent,'Cuenta actualizada.');assert.equal(a.posts().length,0);assert.equal(a.hostMessages.some(row=>row.kind==='account_open'),false);
+ a.hostEvent({kind:'host_account_status',state:'read_error',reading:true,detail:'Sin lectura reciente.'});a.hostEvent({kind:'host_account_status',state:'connected',reading:false,detail:'Lectura detenida.'});await new Promise(setImmediate);assert.equal(a.requests.filter(row=>row.method==='GET').length,before+1);
+});
+
+test('cuenta Steam: varios avisos durante un POST se agrupan en una lectura posterior sin perder la mutación',async()=>{
+ let release;const hold=new Promise(resolve=>release=resolve);const a=await app({initial:automaticSample(),host:true,onPost:async(route,body,s)=>{await hold;return {...s,entry:{id:focusJobId,server:1,team:'blue',status:'waiting_game',reason:'Esperando.',endAt:'2026-10-31T12:00:00Z'}};}});
+ const before=a.requests.filter(row=>row.method==='GET').length,pending=a.click('play');await new Promise(setImmediate);
+ for(let i=0;i<3;i++)a.hostEvent({kind:'host_account_status',state:'connected',reading:true,detail:'Cuenta actualizada.'});assert.equal(a.requests.filter(row=>row.method==='GET').length,before);
+ release();await pending;await new Promise(setImmediate);assert.equal(a.requests.filter(row=>row.method==='GET').length,before+1);assert.equal(a.posts().length,1);assert.equal(a.node('entry-progress-state').textContent,'Esperando Wardogs');assert.equal(a.hostMessages.some(row=>row.kind==='account_open'),false);
+});
+
 test('entrar con anti-AFK: casilla opcional conserva la entrada compatible sin iniciar movimiento desde la interfaz',async()=>{
  const initial=automaticSample();initial.capabilities.entryAntiAfk=true;const a=await app({initial});
  assert.equal(a.node('entry-anti-afk').checked,false);assert.equal(a.node('entry-anti-afk').disabled,false);assert.match(a.node('entry-anti-afk-help').textContent,/Opcional/);
@@ -129,11 +144,11 @@ test('sedeo máximo: elección explícita propone doce horas editables y no util
  const a=await app({initial,onPost:(route,body,s)=>{assert.equal(route,'/api/activity/start');return {...s,activity:{id:focusJobId,strategy:body.strategy,status:'watching',reason:'Confirmando un servidor que puntúe, incluso vacío.',durationMinutes:body.durationMinutes,minPlayers:0,maxEntryPlayers:99,seeding:body.seeding,endAt:'2026-10-31T16:00:00Z'}};}});
  a.node('activity-min').value='16';a.node('activity-max').value='19';
  assert.equal(a.node('auto-duration').value,'120');await a.click('seed-choice-maximum');
- assert.equal(Number(a.node('auto-duration').value),720);assert.equal(a.node('seed-choice-maximum').attributes['aria-pressed'],'true');assert.equal(a.node('seed-mode-maximum').hidden,false);assert.equal(a.node('seed-mode-activity').hidden,true);assert.equal(a.node('auto-players-setting').hidden,true);assert.equal(a.node('auto-players').disabled,true);assert.match(a.node('maximum-plan').textContent,/720 min.*fin previsto.*23:00.*Madrid/);assert.equal(a.posts().length,0);
+ assert.equal(Number(a.node('auto-duration').value),720);assert.equal(a.node('seed-choice-maximum').attributes['aria-pressed'],'true');assert.equal(a.node('seed-mode-maximum').hidden,false);assert.equal(a.node('seed-mode-activity').hidden,true);assert.equal(a.node('auto-players-setting').hidden,false);assert.equal(a.node('auto-players').disabled,false);assert.equal(a.node('auto-players').min,'20');assert.match(a.node('seed-threshold-help').textContent,/calentamiento.*movimiento espera.*mínimo 20 jugadores.*HUD/);assert.match(a.node('maximum-plan').textContent,/720 min.*fin previsto.*23:00.*Madrid/);assert.equal(a.posts().length,0);
  a.node('auto-duration').value='360';a.node('auto-interval').value='25';a.node('auto-hold').value='700';a.node('seed-team').value='green';
  await a.click('seed-choice-activity');assert.equal(a.node('auto-players-setting').hidden,false);assert.equal(a.node('auto-players').disabled,false);assert.equal(a.node('activity-min').value,'16');await a.click('seed-choice-maximum');assert.equal(a.node('auto-duration').value,'360');
- await a.click('maximum-start');assert.deepEqual(a.posts().map(p=>[p.route,p.body]),[['/api/activity/start',{strategy:'maximum',durationMinutes:360,minPlayers:0,maxEntryPlayers:99,team:'green',seeding:{durationMinutes:360,startPlayers:1,intervalSeconds:25,holdMs:700}}]]);
- assert.equal(a.node('activity-min').value,'16');assert.equal(a.node('activity-max').value,'19');assert.match(a.node('maximum-plan').textContent,/activo.*Quedan 360:00.*17:00:00/);assert.equal(a.node('maximum-stop').disabled,false);assert.equal(a.node('maximum-start').disabled,true);assert.equal(a.node('auto-status').textContent,'Sedeo máximo');assert.match(a.node('notice-text').textContent,/servidor vacío/);
+ await a.click('maximum-start');assert.deepEqual(a.posts().map(p=>[p.route,p.body]),[['/api/activity/start',{strategy:'maximum',durationMinutes:360,minPlayers:0,maxEntryPlayers:99,team:'green',seeding:{durationMinutes:360,startPlayers:20,intervalSeconds:25,holdMs:700}}]]);
+ assert.equal(a.node('activity-min').value,'16');assert.equal(a.node('activity-max').value,'19');assert.match(a.node('maximum-plan').textContent,/activo.*Quedan 360:00.*17:00:00/);assert.equal(a.node('maximum-stop').disabled,false);assert.equal(a.node('maximum-start').disabled,true);assert.equal(a.node('auto-status').textContent,'Sedeo máximo');assert.match(a.node('notice-text').textContent,/servidor vacío.*calentamiento.*movimiento esperará 20 jugadores y el HUD/);assert.doesNotMatch(a.node('notice-text').textContent,/mover al personaje tras reconocer el despliegue/);
 });
 
 test('sedeo máximo: requiere capacidad explícita y conserva la exclusión de otros automatismos y actualizaciones',async()=>{
@@ -145,14 +160,14 @@ test('sedeo máximo: requiere capacidad explícita y conserva la exclusión de o
 });
 
 test('sedeo máximo: carga la vigilancia vigente con su plazo real y distingue expiración de app abierta',async()=>{
- const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Esperando dos lecturas recientes.',durationMinutes:480,minPlayers:0,maxEntryPlayers:99,seeding:{startPlayers:1,intervalSeconds:45,holdMs:800},team:'red',endAt:'2026-10-31T18:00:00Z'};
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Esperando dos lecturas recientes.',durationMinutes:480,minPlayers:0,maxEntryPlayers:99,seeding:{startPlayers:20,intervalSeconds:45,holdMs:800},team:'red',endAt:'2026-10-31T18:00:00Z'};
  const a=await app({initial});assert.equal(Number(a.node('auto-duration').value),480);assert.equal(a.node('seed-mode-maximum').hidden,false);assert.equal(a.node('seed-team').value,'red');assert.match(a.node('maximum-plan').textContent,/activo.*480:00.*19:00:00/);assert.equal(a.node('maximum-stop').disabled,false);assert.equal(a.posts().length,0);
  a.update({...initial,now:'2026-10-31T18:00:01Z',activity:{...initial.activity,status:'expired',reason:'Fin del tiempo de sedeo máximo.'}});assert.equal(a.node('auto-status').textContent,'Tiempo terminado');assert.match(a.node('auto-detail').textContent,/No está buscando servidores/);assert.match(a.node('activity-state').textContent,/búsqueda está detenida aunque la app siga abierta/);assert.equal(a.node('maximum-stop').disabled,true);assert.equal(a.node('maximum-start').disabled,false);assert.equal(a.posts().length,0);
 });
 
 test('sedeo máximo: prepared mantiene plazo y parada solo para la entrada y movimiento propios',async()=>{
  const initial=automaticSample();initial.capabilities.maximumSeeding=true;const entryId='99999999-9999-4999-8999-999999999999';
- initial.activity={id:focusJobId,strategy:'maximum',status:'prepared',reason:'Mantiene el mismo servidor.',durationMinutes:720,endAt:'2026-10-31T22:00:00Z',selectedServer:2};initial.entry={id:entryId,server:2,seeding:true,status:'completed',reason:'Entrada completada.',endAt:initial.activity.endAt};initial.entryOrigin={kind:'activity',ownerId:focusJobId,entryId};initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',entryId,server:2,status:'moving',reason:'Automatismo en marcha.',durationMinutes:720,startPlayers:1,intervalSeconds:60,holdMs:500,endAt:initial.activity.endAt};
+ initial.activity={id:focusJobId,strategy:'maximum',status:'prepared',reason:'Mantiene el mismo servidor.',durationMinutes:720,endAt:'2026-10-31T22:00:00Z',selectedServer:2};initial.entry={id:entryId,server:2,seeding:true,status:'completed',reason:'Entrada completada.',endAt:initial.activity.endAt};initial.entryOrigin={kind:'activity',ownerId:focusJobId,entryId};initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',entryId,server:2,status:'moving',reason:'Automatismo en marcha.',durationMinutes:720,startPlayers:20,intervalSeconds:60,holdMs:500,endAt:initial.activity.endAt};
  const a=await app({initial});assert.equal(a.node('seed-mode-maximum').hidden,false);assert.match(a.node('maximum-plan').textContent,/activo.*720:00/);assert.equal(a.node('maximum-stop').disabled,false);assert.equal(a.node('auto-status').textContent,'En marcha');assert.match(a.node('auto-detail').textContent,/Automatismo en marcha/);
  a.update({...initial,autoSeeding:{...initial.autoSeeding,entryId:'otro-intento'}});assert.doesNotMatch(a.node('maximum-plan').textContent,/Sedeo máximo activo/);assert.equal(a.node('maximum-stop').disabled,true);assert.equal(a.posts().length,0);
  a.update({...initial,entry:{...initial.entry,status:'choosing_team'}});assert.equal(a.node('maximum-stop').disabled,false);assert.match(a.node('maximum-plan').textContent,/activo/);
@@ -161,7 +176,7 @@ test('sedeo máximo: prepared mantiene plazo y parada solo para la entrada y mov
 
 test('sedeo máximo: prepared histórico muestra la parada, error o fin real del movimiento y no una conservación futura',async()=>{
  const entryId='99999999-9999-4999-8999-999999999999';
- const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'prepared',reason:'Conservando este servidor hasta el final.',durationMinutes:720,endAt:'2026-10-31T22:00:00Z'};initial.entry={id:entryId,status:'completed',reason:'Entrada completada.'};initial.entryOrigin={kind:'activity',ownerId:focusJobId,entryId};initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',entryId,status:'moving',reason:'Automatismo en marcha.',durationMinutes:720,startPlayers:1,intervalSeconds:60,holdMs:500,endAt:initial.activity.endAt};
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'prepared',reason:'Conservando este servidor hasta el final.',durationMinutes:720,endAt:'2026-10-31T22:00:00Z'};initial.entry={id:entryId,status:'completed',reason:'Entrada completada.'};initial.entryOrigin={kind:'activity',ownerId:focusJobId,entryId};initial.autoSeeding={id:'88888888-8888-4888-8888-888888888888',purpose:'seeding',entryId,status:'moving',reason:'Automatismo en marcha.',durationMinutes:720,startPlayers:20,intervalSeconds:60,holdMs:500,endAt:initial.activity.endAt};
  const a=await app({initial});assert.match(a.node('activity-state').textContent,/Automatismo en marcha/);assert.doesNotMatch(a.node('activity-state').textContent,/Conservando/);
  for(const [status,reason]of [['cancelled','Movimiento detenido con F8.'],['error','La pantalla indica que terminó la conexión verificada.'],['expired','Fin de la sesión de seeding.']]){
   a.update({...initial,autoSeeding:{...initial.autoSeeding,status,reason}});assert.match(a.node('activity-state').textContent,/Sedeo máximo (detenido|terminado)/);assert.ok(a.node('activity-state').textContent.includes(reason));assert.match(a.node('activity-state').textContent,/No hay búsqueda activa/);assert.doesNotMatch(a.node('activity-state').textContent,/Conservando|fin.*23:00/);assert.equal(a.node('maximum-stop').disabled,true);assert.match(a.node('maximum-plan').textContent,/No hay búsqueda activa/);
@@ -170,20 +185,29 @@ test('sedeo máximo: prepared histórico muestra la parada, error o fin real del
  a.update({...initial,entry:{...initial.entry,status:'error',reason:'No se pudo entrar en el equipo.'},autoSeeding:null});assert.match(a.node('activity-state').textContent,/No se pudo entrar en el equipo.*No hay búsqueda activa/);assert.equal(a.posts().length,0);
 });
 
-test('sedeo máximo: el umbral impuesto de uno no reemplaza el ajuste normal anterior al volver a Ahora',async()=>{
- for(const normal of [20,16]){
-  const initial=automaticSample();initial.capabilities.maximumSeeding=true;const a=await app({initial});a.node('auto-players').value=String(normal);await a.click('seed-choice-maximum');
-  const entryId='99999999-9999-4999-8999-999999999999',activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Confirmando servidor.',durationMinutes:720,minPlayers:0,maxEntryPlayers:99,seeding:{startPlayers:1,intervalSeconds:60,holdMs:500},endAt:'2026-10-31T22:00:00Z'};
-  a.update({...initial,activity});assert.equal(Number(a.node('auto-players').value),normal);
-  const progress={...initial,activity:{...activity,status:'prepared'},entry:{id:entryId,server:1,status:'completed'},entryOrigin:{kind:'activity',ownerId:focusJobId,entryId},autoSeeding:{purpose:'seeding',entryId,server:1,status:'moving',durationMinutes:720,startPlayers:1,intervalSeconds:60,holdMs:500,endAt:activity.endAt,reason:'En marcha.'}};
-  a.update(progress);assert.equal(Number(a.node('auto-players').value),normal);
-  a.update({...progress,autoSeeding:{...progress.autoSeeding,status:'cancelled',reason:'Detenido.'}});await a.click('seed-choice-manual');assert.equal(a.node('auto-players-setting').hidden,false);assert.equal(a.node('auto-players').disabled,false);assert.equal(Number(a.node('auto-players').value),normal);
-  await a.click('auto-start');assert.equal(a.posts().at(-1).route,'/api/seeding/start');assert.equal(a.posts().at(-1).body.startPlayers,normal);
+test('sedeo máximo: permite configurar el umbral de movimiento y conserva la misma preferencia al volver a Ahora',async()=>{
+ for(const threshold of [20,30]){
+  const initial=automaticSample();initial.capabilities.maximumSeeding=true;const a=await app({initial});await a.click('seed-choice-maximum');assert.equal(a.node('auto-players').disabled,false);a.node('auto-players').value=String(threshold);
+  await a.click('maximum-start');assert.equal(a.posts().at(-1).route,'/api/activity/start');assert.equal(a.posts().at(-1).body.seeding.startPlayers,threshold);assert.match(a.node('notice-text').textContent,new RegExp('movimiento esperará '+threshold+' jugadores y el HUD'));
+  const entryId='99999999-9999-4999-8999-999999999999',activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Confirmando servidor.',durationMinutes:720,minPlayers:0,maxEntryPlayers:99,seeding:{startPlayers:threshold,intervalSeconds:60,holdMs:500},endAt:'2026-10-31T22:00:00Z'};
+  a.update({...initial,activity});assert.equal(Number(a.node('auto-players').value),threshold);
+  const progress={...initial,activity:{...activity,status:'prepared'},entry:{id:entryId,server:1,status:'completed'},entryOrigin:{kind:'activity',ownerId:focusJobId,entryId},autoSeeding:{purpose:'seeding',entryId,server:1,status:'waiting_match',durationMinutes:720,startPlayers:threshold,intervalSeconds:60,holdMs:500,endAt:activity.endAt,reason:'Esperando inicio.'}};
+  a.update(progress);assert.equal(Number(a.node('auto-players').value),threshold);assert.equal(a.node('auto-status').textContent,'Esperando inicio');assert.match(a.node('auto-detail').textContent,/Esperando inicio/);
+  a.update({...progress,autoSeeding:{...progress.autoSeeding,status:'cancelled',reason:'Detenido.'}});await a.click('seed-choice-manual');assert.equal(a.node('auto-players-setting').hidden,false);assert.equal(a.node('auto-players').disabled,false);assert.equal(Number(a.node('auto-players').value),threshold);
+  await a.click('auto-start');assert.equal(a.posts().at(-1).route,'/api/seeding/start');assert.equal(a.posts().at(-1).body.startPlayers,threshold);
+ }
+});
+
+test('sedeo máximo: eleva con aviso un umbral antiguo inferior a veinte al elegirlo y restaura el borrador normal',async()=>{
+ for(const previous of [1,16]){
+  const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.autoSeeding={purpose:'seeding',server:1,status:'interrupted',reason:'Sesión antigua interrumpida.',durationMinutes:120,startPlayers:previous,intervalSeconds:60,holdMs:500,endAt:'2026-10-31T12:00:00Z'};
+  const a=await app({initial});assert.equal(Number(a.node('auto-players').value),previous);await a.click('seed-choice-maximum');assert.equal(Number(a.node('auto-players').value),20);assert.equal(a.node('auto-players').min,'20');assert.match(a.node('seed-threshold-help').textContent,new RegExp('anterior de '+previous+'.*elevado a 20'));
+  await a.click('maximum-start');assert.equal(a.posts().at(-1).body.seeding.startPlayers,20);assert.equal(a.posts().at(-1).body.strategy,'maximum');await a.click('seed-choice-manual');assert.equal(Number(a.node('auto-players').value),previous);assert.equal(a.node('auto-players').min,'1');
  }
 });
 
 test('sedeo máximo: Detener conserva propietario de actividad y no vuelve a iniciar tras cancelación o desconexión',async()=>{
- const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Buscando.',durationMinutes:720,seeding:{startPlayers:1,intervalSeconds:60,holdMs:500},endAt:'2026-10-31T22:00:00Z'};
+ const initial=automaticSample();initial.capabilities.maximumSeeding=true;initial.activity={id:focusJobId,strategy:'maximum',status:'watching',reason:'Buscando.',durationMinutes:720,seeding:{startPlayers:20,intervalSeconds:60,holdMs:500},endAt:'2026-10-31T22:00:00Z'};
  const a=await app({initial,onPost:(route,body,s)=>{assert.equal(route,'/api/activity/stop');assert.equal(body.expectedJobId,focusJobId);return {...s,activity:{...s.activity,status:'cancelled',reason:'Detenido.'}};}});await a.click('maximum-stop');assert.equal(a.posts().length,1);assert.equal(a.node('maximum-stop').disabled,true);assert.match(a.node('notice-text').textContent,/No se reactivarán solas/);a.update({...a.current,now:'2026-10-31T11:00:00Z'});assert.equal(a.posts().length,1);await a.disconnect();assert.equal(a.node('maximum-start').disabled,true);assert.match(a.node('maximum-plan').textContent,/Sin conexión/);assert.equal(a.posts().length,1);
 });
 

@@ -80,7 +80,11 @@ function classifyGameScreen(report,{expectedServer=null}={}){
  });
  const control=allRows.filter(row=>/^CONTROL:\s*(?:LONESTAR|VALKYRA|MANTICORE)$/.test(row.text)&&row.bounds.x>report.width*.01&&row.bounds.x+row.bounds.width<report.width*.25&&row.bounds.y>report.height*.92&&row.bounds.y+row.bounds.height<report.height*.99);
  const third=compass.length===1||compass.length===0&&control.length===1;
- if(!blockers&&fists.length===1&&health.length===1&&third)return result('gameplay_hud',compass.length===1?'HUD de personaje con manos vacías, salud y brújula reconocido.':'HUD de personaje con manos vacías, salud y control de facción reconocido.');
+ // A deployed character can still be waiting for the match. Keep the HUD
+ // classification for independent Anti-AFK, and expose only an explicit banner
+ // inside the existing warmup_context region; absence/unknown is not evidence.
+ const matchWaiting=allRows.some(row=>/^(?:ESPERANDO JUGADORES|WAITING FOR PLAYERS)$/.test(row.text)&&row.bounds.x>=report.width*.30&&row.bounds.x+row.bounds.width<=report.width*.70&&row.bounds.y>=report.height*.15&&row.bounds.y+row.bounds.height<=report.height*.30);
+ if(!blockers&&fists.length===1&&health.length===1&&third)return {...result('gameplay_hud',compass.length===1?'HUD de personaje con manos vacías, salud y brújula reconocido.':'HUD de personaje con manos vacías, salud y control de facción reconocido.'),...(matchWaiting?{matchWaiting:true}:{})};
  return unknown('No hay suficientes anclas de interfaz verificadas.');
 }
 module.exports={classifyGameScreen};

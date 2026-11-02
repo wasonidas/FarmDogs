@@ -58,6 +58,14 @@ function advanceAutoSeeding(session,{server,account,screen,movement},now){
    return decide('error',next.disconnect?'Reinicio del servidor confirmado. Movimiento detenido.':'La pantalla indica que terminó la conexión verificada. Inicia una entrada nueva.','stop');
   }
  }
+ const age=now-Date.parse(screen?.capturedAt);
+ const gameplay=screen?.status==='verified_capture'&&screen.scene==='gameplay_hud'&&screen.gameForeground===true&&Number.isInteger(screen.gamePid)&&screen.gamePid>0&&Number.isFinite(age)&&age>=0&&age<=5000&&(!entry||(screen.gamePid===session.entryProof.gamePid&&screen.gameWindow===session.entryProof.gameWindow));
+ // Population can be observed before deployment and is latched across a live
+ // match. A fresh, bound waiting-for-players banner explicitly starts a new
+ // warmup; low population alone still does not imply that a match has ended.
+ // Retain that reset even if source/presence/controller is temporarily missing.
+ const matchWaiting=!temporary&&gameplay&&screen.matchWaiting===true;
+ if(matchWaiting)next.thresholdObservedAt=null;
  const moving=movement?.available===true&&movement.armed===true;
  if(movement?.available!==true)return decide('waiting_controller','Esperando un estado reciente del controlador.','stop');
  if(movement?.available===true&&movement.status==='error')return decide('error','Revisa el controlador antes de continuar.','stop');
@@ -71,10 +79,9 @@ function advanceAutoSeeding(session,{server,account,screen,movement},now){
   const privateData=account?.seedingFresh===true?account.seeding:null;
   if(Number.isInteger(privateData?.servidor)&&privateData.servidor!==session.server&&((privateData.estado==='sedeando'&&privateData.contando===true&&privateData.dentro!==false)||(privateData.estado==='aguantando'&&privateData.dentro===true)))return decide('waiting_presence','La cuenta observa otro servidor; la entrada automática necesita revisión.','stop');
  }
+ if(matchWaiting)return decide('waiting_match','Calentamiento: esperando a que empiece la partida; no se solicita movimiento.',moving?'stop':null);
  if(!temporary&&!session.thresholdObservedAt&&server.players<session.startPlayers)return decide('waiting_match',`Esperando inicio: ${server.players} / ${session.startPlayers} jugadores.`,moving?'stop':null);
  if(!temporary&&!next.thresholdObservedAt)next.thresholdObservedAt=new Date(now).toISOString();
- const age=now-Date.parse(screen?.capturedAt);
- const gameplay=screen?.status==='verified_capture'&&screen.scene==='gameplay_hud'&&screen.gameForeground===true&&Number.isInteger(screen.gamePid)&&screen.gamePid>0&&Number.isFinite(age)&&age>=0&&age<=5000&&(!entry||(screen.gamePid===session.entryProof.gamePid&&screen.gameWindow===session.entryProof.gameWindow));
  if(!gameplay)return decide('waiting_game','Esperando el juego desplegado en primer plano.',moving?'stop':null);
  if(moving&&movement.autoSessionId!==session.id)return decide('error','Hay otra sesión de movimiento; detenla antes de iniciar.','stop');
  if(moving&&!next.startedMovementAt)next.startedMovementAt=new Date(now).toISOString();
