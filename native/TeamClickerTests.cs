@@ -10,7 +10,7 @@ class TeamClickerTests {
  static int checks;
  static void Check(bool value,string message){checks++;if(!value)throw new Exception(message);}
  static DateTime time=new DateTime(2026,10,31,10,0,0,DateTimeKind.Utc);
- sealed class FakePlatform:ITeamClickerPlatform,ITeamClickerAnyPlatform,ITeamClickerButtonInput {
+ sealed class FakePlatform:ITeamClickerPlatform,ITeamClickerAnyPlatform,ITeamClickerButtonInput,ITeamClickerMousePlatform {
   public bool Alive=true,Modifiers,Patch=true,FailDown,FailClick,FailCapture,DarkTarget,StaleCapture;
   public Action OnCapture,OnAvailable,AfterDown;
   public string[] AvailableTeams={"blue","red","green"};
@@ -19,6 +19,10 @@ class TeamClickerTests {
   public TeamClickerFrame Frame=new TeamClickerFrame {Pid=123,Window=456,Width=1920,Height=1080};
   public int Clicks,Captures,PatchCalls,AnyCaptures,AvailabilityReads;
   public List<bool> Buttons=new List<bool>();
+  public MousePauseSnapshot UserPause=new MousePauseSnapshot();
+  public long MouseActivityVersion;public long MouseRevision{get{return MouseActivityVersion;}}
+  public void ConfigureMousePause(MousePauseSettings settings,bool enabled){}
+  public MousePauseSnapshot MousePause(DateTime now){return UserPause;}
   public bool ServiceAlive(int p){return Alive;}
   public bool ModifiersDown(){return Modifiers;}
   public TeamClickerFrame ForegroundGame(){return Frame;}
@@ -354,6 +358,17 @@ class TeamClickerTests {
   Reject(c=>c.startMode="random","Unknown start mode is rejected");Reject(c=>{c.startMode="automatic";c.calibrateTeam="blue";},"Automatic mode cannot request F9 calibration");
  }
  static TeamClickerCommand AnyCommand(string session=null,DateTime? now=null){var command=AutoCommand(session,now);command.selectedTeam="any";return command;}
+ static void MousePauseTests(){
+  var fake=new FakePlatform();var engine=Engine(fake);var command=AutoCommand();command.mousePause=new MousePauseSettings{enabled=true,resumeAfterSeconds=3};engine.Apply(command,time,0);engine.Tick(time,0);engine.Tick(time.AddMilliseconds(1),1);string attempt=(string)Field(engine,"attemptId");
+  fake.UserPause=new MousePauseSnapshot{active=true,remainingMs=3000,resumeAt=time.AddMilliseconds(3021).ToString("o")};engine.Tick(time.AddMilliseconds(21),21);
+  Check(engine.Armed&&engine.Active&&!engine.Running&&fake.Clicks==1,"Human mouse pause preserves armed owner and sends no click");Check((string)Field(engine,"attemptId")==attempt,"Mouse pause retains attempt identity");
+  fake.UserPause=new MousePauseSnapshot();fake.StaleCapture=true;engine.Tick(time.AddMilliseconds(30),30);Check(!engine.Running&&fake.Clicks==1,"Mouse quiet is insufficient without a fresh selector capture");
+  fake.StaleCapture=false;engine.Tick(time.AddMilliseconds(200),200);Check(engine.Running&&fake.Clicks==1,"Fresh same-context selector resumes paused attempt without clicking in acquisition");engine.Tick(time.AddMilliseconds(201),201);Check(fake.Clicks==2&&(string)Field(engine,"attemptId")==attempt,"Original attempt continues after acquisition");
+  fake.UserPause=new MousePauseSnapshot{active=true,buttonsDown=true,remainingMs=3000};engine.Tick(time.AddMilliseconds(230),230);engine.EmergencyStop();fake.UserPause=new MousePauseSnapshot();engine.Apply(AutoCommand(command.sessionId,time.AddMilliseconds(240)),time.AddMilliseconds(240),240);engine.Tick(time.AddMilliseconds(241),241);Check(!engine.Armed&&fake.Clicks==2,"F8 during mouse pause is terminal even after a new lease");
+  fake=new FakePlatform();engine=Engine(fake);command=AutoCommand();engine.Apply(command,time,0);engine.Tick(time,0);fake.UserPause=new MousePauseSnapshot{active=true,remainingMs=3000};engine.Tick(time.AddMilliseconds(10),10);engine.Tick(time.AddMilliseconds(4000),4000);Check(!engine.Armed&&fake.Clicks==0,"Mouse pause cannot outlive its input lease");
+  fake=new FakePlatform();engine=Engine(fake);command=AutoCommand();engine.Apply(command,time,0);fake.OnCapture=()=>{fake.MouseActivityVersion++;};engine.Tick(time,0);Check(engine.Armed&&!engine.Active&&fake.Clicks==0,"Mouse activity expiring during initial recognition still discards its capture");fake.OnCapture=null;engine.Tick(time.AddMilliseconds(200),200);Check(engine.Active&&engine.Running&&fake.Clicks==0,"Fresh recognition after an expired mouse pause may acquire without a click");engine.Tick(time.AddMilliseconds(201),201);Check(fake.Clicks==1,"Freshly acquired owned selector resumes normally");
+  fake=new FakePlatform();engine=Engine(fake);command=AnyCommand();engine.Apply(command,time,0);engine.Tick(time,0);fake.OnAvailable=()=>{fake.MouseActivityVersion++;};engine.Tick(time.AddMilliseconds(1),1);Check(engine.Armed&&!engine.Running&&fake.Clicks==0,"Any-team availability capture cannot outlive a mouse activity revision");
+ }
  static void ContextPauseTests(){
   foreach(var change in new Action<FakePlatform>[] {p=>p.Frame=null,p=>p.Frame.Pid++,p=>p.Frame.Window++,p=>p.Frame.Width++,p=>p.Modifiers=true}){
    var fake=new FakePlatform();var engine=Engine(fake);var command=AutoCommand();engine.Apply(command,time,0);engine.Tick(time,0);engine.Tick(time.AddMilliseconds(1),1);string attempt=(string)Field(engine,"attemptId");
@@ -457,7 +472,7 @@ class TeamClickerTests {
   Console.WriteLine(new JavaScriptSerializer().Serialize(new{format="wardogs-team-clicker-timer-probe-v1",at=DateTime.UtcNow.ToString("o"),nativeInputsAllowed=false,keyboardOrMouseOrHotkeysUsed=false,platform="FakePlatform",samples=new[]{baseline,precise},timerError=error}));return 0;
  }
  static int Main(string[] args){if(args.Length==2&&args[0]=="--image")return Probe(args[1]);if(args.Length==1&&args[0]=="--timer-probe")return TimerProbe();try{
-  EngineTests();AutomaticTests();ConfirmationTests();AnyTeamTests();ContextPauseTests();ValidationTests();ButtonPulseTests();HotkeyTests();LogoTests();checks+=TeamClickerSelectorFrameTests.Run();checks+=TeamClickerWaiterTests.Run();
+  MousePauseTests();EngineTests();AutomaticTests();ConfirmationTests();AnyTeamTests();ContextPauseTests();ValidationTests();ButtonPulseTests();HotkeyTests();LogoTests();checks+=TeamClickerSelectorFrameTests.Run();checks+=TeamClickerWaiterTests.Run();
   Console.WriteLine("Team clicker: "+checks+" checks passed; no native input or hotkey calls invoked.");return 0;
  }catch(Exception error){Console.Error.WriteLine(error);return 1;}}
 }

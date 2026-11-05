@@ -6,6 +6,8 @@ namespace WardogsSeeding {
   public string format,id,sessionId,kind,issuedAt,expiresAt,endAt,frameId,capturedAt,scene,directions,reason;
   public int gamePid,holdMs,intervalSeconds;
   public bool cancelled;
+  public MousePauseSettings mousePause;
+  public long mouseRevision;
   public DateTime LeaseUtc {get;private set;}
   public DateTime EndUtc {get;private set;}
   static DateTime Date(string value){DateTime d;if(!DateTime.TryParse(value,CultureInfo.InvariantCulture,DateTimeStyles.AdjustToUniversal|DateTimeStyles.AssumeUniversal,out d))throw new ArgumentException("Fecha automatica no valida.");return d;}
@@ -16,6 +18,8 @@ namespace WardogsSeeding {
    return sessionId;
   }
   public void Validate(DateTime now) {
+   MousePauseSettings.Normalize(mousePause);
+   if(mouseRevision<0)throw new ArgumentException("Revision de raton no valida.");
    CancellationSessionId();Guid g;
    if(kind=="stop")return;
    var issued=Date(issuedAt);LeaseUtc=Date(expiresAt);EndUtc=Date(endAt);

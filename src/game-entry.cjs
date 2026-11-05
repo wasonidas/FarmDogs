@@ -7,13 +7,14 @@ const {createScreenReader}=require('./screen-reader.cjs');
 const {classifyGameScreen}=require('./game-screen.cjs');
 const {classifyEntryScreen}=require('./entry-screen.cjs');
 const {atomicJson}=require('./store.cjs');
+const {normalizeMousePause,mousePauseView}=require('./mouse-pause.cjs');
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const SHA=/^[0-9a-f]{64}$/i;
 const TERMINAL=new Set(['error','cancelled']);
 const CRITICAL=new Set(['lookup','confirm_join','restart_continue']);
 const NAVIGATION=new Set(['splash_continue','main_deploy','community','join_by_id','type_join_id']);
 const FORM=new Set(['join_id_input','join_id_ready']);
-const SAFE_PREINPUT_REJECTIONS=new Set(['operator_input','game_not_foreground','cursor_obstructed','cursor_position_unconfirmed','game_window_changed','stale_target','main_deploy_disabled']);
+const SAFE_PREINPUT_REJECTIONS=new Set(['operator_input','game_not_foreground','cursor_obstructed','cursor_position_unconfirmed','game_window_changed','stale_target','main_deploy_disabled','user_mouse_active']);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const safeText=value=>String(value?.message||value||'Error local.').replace(/[\u0000-\u001f]/g,' ').slice(0,250);
 
@@ -78,16 +79,43 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   emit('game_entry_watch_diagnostic',{sessionId:ownerId,server:current.server,diagnostic:structuredClone(diagnostic)});
  }
  async function watchHealth({startup=false}={}){
-  const ownerId=current?.sessionId,owned=watcher;
+  const ownerId=current?.sessionId,owned=watcher,token=generation;
   if(!watcher||watcher.ownerId!==current?.sessionId){rememberWatchDiagnostic('watcher_owner_mismatch',{ownerId,owned,startup});throw Error('El monitor de parada no pertenece a esta sesión.');}
-  let report;
-  try{report=await readReport(watcher.file,16384);}
-  catch(error){if(!startup||error.code!=='ENOENT')rememberWatchDiagnostic('report_read_failure',{ownerId,owned,startup,readError:error.code||'invalid_report'});throw error;}
+  const ownsRead=()=>same(token)&&current.sessionId===ownerId&&watcher===owned&&owned.ownerId===ownerId;
+  const previousHealthyAt=Date.parse(owned.lastHealthyReportAt),readStarted=performance.now();
+  const mayReread=()=>{
+   const age=now()-previousHealthyAt,elapsed=monoNow()-startedMono;
+   return !startup&&ownsRead()&&!current.operatorStopped&&!owned.stopRequested&&!owned.exited&&owned.child?.killed!==true&&Number.isInteger(owned.child?.pid)&&owned.child.pid>0&&Number.isFinite(age)&&age>=0&&age<=3000&&Number.isFinite(elapsed)&&elapsed>=0&&elapsed<budgetMs&&now()<Date.parse(current.endAt)&&performance.now()-readStarted<=100;
+  };
+  let report,readFailure=null;
+  for(let attempt=0;attempt<3;attempt++){
+   try{report=await readReport(owned.file,16384);break;}
+   catch(error){
+    readFailure=error;
+    // A narrowly bounded reread is only for a missing runtime report after a
+    // validated live report from this same watcher. Cached health never grants
+    // input, and startup, malformed files and identity errors keep failing closed.
+    if(error.code!=='ENOENT'||attempt===2||!mayReread())break;
+    await sleep(25);if(!mayReread())break;
+   }
+  }
+  if(!ownsRead()){const error=Error('Entrada detenida durante la lectura del monitor.');error.code='ENTRY_CANCELLED';throw error;}
+  if(report===undefined||readFailure&&!mayReread()){
+   const error=readFailure||Error('No se pudo leer el monitor de parada.');
+   if(!startup||error.code!=='ENOENT')rememberWatchDiagnostic('report_read_failure',{ownerId,owned,startup,readError:error.code||'invalid_report'});throw error;
+  }
   owned.lastReportSummary=watchReportSummary(report,ownerId);
   if(report?.format!=='farmdogs-entry-watch-v1'||report.sessionId!==current.sessionId||report.servicePid!==process.pid){rememberWatchDiagnostic('report_identity_invalid',{ownerId,owned,startup,report});throw Error('La identidad del monitor de parada no es válida.');}
   if(report.status==='cancelled'&&report.reason==='operator_stop'){rememberWatchDiagnostic('operator_stop',{ownerId,owned,startup,report});cancel();const error=Error('Detenido con F8.');error.code='ENTRY_CANCELLED';throw error;}
   const age=now()-Date.parse(report.at);
   if(!Number.isFinite(age)||age<0||age>3000||report.status!=='watching'||watcher.exited||watcher.child?.killed===true){rememberWatchDiagnostic('watch_unhealthy',{ownerId,owned,startup,report});throw Error(startup?'No se pudo preparar la parada F8.':'Se perdió el monitor de parada F8; no se enviarán más entradas.');}
+  const userPause=current.mousePause?.enabled===true?mousePauseView(report.userPause,now()):null;
+  if(current.mousePause?.enabled===true){
+   if(!userPause||!Number.isSafeInteger(report.mouseRevision)||report.mouseRevision<current.mouseActivityRevision)throw Error('El monitor no confirma el estado de la pausa por ratón.');
+   if(report.mouseRevision>current.mouseActivityRevision){current={...current,mouseActivityRevision:report.mouseRevision,mouseBarrierAt:new Date(Date.parse(report.at)).toISOString()};if(!chain.lookup){typedJoinId=null;delete chain.typed;}}
+  }
+  current={...current,userPause};
+  owned.lastHealthyReportAt=report.at;
   return true;
  }
  async function stop({ownerId,reason='Entrada detenida.'}={}){
@@ -103,13 +131,15 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   if(action){let timer;try{await Promise.race([action.catch(()=>{}),new Promise(resolve=>{timer=setTimeout(resolve,4000);})]);}finally{clearTimeout(timer);}}
   return view();
  }
- async function start({id,server,joinId,endAt,initialFocus:focusMode='driver',recovery=null}={}){
+ async function start({id,server,joinId,endAt,initialFocus:focusMode='driver',recovery=null,mousePause}={}){
   if(closed||startPending||active()||blocking())throw Error('Ya hay una entrada automática activa o deteniéndose.');
   if(!UUID.test(id||'')||!Number.isInteger(server)||server<1||server>5||!UUID.test(joinId||''))throw Error('Destino de entrada no válido.');
   if(!['driver','desktop','none'].includes(focusMode)||focusMode==='none'&&!recovery||recovery&&focusMode!=='none')throw Error('Modo de foco inicial no válido.');
-  const at=now(),end=Date.parse(endAt),mono=monoNow();
+  const at=now(),end=Date.parse(endAt),mono=monoNow(),pauseSettings=normalizeMousePause(mousePause);
   if(!Number.isFinite(at)||!Number.isFinite(mono)||!Number.isFinite(end)||end<=at||end-at>720*60000)throw Error('Duración de entrada no válida.');
   if(!available())throw Error('Compila o actualiza el controlador de entrada automática.');
+  const mousePauseSupported=JSON.parse(fs.readFileSync(path.join(root,'bin','entry-capabilities.json'),'utf8')).mousePause===true;
+  if(pauseSettings.enabled&&!mousePauseSupported)throw Error('Actualiza el controlador de entrada para usar la pausa por ratón.');
   let plan=null;
   if(recovery){
    if(!recoveryAvailable())throw Error('El controlador no permite recuperar reinicios de servidor.');
@@ -123,12 +153,12 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   generation++;const token=generation;startedMono=mono;budgetMs=end-at;binding=null;typedJoinId=null;lastSection=null;chain={};attempts=new Map();actionFrames=new Set();lastActionMono=-Infinity;lastActionAt=-Infinity;lastCaptureAt=-Infinity;rawCapture=null;focusAttempted=false;lastFocusMono=-Infinity;reader.stop();
   recoveryPlan=plan;restartPermit=!!plan;
   if(plan){const planFile=path.join(dataDir,'entry-recovery-'+id+'.json');if(fs.existsSync(planFile))throw Error('El permiso de recuperación ya existe. Inicia una entrada nueva.');atomicJson(planFile,plan);binding={gamePid:plan.gamePid,gameWindow:plan.gameWindow,width:null,height:null};focusAttempted=true;}
-  current={sessionId:id,server,joinId,endAt:new Date(end).toISOString(),phase:'waiting_game',at:new Date(at).toISOString(),capturedAt:null,frameId:null,gamePid:null,gameWindow:null,chainConfirmed:false,operatorStopped:false,stopped:false,focusAttempted:!!plan,initialFocusMode:focusMode,...(plan?{recoveryId:plan.recoveryId}:{}),reason:'Preparando F8 y esperando Wardogs en primer plano.'};
+  current={sessionId:id,server,joinId,endAt:new Date(end).toISOString(),phase:'waiting_game',at:new Date(at).toISOString(),capturedAt:null,frameId:null,gamePid:null,gameWindow:null,chainConfirmed:false,operatorStopped:false,stopped:false,focusAttempted:!!plan,initialFocusMode:focusMode,mousePause:pauseSettings,mousePauseSupported,userPause:null,mouseActivityRevision:0,mouseBarrierAt:null,...(plan?{recoveryId:plan.recoveryId}:{}),reason:'Preparando F8 y esperando Wardogs en primer plano.'};
   const file=path.join(dataDir,'entry-watch-'+id+'.json');startPending=true;
   try{
    watcher={ownerId:id,file,child:null,exited:false,stopRequested:false};const owned=watcher;
    await new Promise((resolve,reject)=>{
-    const child=spawn(executable,['--watch',file,current.endAt,String(process.pid)],{cwd:root,windowsHide:true,stdio:'ignore'});owned.child=child;
+    const child=spawn(executable,['--watch',file,current.endAt,String(process.pid),...(current.mousePauseSupported?[String(current.mousePause.enabled),String(current.mousePause.resumeAfterSeconds)]:[])],{cwd:root,windowsHide:true,stdio:'ignore'});owned.child=child;
     child.once('error',error=>{owned.exited=true;reject(error);});
     child.once('exit',(code,signal)=>{owned.exited=true;owned.exitCode=code;owned.exitSignal=signal;clearTimeout(owned.cleanupTimer);});
     child.once('spawn',()=>{child.unref?.();resolve();});
@@ -208,10 +238,17 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
  }
  async function execute(action,screen,raw,token){
   if(!same(token)||!actionAllowed(action,screen))return;
+  const classifiedMouseRevision=current.mouseActivityRevision;
   await watchHealth();if(!same(token))return;
+  if(current.mouseActivityRevision!==classifiedMouseRevision){state('waiting_game','La actividad del ratón cambió este paso. Esperando reconocerlo de nuevo.');return;}
+  if(current.userPause?.active===true){state('paused_mouse','Pausado mientras usas el ratón.');return;}
+  if(current.mouseBarrierAt&&Date.parse(screen.capturedAt)<=Date.parse(current.mouseBarrierAt)){state('waiting_game','Esperando una captura posterior al uso del ratón.');return;}
   await pruneActions().catch(error=>emit('game_entry_cache_warning',{message:safeText(error)}));if(!same(token))return;
+  await watchHealth();if(!same(token))return;
+  if(current.mouseActivityRevision!==classifiedMouseRevision||current.userPause?.active===true){state('waiting_game','La actividad del ratón cambió este paso. Esperando reconocerlo de nuevo.');return;}
+  if(!actionAllowed(action,screen))return;
   verifyCriticalTarget(action);
-  const issued=now(),id=randomUUID(),command={format:'farmdogs-entry-action-v1',id,sessionId:current.sessionId,issuedAt:new Date(issued).toISOString(),expiresAt:new Date(Math.min(issued+3000,Date.parse(current.endAt))).toISOString(),endAt:current.endAt,gamePid:screen.gamePid,gameWindow:screen.gameWindow,width:raw.width,height:raw.height,frameId:screen.frameId,frameCapturedAt:screen.capturedAt,framePath:raw.source.path,frameSha256:raw.source.sha256,kind:action.kind,control:action.key,bounds:action.bounds,...(action.anchorBounds?{anchorBounds:action.anchorBounds}:{}),...(action.kind==='replace_join_id'?{joinId:current.joinId}:{}),...(action.key==='restart_continue'?{recoveryId:recoveryPlan.recoveryId,restartHeaderBounds:action.restartHeaderBounds,restartMessageBounds:action.restartMessageBounds}:{})};
+  const issued=now(),id=randomUUID(),command={format:'farmdogs-entry-action-v1',id,sessionId:current.sessionId,issuedAt:new Date(issued).toISOString(),expiresAt:new Date(Math.min(issued+3000,Date.parse(current.endAt))).toISOString(),endAt:current.endAt,gamePid:screen.gamePid,gameWindow:screen.gameWindow,width:raw.width,height:raw.height,frameId:screen.frameId,frameCapturedAt:screen.capturedAt,framePath:raw.source.path,frameSha256:raw.source.sha256,kind:action.kind,control:action.key,bounds:action.bounds,mousePause:current.mousePause,mouseRevision:current.mouseActivityRevision,servicePid:process.pid,...(action.anchorBounds?{anchorBounds:action.anchorBounds}:{}),...(action.kind==='replace_join_id'?{joinId:current.joinId}:{}),...(action.key==='restart_continue'?{recoveryId:recoveryPlan.recoveryId,restartHeaderBounds:action.restartHeaderBounds,restartMessageBounds:action.restartMessageBounds}:{})};
   const commandFile=path.join(dataDir,'entry-action-'+id+'.json'),resultFile=path.join(dataDir,'entry-result-'+id+'.json'),ownerId=current.sessionId;
   atomicJson(commandFile,command);if(!same(token))return;
   actionFrames.add(screen.frameId);attempts.set(action.key,(attempts.get(action.key)||0)+1);lastActionMono=monoNow();
@@ -228,6 +265,14 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
      if(result.reason==='input_privilege_mismatch'){current={...current,inputPermission:'requires_elevation'};const error=Error('Wardogs está abierto con permisos superiores. Cierra FarmDogs por completo y vuelve a abrirla como administrador, o abre ambos con permisos normales.');error.code='ENTRY_INPUT_PRIVILEGES';throw error;}
      if(['invalid_control','invalid_action'].includes(result.reason)){const error=Error('El controlador no reconoce este paso. Reabre FarmDogs con la versión más reciente.');error.code='ENTRY_PROTOCOL_MISMATCH';throw error;}
      if(result.reason==='input_release_failed'){const error=Error('El estado de las teclas es incierto. Entrada detenida.');error.code='ENTRY_UNSAFE_INPUT';throw error;}
+     // A mouse interruption may leave a partial ID. The native rejection
+     // confirms release succeeded. Re-recognize the form and replace its ID;
+     // never extend this retry to lookup/join.
+     if(result.success===false&&result.status==='rejected'&&result.reason==='user_mouse_active'&&typeof result.inputAttempted==='boolean'&&action.key==='type_join_id'){
+      const used=attempts.get(action.key)||0;if(used<=1)attempts.delete(action.key);else attempts.set(action.key,used-1);
+      if(!chain.lookup){typedJoinId=null;delete chain.typed;}
+      state('paused_mouse','Pausado mientras usas el ratón. Se reconocerá el paso de nuevo al soltarlo.');return;
+     }
      // Only a verified, explicit pre-input rejection can retain a critical
      // lookup/join permit. A restart ACK may already be claimed before input.
      if(action.key!=='restart_continue'&&result.success===false&&result.status==='rejected'&&result.inputAttempted===false&&SAFE_PREINPUT_REJECTIONS.has(result.reason)){
@@ -254,10 +299,12 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   if(!same(token)||startPending)return;
   const mono=monoNow();if(!Number.isFinite(mono)||mono<startedMono||mono-startedMono>=budgetMs||now()>=Date.parse(current.endAt)){fail('Terminó el tiempo de la entrada automática.');return;}
   await watchHealth();if(!same(token))return;
+  if(current.userPause?.active===true){if(!chain.lookup){typedJoinId=null;delete chain.typed;}state('paused_mouse','Pausado mientras usas el ratón. Se retomará con una pantalla nueva.');return;}
   rawCapture=null;await reader.refresh();if(!same(token))return;
   // OCR can take seconds. F8 pressed during recognition must also prevent the
   // selector/HUD handoff, even when this tick has no native click to execute.
   await watchHealth();if(!same(token))return;
+  if(current.userPause?.active===true){state('paused_mouse','Pausado mientras usas el ratón.');return;}
   const screen=reader.view(),raw=rawCapture;
   if(!frameBound(screen,raw)){state(chain.confirm_join||chain.lookup?'joining':'waiting_game',screen.reason||'Esperando Wardogs en primer plano.',{capturedAt:null,frameId:null});await initialFocus(token);return;}
   // A first verified foreground frame also settles initial focus. Losing it
@@ -265,6 +312,7 @@ function createGameEntry({root,dataDir,getTarget,now=Date.now,monoNow=()=>perfor
   if(!focusAttempted){focusAttempted=true;current={...current,focusAttempted:true};}
   if(!targetBinding(screen))return;
   const captured=Date.parse(screen.capturedAt);
+  if(current.mouseBarrierAt&&captured<=Date.parse(current.mouseBarrierAt)){state('waiting_game','Esperando una captura posterior al uso del ratón.',{capturedAt:null,frameId:null});return;}
   if(captured<lastActionAt||captured<lastCaptureAt){state('waiting_game','Esperando una captura posterior al último paso.',{capturedAt:null,frameId:null});return;}
   lastCaptureAt=captured;
   if(recoveryPlan&&captured<Date.parse(recoveryPlan.createdAt)){state('waiting_game','Esperando una captura nueva posterior al permiso de recuperación.');return;}

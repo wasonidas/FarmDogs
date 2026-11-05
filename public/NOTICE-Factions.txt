@@ -1,0 +1,13 @@
+Wardogs faction emblems
+
+Lonestar (blue), Valkyra (red) and Manticore (green) are third-party game marks,
+not original FarmDogs artwork and not licensed under FarmDogs' MIT license.
+FarmDogs is an independent community launcher and is not an official game product.
+
+Original public images retrieved from Wardogs Spain:
+https://wardogsspain.com/img/juego/bandos/lonestar.webp
+https://wardogsspain.com/img/juego/bandos/valkyra.webp
+https://wardogsspain.com/img/juego/bandos/manticore.webp
+
+These files are preserved without visual modification. All rights to the original
+game names and emblems remain with their respective owners.

@@ -1,12 +1,14 @@
 'use strict';
+const {normalizeMousePause,mousePauseView}=require('./mouse-pause.cjs');
 const {randomUUID}=require('node:crypto');
 const {rejectRecoveryInput,eligibleRestart,observeRestartSource}=require('./restart-recovery.cjs');
+const {sessionPhase,sessionReasonCode}=require('./session-report.cjs');
 
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const TERMINAL=new Set(['completed','cancelled','expired','error','interrupted']);
 const REAL_TEAMS=new Set(['blue','red','green']);
 const TEAMS=new Set(['any',...REAL_TEAMS]);
-const DRIVER_PHASES={waiting_game:'waiting_game',opening:'waiting_game',navigating:'navigating',joining:'joining',team_selector:'choosing_team',deploying:'deploying',gameplay_hud:'deploying'};
+const DRIVER_PHASES={paused_mouse:'paused_mouse',waiting_game:'waiting_game',opening:'waiting_game',navigating:'navigating',joining:'joining',team_selector:'choosing_team',deploying:'deploying',gameplay_hud:'deploying'};
 const text=value=>String(value?.message||value||'Error desconocido.').replace(/[\u0000-\u001f]/g,' ').slice(0,400);
 
 // One owner coordinates the native entry driver, team clicker, then movement.
@@ -17,11 +19,16 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
  let driverRequested=false,driverReleased=false,teamPrepared=false,teamReleased=false,teamCompleted=false;
  let movementSessionId=null,teamSessionId=null,boundGame=null,deploymentProof=null;
  const active=()=>!!current&&!TERMINAL.has(current.status);
- const emit=(kind,detail)=>{try{event(kind,detail);}catch{}};
+ const emit=(kind,detail={})=>{
+  const owned=current&&(!detail.id||detail.id===current.id),d=owned?nativeDriver():null,native=owned&&d?.sessionId===current.id?d.watchDiagnostic:null;
+  const status=detail.status||(owned?current.status:undefined);
+  try{event(kind,{...(owned?{id:current.id,rootEntryId:current.rootEntryId||current.id,phase:current.phase||sessionPhase({status})}:{}),...detail,reasonCode:sessionReasonCode({kind,...detail,status,reason:owned?current.reason:undefined,nativeDiagnostic:native})});}catch{}
+ };
  const view=()=>current?structuredClone({...current,movementSessionId,teamSessionId,cleanupPending:!active()&&(startPending||!!tickPending||driverBlocking(current.id)||teamBlocking(current.id))}):null;
  const same=id=>!closed&&current?.id===id&&active();
  function update(status,reason,extra={}){
-  const changed=current.status!==status;current={...current,status,reason,...extra};
+  const changed=current.status!==status,phase=TERMINAL.has(status)?current.phase||sessionPhase(current):sessionPhase({status}),d=nativeDriver(),native=d?.sessionId===current.id?d.watchDiagnostic:null;
+  current={...current,status,reason,phase,userPause:status==='paused_mouse'?current.userPause:null,reasonCode:sessionReasonCode({status,reason,nativeDiagnostic:native}),...(native?{nativeDiagnostic:structuredClone(native)}:{}),...extra};
   if(changed)emit('entry_flow_state',{id:current.id,server:current.server,status});
  }
  function nativeDriver(){try{return driver?.view?.()||null;}catch{return null;}}
@@ -103,7 +110,7 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
   if(Object.hasOwn(input,'trustedEntry')||Object.hasOwn(input,'entryProof'))throw Error('La entrada se confirma mediante el controlador, no mediante el formulario.');
   const target=getTarget(input.server,input.joinId);
   if(target?.server!==input.server||String(target.joinId).toLowerCase()!==input.joinId.toLowerCase())throw Error('El destino de entrada cambió. Actualiza los servidores.');
-  return {server:input.server,joinId:target.joinId,team:input.team,seeding:input.seeding,antiAfk,...(antiAfk?{antiAfkSettings}:{}),durationMinutes:input.durationMinutes,intervalSeconds,holdMs,startPlayers,initialFocus:input.initialFocus??'driver'};
+  return {server:input.server,joinId:target.joinId,team:input.team,seeding:input.seeding,antiAfk,...(antiAfk?{antiAfkSettings}:{}),durationMinutes:input.durationMinutes,intervalSeconds,holdMs,startPlayers,initialFocus:input.initialFocus??'driver',mousePause:normalizeMousePause(input.mousePause)};
  }
  async function start(input,{endAt=null}={}){
   if(closed)throw Error('La entrada automática está cerrada.');
@@ -118,7 +125,7 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
   startedMono=mono;budgetMs=end-at;driverRequested=false;driverReleased=false;teamPrepared=false;teamReleased=false;teamCompleted=false;movementSessionId=null;teamSessionId=null;boundGame=null;deploymentProof=null;
   const candidate=structuredClone(current),id=current.id;startPending=true;emit('entry_flow_started',{id,server:current.server,seeding:current.seeding});
   try{
-   driverRequested=true;await driver.start({id,server:current.server,joinId:current.joinId,endAt:current.endAt,initialFocus:current.initialFocus});
+   driverRequested=true;await driver.start({id,server:current.server,joinId:current.joinId,endAt:current.endAt,initialFocus:current.initialFocus,mousePause:current.mousePause});
    if(!same(id)){cleanup(id,'Entrada cancelada antes de abrir Wardogs.');return current?.id===id?view():{...candidate,status:'interrupted'};}
    if(remaining()<=0){finish('expired','Terminó el tiempo de entrada automática.');return view();}
    current={...current,launchRequestedAt:new Date(now()).toISOString()};await launcher.openGame();
@@ -137,7 +144,7 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
   if(inputs.movement?.armed===true||inputs.movement?.busy===true||teamBlocking(previous.id)||driverBlocking(previous.id))return;
   const at=now(),left=remaining(),endAt=new Date(Math.min(Date.parse(previous.endAt),at+left)).toISOString(),id=randomUUID();
   const recovery={id:randomUUID(),rootEntryId:previous.rootEntryId||previous.id,previousEntryId:previous.id,seedingId:oldSession.id,server:previous.server,joinId:previous.joinId,gamePid:evidence.gamePid,gameWindow:evidence.gameWindow,detectedAt:evidence.capturedAt,frameId:evidence.frameId,endAt,sourceSamples:[],status:'waiting_source'};
-  current={...previous,id,rootEntryId:recovery.rootEntryId,restartCount:1,recovery,initialFocus:'none',createdAt:new Date(at).toISOString(),endAt,status:'recovering_source',connected:false,operatorStopped:false,reason:'Reinicio confirmado. Esperando dos lecturas del mismo servidor antes de reconectar.'};
+  current={...previous,id,rootEntryId:recovery.rootEntryId,restartCount:1,recovery,initialFocus:'none',createdAt:new Date(at).toISOString(),endAt,status:'recovering_source',phase:'recovery',reasonCode:'server_restart',connected:false,operatorStopped:false,reason:'Reinicio confirmado. Esperando dos lecturas del mismo servidor antes de reconectar.'};
   delete current.finishedAt;delete current.deployedAt;delete current.teamChosenAt;delete current.entryConfirmedAt;delete current.teamAttemptId;delete current.actualTeam;
   driverRequested=false;driverReleased=false;teamPrepared=false;teamReleased=false;teamCompleted=false;movementSessionId=null;teamSessionId=null;boundGame={gamePid:evidence.gamePid,gameWindow:evidence.gameWindow};deploymentProof=null;
   // Preserve startedMono/budgetMs from the root intention. Neither the source
@@ -146,10 +153,10 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
   startPending=true;
   try{
    onRecovery({previousEntryId:previous.id,entryId:id,rootEntryId:recovery.rootEntryId});
-   emit('entry_flow_recovery_started',{id,previousEntryId:previous.id,rootEntryId:recovery.rootEntryId,server:current.server});
+   emit('entry_flow_recovery_started',{id,previousEntryId:previous.id,rootEntryId:recovery.rootEntryId,movementSessionId:oldSession.id,server:current.server});
    driverRequested=true;
    const context=Object.fromEntries(['id','rootEntryId','previousEntryId','seedingId','gamePid','gameWindow','detectedAt','frameId','endAt'].map(key=>[key,recovery[key]]));
-   await driver.start({id,server:current.server,joinId:current.joinId,endAt,initialFocus:'none',recovery:context});
+   await driver.start({id,server:current.server,joinId:current.joinId,endAt,initialFocus:'none',recovery:context,mousePause:current.mousePause});
    if(!same(id)){cleanup(id,'Recuperación cancelada durante la preparación.');return;}
    if(!recoveryOwnerReady())return;
    if(remaining()<=0){finish('expired','Terminó el tiempo original mientras se preparaba la recuperación.');return;}
@@ -209,11 +216,13 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
   if(!driverReleased&&(d?.phase==='error'||d?.error||d?.chainInvalidated===true||['afk_kick','server_restart','join_wrong_server'].includes(d?.phase))){finish('error',d.reason||d.error||'La entrada no pudo verificarse; no se reconecta automáticamente.');return;}
   const qualified=proof(d,id);
   if(boundGame&&qualified&&(d.gamePid!==boundGame.gamePid||d.gameWindow!==boundGame.gameWindow)){finish('error','La ventana del juego cambió durante la entrada.');return;}
+  if(d?.sessionId===id&&d?.userPause?.active===true&&!teamPrepared){current={...current,userPause:mousePauseView(d.userPause,now())};update('paused_mouse','Pausado mientras usas el ratón.');return;}
   if(!teamPrepared){
+   current={...current,userPause:null};
    if(d?.phase!=='team_selector'||!qualified){update(DRIVER_PHASES[d?.phase]&&DRIVER_PHASES[d.phase]!=='choosing_team'?DRIVER_PHASES[d.phase]:'waiting_game',d?.reason||'Esperando una pantalla actual de la entrada.');return;}
    boundGame={gamePid:d.gamePid,gameWindow:d.gameWindow};current={...current,...boundGame,entryConfirmedAt:d.capturedAt};teamPrepared=true;
    update('choosing_team','Preparando el controlador de equipos. Espera sin tocar el juego.');
-   const prepared=await teamClicker.prepareOwned({ownerId:id,team:current.team,endAt:current.endAt,canArm:async()=>{
+   const prepared=await teamClicker.prepareOwned({ownerId:id,team:current.team,mousePause:current.mousePause,endAt:current.endAt,canArm:async()=>{
      if(!recoveryOwnerReady())return false;
     if(!same(id)||remaining()<=0||typeof driver.checkReady!=='function'||await driver.checkReady(id)!==true)return false;
      if(!same(id)||!recoveryOwnerReady())return false;
@@ -228,7 +237,7 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
    if(checked?.phase==='error'||checked?.chainInvalidated===true){finish('error',checked.reason||'La entrada dejó de ser válida durante la preparación del equipo.');return;}
    const t=nativeTeam();
    if((t||prepared)?.ownerId!==id){finish('error','No se pudo asignar la selección de equipo a esta entrada.');return;}
-   teamSessionId=t?.sessionId||prepared?.sessionId||null;return;
+   teamSessionId=t?.sessionId||prepared?.sessionId||null;emit('entry_flow_team_prepared',{id,ownerId:id,teamSessionId,server:current.server});return;
   }
   if(!teamCompleted){
    const t=nativeTeam();
@@ -238,9 +247,10 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
    const actualTeam=confirmation?.actualTeam;
    const validTeam=current.team==='any'?REAL_TEAMS.has(actualTeam):actualTeam===undefined||actualTeam===current.team;
    const completed=validTeam&&confirmation?.status==='confirmed'&&UUID.test(completedId||'')&&(!t.completedAttemptId||t.completedAttemptId===completedId)&&confirmation.gamePid===boundGame.gamePid&&confirmation.gameWindow===boundGame.gameWindow&&UUID.test(confirmation.frameId||'')&&Number.isFinite(confirmationAge)&&confirmationAge>=0&&confirmationAge<=5000&&captured>=Date.parse(current.entryConfirmedAt);
-   if(completed){teamCompleted=true;current={...current,actualTeam:actualTeam||current.team,teamChosenAt:new Date(now()).toISOString(),teamAttemptId:t.entryConfirmation?.attemptId||t.completedAttemptId};releaseTeam(id);update('deploying','Equipo elegido. Esperando el personaje desplegado.');}
+   if(completed){teamCompleted=true;current={...current,actualTeam:actualTeam||current.team,teamChosenAt:new Date(now()).toISOString(),teamAttemptId:t.entryConfirmation?.attemptId||t.completedAttemptId};emit('entry_flow_team_confirmed',{id,ownerId:id,teamSessionId,attemptId:current.teamAttemptId,server:current.server});releaseTeam(id);update('deploying','Equipo elegido. Esperando el personaje desplegado.');}
    else if(t.enabled!==true||t.error){finish(t?.operatorStopped===true?'cancelled':'error',t.error||t.reason||'La espera de equipo se detuvo. Activa una entrada nueva.');return;}
-   else{update('choosing_team',t.reason||'Intentando entrar continuamente en el equipo elegido.');return;}
+   else if(t.userPause?.active===true){current={...current,userPause:mousePauseView(t.userPause,now())};update('paused_mouse','Pausado mientras usas el ratón.');return;}
+   else{current={...current,userPause:null};update('choosing_team',t.reason||'Intentando entrar continuamente en el equipo elegido.');return;}
   }
   if(!driverReleased){
    if(d?.phase!=='gameplay_hud'||!qualified){update('deploying',d?.reason||'Esperando una captura actual del personaje desplegado.');return;}
@@ -255,20 +265,27 @@ function createEntryFlow({now=Date.now,monoNow=()=>performance.now(),driver,laun
   const trustedEntry={entryId:id,server:current.server,joinId:current.joinId,...boundGame,confirmedAt:deploymentProof.capturedAt};
   update('starting_seeding',current.antiAfk?'Entrada completada. Preparando anti-AFK.':'Entrada completada. Preparando el movimiento de seeding.');
   const session=current.antiAfk?
-   await automatic.start({purpose:'break',presenceMode:'entry',server:current.server,...current.antiAfkSettings},{trustedEntry}):
-   await automatic.start({purpose:'seeding',presenceMode:'entry',server:current.server,durationMinutes:Math.max(1,Math.ceil(remainingMs/60000)),startPlayers:current.startPlayers,intervalSeconds:current.intervalSeconds,holdMs:current.holdMs},{endAt:current.endAt,trustedEntry});
+   await automatic.start({purpose:'break',presenceMode:'entry',server:current.server,mousePause:current.mousePause,...current.antiAfkSettings},{trustedEntry}):
+   await automatic.start({purpose:'seeding',presenceMode:'entry',server:current.server,durationMinutes:Math.max(1,Math.ceil(remainingMs/60000)),startPlayers:current.startPlayers,intervalSeconds:current.intervalSeconds,holdMs:current.holdMs,mousePause:current.mousePause},{endAt:current.endAt,trustedEntry});
   const prepared=automatic.view(),owned=prepared?.entryId===id||prepared?.entryProof?.entryId===id;
   if(owned&&prepared.id===session?.id)movementSessionId=session.id;
   if(!same(id)){cleanup(id,'Entrada cancelada antes de entregar el movimiento.');return;}
   if(remaining()<=0){finish('expired','Terminó el tiempo al preparar el movimiento de seeding.');return;}
   if(!UUID.test(movementSessionId||'')||prepared?.id!==movementSessionId||!owned||!automatic.active()){finish('error','El movimiento no quedó preparado para esta entrada.');return;}
+   emit('entry_flow_movement_handoff',{id,movementSessionId,server:current.server});
   finish('completed',current.antiAfk?'Entrada completada y anti-AFK preparado. Empezará al reconocer el HUD reciente.':'Entrada completada y seeding preparado. El movimiento esperará sus condiciones.');
  }
  async function tick(){
   if(closed||!current||startPending)return;
   if(current.status==='completed'){
    if(tickPending)return tickPending;
-   const pending=Promise.resolve().then(()=>beginRecovery());tickPending=pending;
+   // Eligibility and ownership are decided before yielding. A quiet poll of
+   // a completed entry is not pending cleanup: other coordinators run in the
+   // same timer turn and may legitimately prepare their own selector. A real
+   // recovery claims its new active session before beginRecovery first awaits.
+   const pending=beginRecovery();
+   if(current.status==='completed'){await pending;return;}
+   tickPending=pending;
    try{await pending;}finally{if(tickPending===pending)tickPending=null;}
    return;
   }

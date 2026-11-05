@@ -10,6 +10,7 @@ namespace WardogsSeeding {
   public int intervalMs,servicePid,entryGamePid;
   public long entryGameWindow;
   public bool enabled;
+  public MousePauseSettings mousePause;
   public string StartMode {get{return startMode??"hotkey";}}
   public DateTime ExpiresUtc {get{return Utc(expiresAt);}}
   internal static DateTime Utc(string text){
@@ -21,6 +22,7 @@ namespace WardogsSeeding {
   public static bool IsTeam(string value){return value=="blue"||value=="red"||value=="green";}
   public static bool IsSelection(string value){return IsTeam(value)||value=="any";}
   public void Validate(DateTime now){
+   MousePauseSettings.Normalize(mousePause);
    Guid command,session;
    if(format!="wardogs-team-clicker-command-v1"||!Guid.TryParse(id,out command)||!Guid.TryParse(sessionId,out session)||servicePid<=0)throw new ArgumentException("Orden de autoclic no valida.");
    DateTime issued=Utc(issuedAt),expires=ExpiresUtc;
@@ -50,6 +52,7 @@ namespace WardogsSeeding {
   void Click(TeamClickerFrame frame,TeamClickerTarget target);
  }
  public interface ITeamClickerButtonInput {void Button(bool down);}
+ public interface ITeamClickerMousePlatform {void ConfigureMousePause(MousePauseSettings settings,bool enabled);MousePauseSnapshot MousePause(DateTime now);long MouseRevision {get;}}
  public sealed class TeamClickerOperatorStopException:InvalidOperationException {public TeamClickerOperatorStopException():base("Detenido con F8.") {}}
  public sealed class TeamClickerContextPauseException:InvalidOperationException {public TeamClickerContextPauseException(string message):base(message) {}}
  public interface ITeamClickerAnyPlatform {
@@ -94,7 +97,7 @@ namespace WardogsSeeding {
   TeamClickerFrame attemptFrame;
   double leaseMono,nextClickMono,nextRecognitionMono,lastMono;
   DateTime attemptStartedUtc,firstClickUtc,actualTeamSinceUtc;
-  bool armed,active,running,waitingForSelector,targetsChanged,pausedForContext;
+  bool armed,active,running,waitingForSelector,targetsChanged,pausedForContext,pausedForMouse;
   string reason="Autoclic desactivado.",error,operatorStoppedSessionId,attemptId,actualTeam;
   int count;
   long controlEpoch;
@@ -115,7 +118,14 @@ namespace WardogsSeeding {
   public bool TargetsChanged {get{return targetsChanged;}}
   public Dictionary<string,TeamClickerTarget> Targets {get{return targets;}}
   public void TargetsSaved(){targetsChanged=false;}
-  public void Stop(string message){controlEpoch++;active=false;running=false;waitingForSelector=false;pausedForContext=false;attemptFrame=null;reason=message;}
+  public void Stop(string message){controlEpoch++;active=false;running=false;waitingForSelector=false;pausedForContext=false;pausedForMouse=false;attemptFrame=null;reason=message;}
+  MousePauseSnapshot MouseState(DateTime now){var source=platform as ITeamClickerMousePlatform;return source==null?new MousePauseSnapshot():source.MousePause(now);}
+  long MouseVersion(){var source=platform as ITeamClickerMousePlatform;return source==null?0:source.MouseRevision;}
+  bool MouseChanged(long before,DateTime now,double mono){if(MouseVersion()==before)return MousePaused(now,mono);pausedForMouse=true;if(active)ContextChanged("El raton se movio durante el reconocimiento.",mono);else{running=false;waitingForSelector=true;reason="El raton se movio durante el reconocimiento; esperando una captura nueva.";}return true;}
+  bool MousePaused(DateTime now,double mono){
+   var pause=MouseState(now);if(!pause.active)return false;
+   pausedForMouse=true;if(active)ContextChanged("Pausado mientras usas el raton.",mono);else{running=false;waitingForSelector=true;reason="Pausado mientras usas el raton. Se reanudara al soltarlo.";}return true;
+  }
   void CancelAutomatic(string message){if(Automatic)automaticStops[command.sessionId]=message;armed=false;Stop(message);}
   void StopAttempt(string message){if(Automatic)CancelAutomatic(message);else Stop(message);}
   void ContextChanged(string message,double mono){
@@ -161,6 +171,7 @@ namespace WardogsSeeding {
    if(newSession){count=0;attemptId=null;actualTeam=null;attemptStartedUtc=DateTime.MinValue;firstClickUtc=DateTime.MinValue;}
    command=value;leaseMono=mono+Math.Min(5000,(value.ExpiresUtc-now).TotalMilliseconds);lastMono=mono;error=null;
    armed=value.enabled&&value.sessionId!=operatorStoppedSessionId&&!completed.ContainsKey(value.sessionId)&&!automaticStops.ContainsKey(value.sessionId);
+   var mouse=platform as ITeamClickerMousePlatform;if(mouse!=null)mouse.ConfigureMousePause(value.mousePause,armed&&Automatic);
    if(!armed){Stop(completed.ContainsKey(value.sessionId)?"Entrada confirmada en el juego. Autoclic terminado.":value.sessionId==operatorStoppedSessionId?"Detenido con F8. Activa de nuevo el autoclic en la app.":automaticStops.ContainsKey(value.sessionId)?automaticStops[value.sessionId]:"Autoclic desactivado.");return;}
    if(ConfirmEntry(value,now))return;
    if(!active&&value.calibrateTeam!=null)reason="Abre Seleccionar faccion y pulsa F9 para reconocer el equipo sin clicar.";
@@ -177,14 +188,16 @@ namespace WardogsSeeding {
    }catch(Exception ex){Stop(ex.Message);error=ex.Message;}
   }
   void RecognizeForAttempt(DateTime now,double mono){
+   if(MousePaused(now,mono))return;
    string expectedSession=command.sessionId,expectedAttempt=attemptId,expectedTeam=command.selectedTeam;
-   long expectedEpoch=controlEpoch;bool needsFresh=pausedForContext;
+   long expectedEpoch=controlEpoch,mouseBefore=MouseVersion();bool needsFresh=pausedForContext;
    double began=elapsedNow();TeamClickerTarget target=null;Dictionary<string,TeamClickerTarget> all=null;string unavailable=null;
    try{if(expectedTeam=="any")all=AnyPlatform.CaptureAnyTargets(attemptFrame,now);else target=platform.CaptureTarget(attemptFrame,now,expectedTeam);}catch(TeamClickerOperatorStopException){EmergencyStop();return;}catch(Exception ex){unavailable=ex.Message;}
    double elapsed=elapsedNow()-began;
    if(Double.IsNaN(elapsed)||Double.IsInfinity(elapsed)||elapsed<0){Fail("El reloj del reconocimiento no es valido.");return;}
    if(!active||!armed||controlEpoch!=expectedEpoch||command.sessionId!=expectedSession||attemptId!=expectedAttempt||command.selectedTeam!=expectedTeam)return;
    if(!Lease(now.AddMilliseconds(elapsed),mono+elapsed))return;
+   if(MouseChanged(mouseBefore,now.AddMilliseconds(elapsed),mono+elapsed))return;
    if(!SameFrame(platform.ForegroundGame(),attemptFrame)){ContextChanged("Wardogs ha perdido el foco o ha cambiado su ventana.",mono+elapsed);return;}
    if(platform.ModifiersDown()){ContextChanged("Esperando que sueltes las teclas modificadoras.",mono+elapsed);return;}
    bool verified=expectedTeam=="any"?ValidAnyTargets(all,attemptFrame):target!=null&&target.Valid()&&target.width==attemptFrame.Width&&target.height==attemptFrame.Height;
@@ -218,13 +231,14 @@ namespace WardogsSeeding {
    var frame=platform.ForegroundGame();
    if(frame==null||frame.Pid<=0||frame.Window<=0||frame.Width<320||frame.Width>8000||frame.Height<200||frame.Height>8000){reason="Esperando Wardogs en primer plano y el selector de facciones.";return;}
    var candidate=new TeamClickerFrame{Pid=frame.Pid,Window=frame.Window,Width=frame.Width,Height=frame.Height};
-   string expectedSession=command.sessionId,expectedTeam=command.selectedTeam;long expectedEpoch=controlEpoch;
+   string expectedSession=command.sessionId,expectedTeam=command.selectedTeam;long expectedEpoch=controlEpoch,mouseBefore=MouseVersion();
    double began=elapsedNow();TeamClickerTarget target=null;Dictionary<string,TeamClickerTarget> all=null;string unavailable=null;
    try{if(expectedTeam=="any")all=AnyPlatform.CaptureAnyTargets(candidate,now);else target=platform.CaptureTarget(candidate,now,expectedTeam);}catch(TeamClickerOperatorStopException){EmergencyStop();return;}catch(Exception ex){unavailable=ex.Message;}
    double elapsed=elapsedNow()-began;
    if(Double.IsNaN(elapsed)||Double.IsInfinity(elapsed)||elapsed<0){Fail("El reloj del reconocimiento no es valido.");return;}
    if(!Automatic||!armed||active||controlEpoch!=expectedEpoch||command.sessionId!=expectedSession||command.selectedTeam!=expectedTeam)return;
    if(!Lease(now.AddMilliseconds(elapsed),mono+elapsed))return;
+   if(MouseChanged(mouseBefore,now.AddMilliseconds(elapsed),mono+elapsed))return;
    nextRecognitionMono=mono+elapsed+RecognitionIntervalMs;
    // A menu or a foreground change before acquisition is still a waiting
    // state. No target or attempt is carried over from that candidate.
@@ -236,8 +250,10 @@ namespace WardogsSeeding {
    nextClickMono=mono+elapsed;reason="Equipo reconocido. Intentando entrar hasta detectar DESPLEGANDO.";
   }
   public void Tick(DateTime now,double mono){
-   if(!Lease(now,mono))return;
+   if(!Lease(now,mono)){var mouse=platform as ITeamClickerMousePlatform;if(mouse!=null)mouse.ConfigureMousePause(command==null?null:command.mousePause,false);return;}
    try{
+    if(Automatic&&MousePaused(now,mono))return;
+    if(pausedForMouse){pausedForMouse=false;nextRecognitionMono=mono;}
     if(Automatic&&!active){AcquireAutomatically(now,mono);return;}
     if(!active)return;
     if(platform.ModifiersDown()){ContextChanged("Esperando que sueltes las teclas modificadoras.",mono);return;}
@@ -247,11 +263,12 @@ namespace WardogsSeeding {
     if(mono<nextClickMono)return;
     string team=command.selectedTeam;TeamClickerTarget target;
     if(team=="any"){
-     long epoch=controlEpoch;string session=command.sessionId,attempt=attemptId;double began=elapsedNow();
+     long epoch=controlEpoch,mouseBefore=MouseVersion();string session=command.sessionId,attempt=attemptId;double began=elapsedNow();
      var available=AnyPlatform.AvailableTargets(frame,now);double elapsed=elapsedNow()-began;
      if(Double.IsNaN(elapsed)||Double.IsInfinity(elapsed)||elapsed<0){Fail("El reloj del reconocimiento no es valido.");return;}
      if(!active||!armed||controlEpoch!=epoch||command.sessionId!=session||attemptId!=attempt)return;
      if(!Lease(now.AddMilliseconds(elapsed),mono+elapsed))return;
+     if(MouseChanged(mouseBefore,now.AddMilliseconds(elapsed),mono+elapsed))return;
      if(!SameFrame(platform.ForegroundGame(),attemptFrame)||platform.ModifiersDown()){ContextChanged("Wardogs ha perdido el foco o hay una tecla modificadora.",mono+elapsed);return;}
      var choices=new List<string>();
      foreach(string color in new[]{"blue","red","green"}){TeamClickerTarget value;if(available!=null&&available.TryGetValue(color,out value)&&value!=null&&value.Valid()&&value.width==frame.Width&&value.height==frame.Height)choices.Add(color);}
@@ -267,7 +284,7 @@ namespace WardogsSeeding {
   public object View(DateTime now,int pid){
    var points=new Dictionary<string,object>();foreach(string team in new[]{"blue","red","green"})points[team]=targets.ContainsKey(team)?targets[team].PublicView():new{configured=false};
    string done=null,completedTeam=null,automaticStop=null;if(command!=null){completed.TryGetValue(command.sessionId,out done);completedTeams.TryGetValue(command.sessionId,out completedTeam);automaticStops.TryGetValue(command.sessionId,out automaticStop);}
-   return new{format="wardogs-team-clicker-state-v1",at=now.ToString("o"),pid=pid,sessionId=command==null?null:command.sessionId,startMode=command==null?"hotkey":command.StartMode,automaticWaiting=AutomaticWaiting,requiresHotkeys=RequiresHotkeys,armed=armed,active=active,running=running,waitingForSelector=waitingForSelector,pausedForContext=pausedForContext,attemptId=attemptId,attemptStartedAt=attemptId==null?null:attemptStartedUtc.ToString("o"),completedAttemptId=done,selectedTeam=command==null?"blue":command.selectedTeam,requestedTeam=command==null?null:command.selectedTeam,actualTeam=done==null?actualTeam:completedTeam,completedActualTeam=completedTeam,intervalMs=command==null?20:command.intervalMs,toggleKey=Automatic?null:"F6",captureKey=Automatic?null:"F9",reason=reason,error=error,count=count,gamePid=active&&attemptFrame!=null?attemptFrame.Pid:0,gameWindow=active&&attemptFrame!=null?attemptFrame.Window:0L,endAt=(string)null,operatorStoppedSessionId=operatorStoppedSessionId,automaticStoppedSessionId=automaticStop==null?null:command.sessionId,automaticStopReason=automaticStop,targets=points};
+   return new{format="wardogs-team-clicker-state-v1",at=now.ToString("o"),pid=pid,sessionId=command==null?null:command.sessionId,startMode=command==null?"hotkey":command.StartMode,automaticWaiting=AutomaticWaiting,requiresHotkeys=RequiresHotkeys,armed=armed,active=active,running=running,waitingForSelector=waitingForSelector,pausedForContext=pausedForContext,userPause=MouseState(now),attemptId=attemptId,attemptStartedAt=attemptId==null?null:attemptStartedUtc.ToString("o"),completedAttemptId=done,selectedTeam=command==null?"blue":command.selectedTeam,requestedTeam=command==null?null:command.selectedTeam,actualTeam=done==null?actualTeam:completedTeam,completedActualTeam=completedTeam,intervalMs=command==null?20:command.intervalMs,toggleKey=Automatic?null:"F6",captureKey=Automatic?null:"F9",reason=reason,error=error,count=count,gamePid=active&&attemptFrame!=null?attemptFrame.Pid:0,gameWindow=active&&attemptFrame!=null?attemptFrame.Window:0L,endAt=(string)null,operatorStoppedSessionId=operatorStoppedSessionId,automaticStoppedSessionId=automaticStop==null?null:command.sessionId,automaticStopReason=automaticStop,targets=points};
   }
  }
 }

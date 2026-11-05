@@ -8,7 +8,7 @@ FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automát
 
 [Descargar el ZIP para Windows](https://github.com/wasonidas/FarmDogs/releases/latest/download/FarmDogs-portable.zip) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
-**FarmDogs Launcher 0.5.6** ajusta **Sedeo máximo**: permite entrar también en servidores vacíos para acumular tiempo de sedeo mientras espera un llenado, con 12 horas iniciales ajustables. El personaje permanece quieto hasta alcanzar el umbral de movimiento configurado —20 jugadores por defecto— y reconocer su HUD reciente. Conserva las mejoras de entrada, equipo y anti-AFK de 0.5.4 que el usuario confirmó en el juego. El nuevo modo todavía necesita una prueba nocturna real; no garantiza premios.
+**FarmDogs Launcher 0.6.0** añade una interfaz compacta, perfiles, historial, diagnóstico y pausa por uso del ratón, además de repetir el equipo entre partidas. Conserva **Sedeo máximo** de 0.5.6: puede entrar en servidores vacíos para acumular tiempo de sedeo, con 12 horas iniciales ajustables, y espera el umbral de movimiento —20 jugadores por defecto— y un HUD reciente. El ciclo nocturno por actividad con premio nuevo sigue pendiente de prueba real; no garantiza premios.
 
 En **JUGAR**, marca **Activar anti-AFK al desplegar** si quieres que el movimiento quede preparado al entrar. Usa los ajustes de Anti-AFK y su duración empieza al desplegar, sin consumir la espera en cola. La casilla es opcional, no necesita conectar Steam a FarmDogs ni esperar población y solo actúa tras verificar la entrada y el personaje con manos vacías.
 
@@ -46,7 +46,7 @@ La instalación espera a que no haya entrada, movimiento, autoclic, búsqueda, p
 | **EQUIPO** | Intentar entrar automáticamente en azul, rojo o verde. | No |
 | **MI VIP** | Consultar cuenta, progreso y premios pendientes. | Sí |
 
-**Anti-AFK** permanece visible encima de las cuatro pestañas. La conexión de Steam mencionada en la tabla es la de la cuenta web de FarmDogs. Para abrir el juego se necesita Steam instalado y una sesión recordada válida. **Steam y Wardogs pueden estar cerrados**: FarmDogs solicita su apertura y continúa la entrada cuando reconoce el juego. Si Steam pide contraseña o Steam Guard, debes autenticarte tú.
+**Anti-AFK** tiene acceso directo desde la interfaz; en 0.6 abre su propio panel desde la barra de herramientas. La conexión de Steam mencionada en la tabla es la de la cuenta web de FarmDogs. Para abrir el juego se necesita Steam instalado y una sesión recordada válida. **Steam y Wardogs pueden estar cerrados**: FarmDogs solicita su apertura y continúa la entrada cuando reconoce el juego. Si Steam pide contraseña o Steam Guard, debes autenticarte tú.
 
 ## Anti-AFK para una pausa
 
@@ -153,7 +153,21 @@ No se aplica a presencia confirmada manualmente, expulsiones AFK, mensajes desco
 
 ## EQUIPO: entrar en el color de tu clan
 
-1. Abre **EQUIPO**, selecciona **azul, rojo o verde** y pulsa **Esperar equipo**.
+### Repetir el equipo entre partidas
+
+En la revisión **0.6.0** se comprobó un cambio natural de ronda en Wardogs Spain: conservó la preferencia verde, entró automáticamente, reconoció **DESPLEGANDO**, apagó los clics y volvió a esperar la siguiente partida. Es un ciclo real observado, no una garantía para todos los cambios de ronda.
+
+Elige tu color, marca **Repetir en cada partida** y selecciona el mismo servidor en el que juegas. Usa **Elegir ahora** si todavía estás en el selector, o **Esperar siguiente partida** si ya estás jugando. No abre Wardogs ni cambia de servidor. Al confirmar **DESPLEGANDO** apaga los clics y permanece preparado para la ronda siguiente. **F8**, **Desactivar** o cerrar FarmDogs desactivan el modo completo; abrir de nuevo la app no lo reactiva.
+
+Durante la partida aprovecha el marcador público, actualizado aproximadamente cada 30 segundos, y consulta los IDs/resultados de rondas una vez por minuto mientras está activado. No hace capturas en esa espera. Una puntuación alta o una transición nueva y reciente abre una ventana limitada para reconocer el selector del juego; esos datos públicos nunca provocan clics por sí solos. El primer historial se guarda como referencia y no reproduce partidas antiguas. Una caída de la web, datos atrasados o un cambio de identidad pueden retrasar o impedir la detección.
+
+Busca el selector hasta 5 minutos por intento; si reconoce la tarjeta y empieza a intentarlo, puede esperar plaza en el color elegido hasta 120 minutos por intento. Sigue clicando aunque el color esté apagado por equilibrio. La disponibilidad del equipo y la entrada no están garantizadas. Este modo es exclusivo con entrada automática, seeding, movimiento y programaciones: desactívalo antes de iniciar otra función.
+
+En el ensayo del 5 de noviembre, con FarmDogs minimizada, Wardogs abierto y un observador externo cada 2 segundos, dos muestras de 45 segundos de espera dieron **0,66–0,75 % de CPU total y unos 404 MiB de memoria privada**, en un PC de 16 procesadores lógicos. Otra muestra de reconocimiento del selector, todavía sin clics, dio **2,79 %**. Son fases distintas: la cifra de espera no describe todo el automatismo. Estas medidas no demuestran coste cero ni los mismos FPS.
+
+### Un solo intento
+
+1. Abre **EQUIPO**, selecciona **azul, rojo o verde** y pulsa **Elegir ahora**, sin marcar la repetición.
 2. Entra al servidor desde Wardogs y deja el juego delante.
 3. Cuando aparezca el selector de facciones, FarmDogs reconoce la tarjeta elegida y empieza a clicar.
 4. Al leer **DESPLEGANDO**, detiene y desarma el autoclic.
@@ -162,7 +176,7 @@ No necesitas teclas de inicio, colocar el cursor ni guardar coordenadas. El inte
 
 Una vez reconocida la tarjeta, el clic continúa aunque el color se apague por equilibrio de equipos o desaparezca el selector. **ENTRANDO**, un cambio de color o la aparición del HUD no sustituyen la confirmación **DESPLEGANDO**.
 
-Puedes alternar entre FarmDogs y el juego. En modo automático, al perder el foco o mantener una tecla modificadora deja de clicar y conserva la espera; al volver requiere un reconocimiento nuevo del mismo proceso, ventana y tamaño. No reutiliza coordenadas de otra ventana. Mover el ratón o un color apagado no cancela la cadena; el cursor se vuelve a colocar en el equipo mientras el juego está delante. **Cancelar**, **F8**, el fin del plazo y los errores reales del controlador sí terminan la espera. No se bloquea el ratón: si navegas manualmente a otro servidor o eliges otro equipo, la cadena anterior no acredita ese cambio y no se promete conservar el destino.
+Puedes alternar entre FarmDogs y el juego. En modo automático, al perder el foco o mantener una tecla modificadora deja de clicar y conserva la espera; al volver requiere un reconocimiento nuevo del mismo proceso, ventana y tamaño. No reutiliza coordenadas de otra ventana. Mover el ratón o un color apagado no cancela la cadena. En la candidata 0.6, **Tu ratón tiene prioridad** pausa los intentos mientras lo utilizas y espera el tiempo elegido antes de volver a reconocer el selector y colocar el cursor. **Cancelar**, **F8**, el fin del plazo y los errores reales del controlador sí terminan la espera. No se bloquea el ratón: si navegas manualmente a otro servidor o eliges otro equipo, la cadena anterior no acredita ese cambio y no se promete conservar el destino.
 
 Cambiar color o velocidad durante la espera la cancela antes de aplicar los nuevos ajustes. Esta pestaña sirve cuando tú completas la entrada al servidor. En **JUGAR** o **SEEDING**, la cadena automática coordina el mismo selector y espera su desarme antes de entregar el control al movimiento. No actives dos automatismos por separado.
 
@@ -217,7 +231,44 @@ La configuración, el perfil de cuenta y los registros se guardan en `data`, jun
 
 El servicio local escucha en `127.0.0.1:24243`. FarmDogs consulta las fuentes de Wardogs Spain para población, presencia pública del clan y, con tu sesión autorizada, cuenta y premios. La identidad de clan que sale de la ventana de cuenta se limita a conectado, SteamID propio y slug/tag/nombre del clan; no transmite permisos de gestión ni atributos extra de ese endpoint. El actualizador consulta GitHub y conserva temporalmente la descarga y su respaldo fuera de la carpeta de instalación. Los componentes nativos reconocen elementos visuales y envían pulsaciones y clics normales; no modifican el juego ni leen su memoria.
 
+## FarmDogs 0.6.0 — interfaz y herramientas
+
+Esta revisión conserva las cuatro secciones y adopta una interfaz compacta inspirada en los menús del juego. El fondo industrial con torre es una imagen original estática; el botón **DESPLEGAR EN SERVIDOR** recupera el marco, las flechas y el tono dorado del prototipo. La barra inferior mantiene el estado de la sesión, su destino, plazo y parada. Los detalles técnicos y las actualizaciones se encuentran en **Ajustes**.
+
+- **Perfiles:** prepara tus ajustes y abre **Perfiles → Guardar ajustes actuales**. El panel indica el modo y la duración que va a guardar; admite hasta 20 perfiles. Cargar uno solo rellena campos: después eliges cuándo iniciar. No abre el juego, conecta cuentas ni reactiva tareas, y no se permite cargarlo mientras haya un automatismo activo. Para una pausa, usa **Anti-AFK → Guardar como perfil**; al cargarla se abre su panel de ajustes. La fecha de una programación y las confirmaciones de despliegue siempre se eligen de nuevo.
+- **Historial:** consulta las últimas 24 horas, 7 días o 30 días, con horas de Madrid y motivos legibles. Empieza a registrar al usar esta versión; no reconstruye noches anteriores desde tu cuenta ni desde registros antiguos. Conserva hasta 30 días, 2000 eventos y 2 MiB en su archivo propio. Es parcial: una entrada, población o estado antiguo no acreditan un premio VIP. Las sesiones sin cierre registrado antes de reiniciar se muestran interrumpidas y no se reanudan.
+- **Comprobar Errores:** ejecuta una revisión de solo lectura cuando lo solicitas. Consulta runtime, disponibilidad de controladores, servicio, permisos de ajustes y la antigüedad de las lecturas existentes; no fuerza otra consulta a Wardogs. No abre el juego, inicia sesión, envía controles ni aplica reparaciones. WebView2, OCR, instalación de Steam o integridad completa pueden aparecer **Sin comprobar** si el servicio no dispone de esa evidencia: no significa que falten. La integridad completa se omite con una tarea activa o en una copia de desarrollo. Un resultado correcto no prueba la entrada, el movimiento ni un premio dentro del juego.
+- **Tu ratón tiene prioridad:** en **Ajustes**, activa la pausa y elige entre 1 y 30 segundos; 3 por defecto. Durante una tarea, usar el ratón pausa las entradas. Tras soltarlo y cumplirse la espera, FarmDogs debe reconocer de nuevo la pantalla y el mismo proceso antes de continuar. Un paso de entrada de resultado incierto exige comprobarlo; no se repite a ciegas.
+- **Parada:** F8, Detener, cierre o vencimiento siguen cancelando definitivamente. La inactividad posterior del ratón no puede rearmar esas sesiones. Los cambios de pausa por ratón se aplican al siguiente inicio.
+- **Sonido y animación:** sonidos breves originales, sin extraer audio del juego, volumen ajustable y transiciones cortas. Puedes desactivarlos en **Ajustes**. Se respeta el movimiento reducido del sistema; el audio duerme entre sonidos, al ocultar la ventana y al silenciarlo. Solo vuelve a sonar con una interacción de menú. Los avisos importantes conservan su control de sonido independiente.
+
+Los perfiles se guardan en `data/user-presets.json`, las preferencias en `data/settings.json` y el historial filtrado en `data/session-history.json`. No se incluyen esos archivos en el portable público. El diagnóstico exportado excluye cuenta, tokens, capturas y texto libre.
+
+Las pruebas aisladas comprueban las políticas y las funciones de la aplicación. El 5 de noviembre también se comprobaron dentro de Wardogs la pausa y reanudación por ratón durante entrada, selección y movimiento, y la cancelación con F8 durante una pausa sin rearmado posterior. Los resultados de pantalla y las paradas se registraron por separado de los contadores de entrada; no acreditan protección AFK indefinida ni un premio nuevo.
+
+Los selectores muestran **Lonestar · Azul**, **Valkyra · Rojo** y **Manticore · Verde** junto al emblema del equipo seleccionado. La sección Equipo muestra los tres nombres y emblemas a la vez. Los valores internos de color se conservan para los perfiles y automatismos.
+
+Los iconos de interfaz proceden de [Tabler Icons](https://github.com/tabler/tabler-icons), licencia MIT incluida en `public/LICENSE-Tabler.txt`. La textura propia está en `public/tactical-surface.png`; el logo y la fuente se conservan. Los tres emblemas de facción son imágenes originales públicas de Wardogs Spain, descargadas sin modificar; son marcas de terceros y no forman parte de la licencia MIT de FarmDogs. Procedencia en `public/NOTICE-Factions.txt`.
+
+## Integración opcional con OpenBoost (candidata privada)
+
+**Integración aplazada por decisión del usuario (4 de noviembre de 2026).** FarmDogs se mantiene independiente hasta que OpenBoost esté completo. Se retira el acceso al prototipo flotante de OpenBoost; la futura integración será una pestaña **WARDOGS**, coherente con su navegación y diseño. La descripción siguiente es documentación del prototipo archivado, no una función publicada o pendiente de activar ahora.
+
+El desarrollo de la integración permite usar FarmDogs desde el botón **FarmDogs · Wardogs** de OpenBoost. Las dos aplicaciones siguen funcionando por separado. Esta integración todavía no forma parte del ZIP estable publicado.
+
+En la copia de OpenBoost preparada para esta integración, pulsa el botón, **Conectar** y elige la carpeta completa del portable compatible de FarmDogs. No tienes que abrir otra ventana de FarmDogs. Escoge modo, servidor, equipo y duración, pulsa **Revisar** y confirma **Iniciar**. Repetir equipo espera la siguiente selección por defecto; buscar el selector inmediatamente requiere marcar esa opción.
+
+OpenBoost mantiene el enlace mientras está abierto, incluso con el panel cerrado o la ventana minimizada. **Detener**, **F8** y una pérdida del enlace conservan la parada del automatismo. El cierre del enlace no cierra Wardogs. Las tareas iniciadas aparte en FarmDogs pertenecen a su propia sesión. Un servicio abierto por separado se conserva; un servicio exclusivo creado por OpenBoost puede cerrarse cooperativamente al salir.
+
+El perfil de optimización es opcional y empieza apagado. Para usarlo hay que tener una entrada propia completada, el proceso local verificado y Wardogs añadido manualmente a la biblioteca de OpenBoost. Revisa el plan y confírmalo aparte. La salida del proceso se observa mediante una espera nativa, y la restauración se limita al identificador del perfil aplicado por esta integración. No cambia automáticamente ajustes de Windows al conectar FarmDogs.
+
+**Exportar diagnóstico** descarga un JSON con fases, motivos y correlaciones de sesión. Excluye cuenta, tokens, cookies, capturas y texto libre. Es un historial parcial de los eventos disponibles en el servicio, no una prueba de premio, rendimiento o conexión continua. No compartas la carpeta `data`.
+
+En ese prototipo archivado quedaron pendientes la prueba visual completa de la integración, el cambio natural de ronda y una comparación de FPS; entonces no se inició Wardogs por estar la cuenta en otro PC. La prueba posterior de una ronda en FarmDogs independiente no valida la integración con OpenBoost.
+
 ## Estado de la versión
+
+**Validación local de 0.6.0, 5 de noviembre:** entrada desde el menú del juego ya abierto, selección Aleatorio con entrada en azul, HUD reconocido y una transición natural posterior al verde con repetición y parada de clics. Se observaron pausa/reanudación por ratón, desplazamiento del personaje y F8 durante una pausa con cancelación definitiva. Se corrigieron una falsa tarea ocupada tras completar la entrada, una lectura transitoria del monitor y los bordes de tarjetas apagadas. La suite local tenía **897 casos: 895 pasaron y dos ejecutables nativos agotaron el tiempo de arranque; ambos pasaron al repetirlos sin cambios (2/2)**. Esos resultados locales se distinguen de la CI del commit publicado.
 
 La versión que origina **0.5.4 superó 579 pruebas automáticas** de lógica, API, interfaz y contratos nativos con plataformas simuladas. El usuario confirmó en el juego el recorrido **entrada automática → equipo elegido → despliegue → anti-AFK opcional**. Ese reporte se conserva como prueba de uso real de ese recorrido; no valida todos los casos posibles.
 
@@ -229,9 +280,9 @@ También se comprobaron estos recorridos en pruebas reales anteriores:
 - Permanencia de **25 minutos en una partida activa** sin expulsión observada y un **premio nuevo de un día VIP por sedeo**, verificado mediante cuenta e historial recientes. Hubo pausas de lectura y una reanudación manual tras actualizar la app; no fue un trayecto completo sin intervención desde Steam cerrado hasta premio.
 - Actualización real **0.5.0 → 0.5.1** desde GitHub, reapertura y conservación de la cuenta; cierre normal del host y sus controladores.
 
-**Pendientes de prueba real completa:** entrada por actividad natural, recuperación tras reinicio, esperas muy largas en cola o por un equipo y continuidad tras cambios de ronda. La espera simulada se comprobó en los minutos 3, 10 y 29, pero no sustituye ese ensayo dentro del juego. El reconocimiento de pantalla todavía puede fallar o pausar el movimiento: no se relajaron las comprobaciones para aceptar lecturas inciertas.
+**Pendientes de prueba real completa de esta revisión:** volver a iniciar con Steam y Wardogs completamente cerrados, entrada por actividad natural con premio nuevo, recuperación tras reinicio real, esperas muy largas en cola o por un equipo, comparación de FPS y voz de escuadrón con E. La fuente revisada no registra ni bloquea E, pero no se ha comprobado su transmisión de voz. La espera simulada de los minutos 3, 10 y 29 no sustituye una cola real equivalente. El reconocimiento de pantalla todavía puede fallar o pausar el movimiento: no se relajaron las comprobaciones para aceptar lecturas inciertas.
 
-No hay redespliegue automático tras cambios de ronda. Un monitor de seguridad que deja de responder detiene las entradas; no se ignora para mantener la automatización. FarmDogs no garantiza evitar cualquier expulsión ni obtener VIP. Las reglas y los menús del juego pueden cambiar.
+La selección automática tras un cambio de ronda requiere mantener activado **Repetir en cada partida**. Un monitor de seguridad que deja de responder detiene las entradas; no se ignora para mantener la automatización. FarmDogs no garantiza evitar cualquier expulsión ni obtener VIP. Las reglas y los menús del juego pueden cambiar.
 
 ## Compilar desde el código
 

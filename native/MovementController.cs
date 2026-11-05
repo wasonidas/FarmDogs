@@ -39,6 +39,8 @@ namespace WardogsSeeding {
   DateTime autoLease;
   double autoLeaseMono;
   int autoCount;
+  MousePauseSettings mousePauseSettings=new MousePauseSettings();
+  long permittedMouseRevision;
 
   public ControllerForm(string root, DateTime? until, EventWaitHandle openRequest) {
    showRequest = openRequest;
@@ -66,7 +68,7 @@ namespace WardogsSeeding {
    detail.SetBounds(20, 405, 560, 32); detail.Font = new Font("Segoe UI", 8); Controls.Add(detail);
    AddLabel(hardStop.HasValue ? "Limite de hoy (Madrid): " + TimeZoneInfo.ConvertTimeFromUtc(hardStop.Value, madrid).ToString("dd/MM/yyyy HH:mm:ss") : "Sin limite especial de hoy; se aplica la duracion de sesion elegida.", 20, 445, 560, 24).Font = new Font("Segoe UI", 8);
    timer.Interval = 100; timer.Tick += OnTick; timer.Start();
-   FormClosing += delegate { closing = true; Stop("Controlador cerrado"); timer.Stop(); };
+   FormClosing += delegate { closing = true; Stop("Controlador cerrado");KeyboardInput.ConfigureMousePause(mousePauseSettings,false); timer.Stop(); };
    Write("opened", null); UpdateStatus();
   }
   Label AddLabel(string text, int x, int y, int width, int height) { Label label = new Label(); label.Text = text; label.SetBounds(x,y,width,height); Controls.Add(label); return label; }
@@ -103,17 +105,20 @@ namespace WardogsSeeding {
     pulseHold = (int)hold.Value; singleStep = one;
     firstKey = directions.SelectedIndex == 0 ? 0x41 : 0x57; secondKey = directions.SelectedIndex == 0 ? 0x44 : 0x53;
     plan.Arm(now, when, TimeSpan.FromMinutes(one ? 1 : (double)duration.Value), TimeSpan.FromSeconds((double)interval.Value), clock.Elapsed.TotalMilliseconds, hardStop);
+    mousePauseSettings=new MousePauseSettings();KeyboardInput.ConfigureMousePause(mousePauseSettings,true);
     sessionId = Guid.NewGuid().ToString(); lastError = null; cancel = new CancellationTokenSource();
     Write(one ? "step_armed" : "armed", null); UpdateStatus();
    } catch (Exception error) { Stop(error.Message); lastError = error.Message; UpdateStatus(); }
   }
-  void Stop(string reason) {
+  void Stop(string reason) {StopInternal(reason,false);}
+  void StopInternal(string reason,bool preserveMouse) {
    plan.Stop(reason); if (cancel != null) cancel.Cancel();
    try { KeyboardInput.Release(); } catch (Exception error) { lastError = "No se pudo confirmar la liberacion: " + error.Message; }
+   if(!preserveMouse)KeyboardInput.ConfigureMousePause(mousePauseSettings,false);
    try { Write("stopped", reason); } catch (Exception error) { lastError = "Error de registro: " + error.Message; }
    if (!closing) UpdateStatus();
   }
-  void CancelAutomaticSession(string id) { if(id!=null){autoOperatorStoppedSessions.Add(id);autoOperatorStopped=id;} }
+  void CancelAutomaticSession(string id) { if(id!=null){autoOperatorStoppedSessions.Add(id);autoOperatorStopped=id;if(id==autoSessionId)KeyboardInput.ConfigureMousePause(mousePauseSettings,false);} }
   void OperatorStop(string reason) {
    CancelAutomaticSession(autoSessionId);
    try {
@@ -121,6 +126,7 @@ namespace WardogsSeeding {
     if(pending!=null)CancelAutomaticSession(pending.CancellationSessionId());
    } catch(Exception) { autoStopReadFault=true;lastError=UnresolvedStop; }
    Stop(reason);
+   KeyboardInput.ConfigureMousePause(mousePauseSettings,false);
   }
   void SelectAutomaticSession(string id) { automaticCadence.Select(id);autoSessionId=id;autoCount=automaticCadence.CompletedCount; }
   AutomaticCommand ReadPendingAutomaticCommand() {
@@ -137,19 +143,21 @@ namespace WardogsSeeding {
    try{command.Validate(DateTime.UtcNow);}catch(ArgumentException){lastCommandId=command.id;if(autoSessionId!=null&&plan.Armed)Stop("Orden automatica no vigente");return;}
    lastCommandId=command.id;
    if(command.kind=="stop"){
-    if(command.sessionId==autoSessionId){if(command.cancelled)CancelAutomaticSession(autoSessionId);Stop(command.reason??"Esperando una nueva comprobacion.");}
+    if(command.sessionId==autoSessionId){if(command.cancelled)CancelAutomaticSession(autoSessionId);StopInternal(command.reason??"Esperando una nueva comprobacion.",!command.cancelled);}
     return;
    }
    if(!hotkeysReady){lastError="F7/F8 no disponibles. Cierra y vuelve a abrir FarmDogs antes de activar el movimiento.";Stop(lastError);return;}
    if(autoOperatorStoppedSessions.Contains(command.sessionId))return;
+   mousePauseSettings=MousePauseSettings.Normalize(command.mousePause);KeyboardInput.ConfigureMousePause(mousePauseSettings,true);
    if(command.kind=="watch"){
     if(!plan.Armed&&!busy){SelectAutomaticSession(command.sessionId);lastError=null;Write("auto_waiting",command.reason??"Esperando inicio de partida");}return;
    }
-   if(plan.Armed){if(autoSessionId==command.sessionId){autoLease=command.LeaseUtc;autoLeaseMono=clock.Elapsed.TotalMilliseconds+(autoLease-DateTime.UtcNow).TotalMilliseconds;}return;}
+   if(mousePauseSettings.enabled&&command.mouseRevision!=KeyboardInput.MouseRevision)return;
+   if(plan.Armed){if(autoSessionId==command.sessionId){permittedMouseRevision=command.mouseRevision;autoLease=command.LeaseUtc;autoLeaseMono=clock.Elapsed.TotalMilliseconds+(autoLease-DateTime.UtcNow).TotalMilliseconds;}return;}
    if(busy||!KeyboardInput.ForegroundIs(command.gamePid)||KeyboardInput.FindGame()!=command.gamePid||KeyboardInput.ModifiersDown())return;
    DateTime now=DateTime.UtcNow;DateTime limit=command.EndUtc;if(hardStop.HasValue&&hardStop.Value<limit)limit=hardStop.Value;
    if(limit<=now.AddMilliseconds(command.holdMs+100))return;
-   SelectAutomaticSession(command.sessionId);autoLease=command.LeaseUtc;autoLeaseMono=clock.Elapsed.TotalMilliseconds+(autoLease-DateTime.UtcNow).TotalMilliseconds;gamePid=command.gamePid;pulseHold=command.holdMs;singleStep=false;
+   SelectAutomaticSession(command.sessionId);permittedMouseRevision=command.mouseRevision;autoLease=command.LeaseUtc;autoLeaseMono=clock.Elapsed.TotalMilliseconds+(autoLease-DateTime.UtcNow).TotalMilliseconds;gamePid=command.gamePid;pulseHold=command.holdMs;singleStep=false;
    firstKey=command.directions=="AD"?0x41:0x57;secondKey=command.directions=="AD"?0x44:0x53;
    plan.Arm(now,now,TimeSpan.FromMinutes(Math.Max(1,(limit-now).TotalMinutes)),TimeSpan.FromSeconds(command.intervalSeconds),clock.Elapsed.TotalMilliseconds,limit);
    plan.RestoreCadence(automaticCadence.CompletedCount,automaticCadence.NextDue(clock.Elapsed.TotalMilliseconds,plan.IntervalMs));
@@ -169,7 +177,10 @@ namespace WardogsSeeding {
     }
     bool wasArmed = plan.Armed;
     string decision = plan.Decide(DateTime.UtcNow, clock.Elapsed.TotalMilliseconds, KeyboardInput.ForegroundIs(gamePid), KeyboardInput.IsGame(gamePid));
-    if (wasArmed && !plan.Armed) { Stop(plan.Reason); return; }
+    if (wasArmed && !plan.Armed) { StopInternal(plan.Reason,autoSessionId!=null&&plan.Reason=="Perdida de foco: vuelve a armar para continuar"); return; }
+    var mousePause=KeyboardInput.MousePause(DateTime.UtcNow);
+    if(mousePause.active){if((DateTime.UtcNow-lastWrite).TotalMilliseconds>=250)Write("paused_mouse","Pausado mientras usas el raton.");return;}
+    if(autoSessionId!=null&&mousePauseSettings.enabled&&permittedMouseRevision!=KeyboardInput.MouseRevision){if((DateTime.UtcNow-lastWrite).TotalMilliseconds>=250)Write("waiting_mouse_frame","Esperando una comprobacion de pantalla posterior al uso del raton.");return;}
     if (decision == "pulse") {
      if ((plan.EndUtc - DateTime.UtcNow).TotalMilliseconds < pulseHold + 100) { Stop("Fin de la duracion elegida"); return; }
      if (KeyboardInput.ModifiersDown()) { Stop("Modificador de teclado pulsado"); return; }
@@ -190,7 +201,8 @@ namespace WardogsSeeding {
      if (singleStep) Stop("Paso de prueba terminado");
     }
     if ((DateTime.UtcNow - lastWrite).TotalSeconds >= 1) Write("heartbeat", null);
-   } catch (OperationCanceledException) { if ((pulsePlanId==null||pulsePlanId==sessionId)&&plan.Armed) Stop("Pulsacion cancelada"); }
+   } catch (UserMousePauseException) {if((pulsePlanId==null||pulsePlanId==sessionId)&&plan.Armed)Write("paused_mouse","Pausado mientras usas el raton.");}
+   catch (OperationCanceledException) { if ((pulsePlanId==null||pulsePlanId==sessionId)&&plan.Armed) Stop("Pulsacion cancelada"); }
    catch (Exception error) { if(pulsePlanId==null||pulsePlanId==sessionId){lastError = error.Message; Stop(error.Message);} }
    finally { busy = false; if (!closing) UpdateStatus(); }
   }
@@ -208,6 +220,7 @@ namespace WardogsSeeding {
    row["autoSessionId"]=autoSessionId;row["autoOperatorStopped"]=autoOperatorStopped;row["autoCount"]=autoCount;
    row["autoAttemptCount"]=automaticCadence.AttemptCount;row["autoLastPulseFinishedMono"]=automaticCadence.LastFinishedMono;
    row["gamePid"] = gamePid; row["gameForeground"] = KeyboardInput.ForegroundIs(gamePid);
+   row["userPause"]=KeyboardInput.MousePause(DateTime.UtcNow);
    row["count"] = plan.Count; row["lastKey"] = lastKey; row["holdMs"] = pulseHold;
    row["intervalMs"] = plan.IntervalMs; row["singleStep"] = singleStep;
    row["startUtc"] = plan.StartUtc == default(DateTime) ? null : plan.StartUtc.ToString("o");

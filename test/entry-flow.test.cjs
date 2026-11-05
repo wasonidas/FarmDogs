@@ -44,6 +44,10 @@ function fixture(){
 }
 async function reachTeam(f,settings=input){await f.flow.start(settings);f.screen('team_selector');await f.flow.tick();assert.equal(f.flow.view().status,'choosing_team');}
 async function complete(f,settings=input){await reachTeam(f,settings);f.completeTeam();f.screen('gameplay_hud');await f.flow.tick();}
+test('owned mouse pause clears on positive team completion before deployment observation',async()=>{
+ const f=fixture();await reachTeam(f);f.setTeam({userPause:{kind:'mouse',active:true,remainingMs:3000,buttonsDown:false,resumeAt:new Date(f.utc+3000).toISOString()}});await f.flow.tick();assert.equal(f.flow.view().status,'paused_mouse');assert.equal(f.flow.view().userPause.active,true);
+ f.completeTeam();f.screen('deploying');await f.flow.tick();assert.equal(f.flow.view().status,'deploying');assert.equal(f.flow.view().userPause,null);
+});
 
 test('entrada completa: une destino verificado, equipo, HUD y seeding con una sola apertura',async()=>{
  const f=fixture();await f.flow.start(input);const id=f.flow.view().id;
@@ -67,6 +71,17 @@ test('entrada sin seeding termina tras HUD y no solicita movimiento',async()=>{
  const f=fixture();await complete(f,{...input,seeding:false});assert.equal(f.flow.view().status,'completed');assert.equal(f.flow.view().connected,true);assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
 });
 
+test('entrada completada: una comprobación sin recuperación no anuncia una limpieza pendiente a otros coordinadores',async()=>{
+ const f=fixture();await complete(f,{...input,seeding:false});const id=f.flow.view().id;
+ for(let n=0;n<3;n++){
+  const checking=f.flow.tick();
+  assert.equal(f.flow.view().status,'completed');
+  assert.equal(f.flow.view().cleanupPending,false,'La consulta quieta no debe bloquear la repetición de equipo en el mismo tick.');
+  await checking;
+ }
+ assert.equal(f.flow.view().id,id);assert.equal(f.calls.filter(c=>c[0]==='driver-start').length,1);
+});
+
 test('entrada con anti-AFK: espera equipo y HUD verificados y conserva una duración propia después de la cola',async()=>{
  const f=fixture(),settings={...input,seeding:false,antiAfk:true,durationMinutes:120,antiAfkSettings:{durationMinutes:7,intervalSeconds:17,holdMs:800}};
  await reachTeam(f,settings);const entry=f.flow.view();assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
@@ -74,7 +89,7 @@ test('entrada con anti-AFK: espera equipo y HUD verificados y conserva una durac
  f.completeTeam();f.screen('deploying');await f.flow.tick();assert.equal(f.calls.some(c=>c[0]==='movement-start'),false);
  f.advance(1000);f.screen('gameplay_hud');await f.flow.tick();
  const state=f.flow.view(),start=f.calls.find(c=>c[0]==='movement-start');assert.equal(state.status,'completed');assert.equal(state.endAt,entry.endAt);assert.equal(state.seeding,false);assert.equal(state.antiAfk,true);
- assert.deepEqual(start[1],{purpose:'break',presenceMode:'entry',server:1,durationMinutes:7,intervalSeconds:17,holdMs:800});assert.equal(start[1].confirmedDeployed,undefined);assert.equal(start[2].endAt,undefined);
+ assert.deepEqual(start[1],{purpose:'break',presenceMode:'entry',server:1,durationMinutes:7,intervalSeconds:17,holdMs:800,mousePause:{enabled:true,resumeAfterSeconds:3}});assert.equal(start[1].confirmedDeployed,undefined);assert.equal(start[2].endAt,undefined);
  assert.deepEqual(start[2].trustedEntry,{entryId:entry.id,server:1,joinId,gamePid:123,gameWindow:456,confirmedAt:state.deployedAt});assert.match(state.reason,/anti-AFK/);
  f.flow.stop();assert.equal(f.automatic.view().status,'cancelled');
  const other=fixture();await complete(other,{...input,seeding:false,antiAfk:true});other.setAutomatic({id:randomUUID(),purpose:'break',status:'moving'});other.flow.stop();assert.equal(other.automatic.view().status,'moving');
@@ -84,7 +99,7 @@ test('anti-AFK al entrar: valida intención y ajustes sin abrir nada y usa valor
  for(const changes of [{antiAfk:'true'},{antiAfk:true,seeding:true},{antiAfk:false,antiAfkSettings:{}},{antiAfkSettings:{}},{antiAfk:true,antiAfkSettings:null},{antiAfk:true,antiAfkSettings:[]},{antiAfk:true,antiAfkSettings:{presenceMode:'manual'}},{antiAfk:true,antiAfkSettings:{confirmedDeployed:true}},{antiAfk:true,antiAfkSettings:{durationMinutes:0}},{antiAfk:true,antiAfkSettings:{durationMinutes:721}},{antiAfk:true,antiAfkSettings:{intervalSeconds:4}},{antiAfk:true,antiAfkSettings:{holdMs:2001}}]){
   const f=fixture();await assert.rejects(f.flow.start({...input,seeding:false,...changes}),/anti-AFK|ambos|casilla/);assert.equal(f.calls.length,0);
  }
- const f=fixture();await complete(f,{...input,seeding:false,antiAfk:true});assert.deepEqual(f.calls.find(c=>c[0]==='movement-start')[1],{purpose:'break',presenceMode:'entry',server:1,durationMinutes:15,intervalSeconds:30,holdMs:500});
+ const f=fixture();await complete(f,{...input,seeding:false,antiAfk:true});assert.deepEqual(f.calls.find(c=>c[0]==='movement-start')[1],{purpose:'break',presenceMode:'entry',server:1,durationMinutes:15,intervalSeconds:30,holdMs:500,mousePause:{enabled:true,resumeAfterSeconds:3}});
 });
 
 test('anti-AFK al entrar: HUD ajeno, expiración, error y F8 no preparan movimiento',async()=>{
@@ -243,6 +258,17 @@ test('recuperación: F8 y Detener durante checkReady/arranque invalidan callback
  const f=fixture();await complete(f);restart(f);const starting=deferred();f.hooks.driverStart=()=>starting.promise;const tick=f.flow.tick();for(let i=0;i<4;i++)await Promise.resolve();assert.equal(f.flow.view().status,'recovering_source');f.flow.stop();starting.resolve();await tick;assert.equal(f.flow.view().status,'cancelled');assert.equal(f.calls.filter(c=>c[0]==='game-open').length,1);
  const guard=fixture();await complete(guard);restart(guard);await guard.flow.tick();const reading=deferred();guard.hooks.driverGuard=()=>reading.promise;const pending=guard.flow.tick();for(let i=0;i<4;i++)await Promise.resolve();guard.flow.stop();reading.resolve(true);await pending;assert.equal(guard.flow.view().status,'cancelled');assert.equal(guard.flow.view().recovery.sourceSamples.length,0);
  const f8=fixture();await complete(f8);restart(f8);await f8.flow.tick();f8.hooks.driverGuard=()=>{f8.setDriver({phase:'cancelled',operatorStopped:true});return false;};await f8.flow.tick();assert.equal(f8.flow.view().status,'cancelled');
+});
+test('recuperación real: reclama la sesión antes de ceder y conserva el bloqueo hasta cancelar un arranque pendiente',async()=>{
+ const f=fixture();await complete(f);const previous=f.flow.view().id;restart(f);
+ const starting=deferred();f.hooks.driverStart=()=>starting.promise;
+ const pending=f.flow.tick(),recovery=f.flow.view();
+ assert.equal(recovery.status,'recovering_source');assert.notEqual(recovery.id,previous);assert.equal(f.flow.active(),true);
+ await assert.rejects(f.flow.start({...input,seeding:false}),/curso|deteniéndose/);
+ f.flow.stop();assert.equal(f.flow.view().cleanupPending,true,'La preparación real aún necesita su acuse de parada.');
+ starting.resolve();await pending;
+ assert.equal(f.flow.view().status,'cancelled');assert.equal(f.flow.view().cleanupPending,false);
+ assert.equal(f.calls.filter(c=>c[0]==='game-open').length,1);
 });
 test('recuperación: espera hasta 15 minutos dentro del tiempo original y el reloj atrasado no concede otra duración',async()=>{
  const long=fixture();await complete(long,{...input,durationMinutes:30});restart(long);await long.flow.tick();long.advance(14*60000);await long.flow.tick();assert.equal(long.flow.view().status,'recovering_source');long.advance(60000);await long.flow.tick();assert.equal(long.flow.view().status,'error');assert.match(long.flow.view().reason,/15 minutos/);

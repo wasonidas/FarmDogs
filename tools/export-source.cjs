@@ -9,7 +9,7 @@ const relativeFiles=[...fixed];
 function walk(relative){
  for(const entry of fs.readdirSync(path.join(root,relative),{withFileTypes:true})){
   const next=relative+'/'+entry.name;if(entry.isSymbolicLink())throw Error('No se exportan enlaces: '+next);
-  if(entry.isDirectory())walk(next);else if(entry.isFile()&&(/\.(?:cjs|mjs|js|cs|json|html|css|md|ya?ml)$/.test(entry.name)||relative==='public'&&/\.(?:png|ttf|txt)$/.test(entry.name)))relativeFiles.push(next);
+  if(entry.isDirectory())walk(next);else if(entry.isFile()&&(/\.(?:cjs|mjs|js|cs|json|html|css|md|ya?ml)$/.test(entry.name)||relative==='public'&&/\.(?:png|webp|svg|ttf|txt)$/.test(entry.name)))relativeFiles.push(next);
  }
 }
 for(const relative of directories)if(fs.existsSync(path.join(root,relative)))walk(relative);

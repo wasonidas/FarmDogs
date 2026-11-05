@@ -15,11 +15,12 @@ async function fixture(t){
 
 test('assets launcher: marca PNG, fuente TTF y licencia OFL se sirven íntegros con MIME y nosniff',async t=>{
  const url=await fixture(t);
- for(const [name,type]of [['farmdogs-ai-mark.png','image/png'],['rajdhani-bold.ttf','font/ttf'],['OFL-Rajdhani.txt','text/plain; charset=utf-8']]){
+ for(const [name,type]of [['farmdogs-ai-mark.png','image/png'],['industrial-tower.png','image/png'],['deploy-button.png','image/png'],['rajdhani-bold.ttf','font/ttf'],['rajdhani-medium.ttf','font/ttf'],['OFL-Rajdhani.txt','text/plain; charset=utf-8'],...['lonestar','valkyra','manticore'].map(name=>['faction-'+name+'.webp','image/webp'])]){
   const response=await fetch(url+'/'+name);assert.equal(response.status,200,name);assert.equal(response.headers.get('content-type'),type);assert.equal(response.headers.get('x-content-type-options'),'nosniff');
   const bytes=Buffer.from(await response.arrayBuffer());assert.deepEqual(bytes,await fs.readFile(path.join(__dirname,'..','public',name)),name);
   if(name.endsWith('.png'))assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
   if(name.endsWith('.ttf'))assert.equal(bytes.subarray(0,4).toString('hex'),'00010000');
+  if(name.endsWith('.webp')){assert.equal(bytes.subarray(0,4).toString('ascii'),'RIFF');assert.equal(bytes.subarray(8,12).toString('ascii'),'WEBP');}
   if(name.endsWith('.txt'))assert.match(bytes.toString('utf8'),/SIL OPEN FONT LICENSE Version 1\.1/);
  }
 });

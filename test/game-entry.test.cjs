@@ -31,12 +31,12 @@ async function fixture(t){
  await fsp.mkdir(path.join(root,'bin'));await fsp.mkdir(dataDir);
  const helper=path.join(root,'bin','WardogsEntry.exe'),helperBytes=Buffer.from('inert native fixture');
  await fsp.writeFile(helper,helperBytes);await fsp.writeFile(path.join(root,'bin','WardogsImageText.exe'),'inert reader fixture');
- const cap={format:'farmdogs-entry-capabilities-v1',automaticEntry:true,oneShot:true,stopWatcher:true,initialFocus:true,mainDeployGate:true,splashKeyStart:true,absolutePointer:true,restartRecovery:true,maxActionMilliseconds:3000,sha256:createHash('sha256').update(helperBytes).digest('hex')};
+ const cap={format:'farmdogs-entry-capabilities-v1',automaticEntry:true,oneShot:true,stopWatcher:true,initialFocus:true,mainDeployGate:true,splashKeyStart:true,absolutePointer:true,restartRecovery:true,mousePause:true,maxActionMilliseconds:3000,sha256:createHash('sha256').update(helperBytes).digest('hex')};
  await fsp.writeFile(path.join(root,'bin','entry-capabilities.json'),JSON.stringify(cap));
- let utc=Date.parse('2026-10-31T15:00:00Z'),mono=100,screen='main',mutate=null,nativeHook=null,readerHook=null,focusHook=null,targetHook=null,fixedFrame=null,pid=123,window=456;
+ let utc=Date.parse('2026-10-31T15:00:00Z'),mono=100,screen='main',mutate=null,nativeHook=null,readerHook=null,focusHook=null,targetHook=null,eventHook=null,fixedFrame=null,pid=123,window=456,mouseRevision=0;
  const calls=[],children=[],events=[],targetReads=[];let latestRaw=null;
  const watchFile=()=>path.join(dataDir,'entry-watch-'+input.id+'.json');
- function heartbeat(changes={}){const report={format:'farmdogs-entry-watch-v1',sessionId:input.id,servicePid:process.pid,status:'watching',at:new Date(utc).toISOString(),...changes};fs.writeFileSync(watchFile(),JSON.stringify(report));}
+ function heartbeat(changes={}){if(changes.mouseRevision!==undefined)mouseRevision=changes.mouseRevision;const report={format:'farmdogs-entry-watch-v1',sessionId:input.id,servicePid:process.pid,status:'watching',at:new Date(utc).toISOString(),mouseRevision,userPause:{kind:'mouse',active:false,buttonsDown:false,remainingMs:0,resumeAt:null},...changes};fs.writeFileSync(watchFile(),JSON.stringify(report));}
  const run=async(file,args,options)=>{
   assert.equal(options.windowsHide,true);
   if(path.basename(file)==='WardogsImageText.exe'){
@@ -62,18 +62,43 @@ async function fixture(t){
   const child=new EventEmitter();child.pid=987654+children.length;child.killed=false;child.unref=()=>{};child.kill=()=>{child.killed=true;child.emit('exit',0,null);return true;};children.push(child);heartbeat();queueMicrotask(()=>child.emit('spawn'));return child;
  };
  const getTarget=(server,id)=>{targetReads.push({server,joinId:id});const fresh={server,joinId:id,sourceAt:new Date(utc).toISOString(),trusted:true,online:true,stale:false,name:'#01 [ESP] Wardogsspain.com'};return targetHook?targetHook(fresh):fresh;};
- const driver=createGameEntry({root,dataDir,getTarget,run,spawn,now:()=>utc,monoNow:()=>mono,event:(name,value)=>events.push({name,...value})});
+ const driver=createGameEntry({root,dataDir,getTarget,run,spawn,now:()=>utc,monoNow:()=>mono,event:(name,value)=>{events.push({name,...value});if(eventHook)eventHook(name,value);}});
  const input={id:randomUUID(),server:1,joinId,endAt:new Date(utc+15*60000).toISOString()};
  t.after(async()=>{await driver.close();for(const child of children)child.kill();const relative=path.relative(os.tmpdir(),root);assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative));await fsp.rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:20});});
  const api={root,dataDir,driver,input,calls,children,events,targetReads,cap,helper,
-  setScreen(value){screen=value;},mutate(value){mutate=value;},native(value){nativeHook=value;},read(value){readerHook=value;},focus(value){focusHook=value;},target(value){targetHook=value;},frame(value){fixedFrame=value;},binding(p,w){pid=p;window=w;},heartbeat,
+  setScreen(value){screen=value;},mutate(value){mutate=value;},native(value){nativeHook=value;},read(value){readerHook=value;},focus(value){focusHook=value;},target(value){targetHook=value;},event(value){eventHook=value;},frame(value){fixedFrame=value;},binding(p,w){pid=p;window=w;},heartbeat,
   advance(ms,{beat=true}={}){utc+=ms;mono+=ms;if(beat&&fs.existsSync(watchFile()))heartbeat();},wall(ms){utc+=ms;},
   async step(value,ms=1000){screen=value;api.advance(ms);await driver.tick();return driver.view();},
   get utc(){return utc;},get raw(){return latestRaw;},actions(){return calls.filter(x=>x.key);},watchFile
  };return api;
 }
 async function searched(f){await f.driver.start(f.input);await f.step('form');await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id','lookup']);}
+test('mouse activity pauses navigation without inputs, resumes from a fresh screen and F8 stays terminal',async t=>{
+ const f=await fixture(t);await f.driver.start({...f.input,mousePause:{enabled:true,resumeAfterSeconds:3}});f.setScreen('main');
+ const pause={kind:'mouse',active:true,buttonsDown:false,remainingMs:3000,resumeAt:new Date(f.utc+3000).toISOString()};f.heartbeat({userPause:pause});await f.driver.tick();assert.equal(f.driver.view().phase,'paused_mouse');assert.equal(f.actions().length,0);
+ f.advance(1000);f.heartbeat({userPause:{...pause,remainingMs:2000}});await f.driver.tick();assert.equal(f.actions().length,0);
+ f.advance(2000);f.heartbeat();await f.driver.tick();assert.deepEqual(f.actions().map(row=>row.key),['main_deploy']);
+ f.advance(1000);f.heartbeat({status:'cancelled',reason:'operator_stop',userPause:pause});await f.driver.tick();assert.equal(f.driver.view().phase,'cancelled');const count=f.actions().length;f.heartbeat();await f.driver.tick();assert.equal(f.actions().length,count);
+});
 async function confirmed(f){await searched(f);await f.step('confirmation');assert.equal(f.driver.view().chainConfirmed,true);}
+test('mouse activity expiring during OCR discards the older frame and typed join permit',async t=>{
+ const f=await fixture(t);await f.driver.start({...f.input,mousePause:{enabled:true,resumeAfterSeconds:1}});await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id']);
+ const entered=defer(),release=defer();f.read(async()=>{entered.resolve();await release.promise;});f.setScreen('form');const pending=f.driver.tick();await entered.promise;
+ f.advance(100);f.heartbeat({mouseRevision:1,userPause:{kind:'mouse',active:true,remainingMs:1000,buttonsDown:false,resumeAt:new Date(f.utc+1000).toISOString()}});f.advance(1100);f.heartbeat();release.resolve();await pending;
+ assert.deepEqual(f.actions().map(x=>x.key),['type_join_id']);assert.equal(f.driver.view().phase,'waiting_game');
+ f.read(null);await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id','type_join_id']);await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id','type_join_id','lookup']);
+});
+test('a revision discovered just before lookup discards its previously classified typed permit',async t=>{
+ const f=await fixture(t);await f.driver.start(f.input);await f.step('form');assert.equal(f.actions().length,1);
+ f.event((name,value)=>{if(name==='game_entry_state'&&value.phase==='joining')f.heartbeat({mouseRevision:1,at:new Date(f.utc-200).toISOString()});});
+ await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id']);assert.equal(f.driver.view().phase,'waiting_game');
+ f.event(null);await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id','type_join_id']);
+});
+test('mouse interruption may replace a partial ID again but never repeat an uncertain lookup',async t=>{
+ const f=await fixture(t);await f.driver.start(f.input);let interrupted=false;f.native(({result,key})=>{if(key==='type_join_id'&&!interrupted){interrupted=true;return {...result,success:false,status:'rejected',reason:'user_mouse_active',inputAttempted:true};}});
+ await f.step('form');assert.equal(f.driver.view().phase,'paused_mouse');await f.step('form');assert.deepEqual(f.actions().map(x=>x.key),['type_join_id','type_join_id']);
+ f.native(({result,key})=>key==='lookup'?{...result,success:false,status:'rejected',reason:'user_mouse_active',inputAttempted:true}:result);await f.step('form');assert.equal(f.driver.view().phase,'error');const count=f.actions().length;await f.step('form');assert.equal(f.actions().length,count);
+});
 function recoveryInput(f){return {...f.input,initialFocus:'none',recovery:{id:randomUUID(),rootEntryId:randomUUID(),previousEntryId:randomUUID(),seedingId:randomUUID(),gamePid:123,gameWindow:456,detectedAt:new Date(f.utc-100).toISOString(),frameId:randomUUID(),endAt:f.input.endAt}};}
 
 test('recuperación: permiso interno válido prepara plan propio y confirma reinicio una sola vez sin foco',async t=>{
@@ -108,7 +133,7 @@ test('recuperación: resultado incierto, F8 y stop concurrente nunca repiten ni 
 test('contrato recuperación JS→C#: valida el JSON original y el plan nativo sin ejecutar entradas',async t=>{
  if(process.platform!=='win32'){t.skip('El contrato C# se compila en Windows.');return;}
  const f=await fixture(t),probe=path.join(f.root,'bin','GameEntryContractProbe.exe'),compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
- execFileSync(compiler,['/nologo','/nowarn:0649','/codepage:65001','/langversion:5','/platform:x64','/target:exe','/main:GameEntryContractProbe','/r:System.Drawing.dll','/r:System.Web.Extensions.dll','/out:'+probe,...['GameWindow.cs','EntryControlVisual.cs','InputIntegrity.cs','GameEntry.cs','GameEntryContractProbe.cs'].map(name=>path.resolve('native',name))],{windowsHide:true,timeout:30000});
+ execFileSync(compiler,['/nologo','/nowarn:0649','/codepage:65001','/langversion:5','/platform:x64','/target:exe','/main:GameEntryContractProbe','/r:System.Drawing.dll','/r:System.Web.Extensions.dll','/out:'+probe,...['GameWindow.cs','EntryControlVisual.cs','InputIntegrity.cs','MouseActivity.cs','GameEntry.cs','GameEntryContractProbe.cs'].map(name=>path.resolve('native',name))],{windowsHide:true,timeout:30000});
  const input=recoveryInput(f);await f.driver.start(input);const planFile=path.join(f.dataDir,'entry-recovery-'+f.input.id+'.json'),originalPlan=await fsp.readFile(planFile);f.advance(14*60000);assert.equal(await f.driver.checkReady(f.input.id),true);assert.equal(f.actions().length,0);await f.step('restart');const action=f.actions()[0],original=await fsp.readFile(action.args[1]);assert.ok(Date.parse(action.command.issuedAt)-Date.parse(input.recovery.detectedAt)>13*60000);assert.deepEqual(await fsp.readFile(planFile),originalPlan,'La espera no debe renovar el motivo ni el presupuesto del permiso.');assert.equal(action.command.endAt,input.endAt);
  const args=[action.args[1],f.dataDir,action.command.issuedAt],options={cwd:f.root,windowsHide:true,encoding:'utf8',timeout:30000};assert.equal(JSON.parse(execFileSync(probe,args,options)).valid,true);assert.deepEqual(await fsp.readFile(action.args[1]),original);
  const file=path.join(f.dataDir,'entry-recovery-'+f.input.id+'.json'),plan=JSON.parse(await fsp.readFile(file,'utf8'));plan.gameWindow=457;await fsp.writeFile(file,JSON.stringify(plan));assert.throws(()=>execFileSync(probe,args,options),error=>/invalid_recovery_plan/.test(error.stdout));
@@ -132,6 +157,63 @@ test('guarda previa al equipo: consulta F8 vivo sin OCR ni acciones y exige el p
 test('guarda previa al equipo: watcher obsoleto o fin total bloquean permiso sin leer la pantalla',async t=>{
  for(const mode of ['stale','expired']){const f=await fixture(t);await f.driver.start(f.input);const before=f.calls.length;f.advance(mode==='stale'?3001:15*60000,{beat:mode!=='stale'});assert.equal(await f.driver.checkReady(f.input.id),false);assert.equal(f.driver.view().phase,'error');assert.equal(f.calls.length,before);}
  const stopped=await fixture(t);await stopped.driver.start(stopped.input);const pending=stopped.driver.checkReady(stopped.input.id);await stopped.driver.stop({ownerId:stopped.input.id});assert.equal(await pending,false);assert.equal(stopped.calls.length,0);
+});
+
+test('monitor F8: ENOENT transitorio relee el archivo antes de continuar, sin permisos procedentes de la caché',async t=>{
+ for(const method of ['lstat','readFile'])await t.test(method,async t=>{
+  const f=await fixture(t);await f.driver.start(f.input);const file=f.watchFile(),original=fsp[method].bind(fsp),missing=defer();let reads=0;
+  t.mock.method(fsp,method,async(...args)=>{if(args[0]===file&&++reads===1){missing.resolve();throw Object.assign(Error('missing fixture'),{code:'ENOENT'});}return original(...args);});
+  const pending=f.driver.checkReady(f.input.id);await missing.promise;assert.equal(f.calls.length,0);f.advance(1);f.heartbeat();
+  assert.equal(await pending,true);assert.ok(reads>=2);assert.equal(f.driver.view().watchDiagnostic,undefined);assert.equal(f.driver.view().phase,'waiting_game');
+  await f.step('main');assert.equal(f.actions().length,1);
+ });
+});
+test('monitor F8: dos ENOENT admiten sólo un tercer intento; la ausencia persistente termina sin OCR ni entradas',async t=>{
+ for(const failures of [2,Infinity])await t.test(String(failures),async t=>{
+  const f=await fixture(t);await f.driver.start(f.input);const file=f.watchFile(),original=fsp.readFile.bind(fsp);let reads=0;
+  t.mock.method(fsp,'readFile',async(...args)=>{if(args[0]===file&&++reads<=failures)throw Object.assign(Error('missing fixture'),{code:'ENOENT'});return original(...args);});
+  assert.equal(await f.driver.checkReady(f.input.id),failures===2);assert.equal(reads,3);assert.equal(f.calls.length,0);
+  if(failures===Infinity){assert.equal(f.driver.view().phase,'error');assert.equal(f.driver.view().watchDiagnostic.readError,'ENOENT');assert.equal(f.driver.view().watchDiagnostic.lastStatus,'watching');}
+ });
+});
+test('monitor F8: F8 o reporte inválido tras un ENOENT no autorizan trabajo ni amplían la frescura',async t=>{
+ for(const mode of ['F8','schema','owner','service','stale','future','mouse'])await t.test(mode,async t=>{
+  const f=await fixture(t);await f.driver.start(f.input);const file=f.watchFile(),original=fsp.readFile.bind(fsp),missing=defer();let reads=0;
+  t.mock.method(fsp,'readFile',async(...args)=>{if(args[0]===file&&++reads===1){missing.resolve();throw Object.assign(Error('missing fixture'),{code:'ENOENT'});}return original(...args);});
+  const pending=f.driver.tick();await missing.promise;
+  const changes=mode==='F8'?{status:'cancelled',reason:'operator_stop'}:mode==='schema'?{format:'wrong'}:mode==='owner'?{sessionId:randomUUID()}:mode==='service'?{servicePid:process.pid+1}:mode==='stale'?{at:new Date(f.utc-3001).toISOString()}:mode==='future'?{at:new Date(f.utc+1).toISOString()}:{userPause:null};
+  f.heartbeat(changes);await pending;
+  assert.equal(reads,2);assert.equal(f.calls.length,0);assert.equal(f.driver.view().phase,mode==='F8'?'cancelled':'error');
+  if(mode==='F8')assert.equal(f.driver.view().operatorStopped,true);
+ });
+});
+test('monitor F8: no relee tras Stop, cambio de propietario, muerte del hijo, frescura vencida o plazo total',async t=>{
+ for(const mode of ['stop','new-owner','exited','killed','stale','deadline','mono-deadline'])await t.test(mode,async t=>{
+  const f=await fixture(t);await f.driver.start(f.input);const owner=f.input.id,file=f.watchFile(),original=fsp.readFile.bind(fsp),missing=defer();let reads=0;
+  t.mock.method(fsp,'readFile',async(...args)=>{if(args[0]===file&&++reads===1){missing.resolve();throw Object.assign(Error('missing fixture'),{code:'ENOENT'});}return original(...args);});
+  const pending=f.driver.checkReady(owner);await missing.promise;
+  if(mode==='stop'||mode==='new-owner'){
+   await f.driver.stop({ownerId:owner});
+   if(mode==='new-owner'){f.input.id=randomUUID();await f.driver.start(f.input);}
+  }else if(mode==='exited')f.children[0].emit('exit',0,null);
+  else if(mode==='killed')f.children[0].killed=true;
+  else if(mode==='stale')f.advance(3001,{beat:false});
+  else if(mode==='deadline')f.wall(15*60000);
+  else{f.advance(15*60000,{beat:false});f.wall(-15*60000);}
+  assert.equal(await pending,false);assert.equal(reads,1);assert.equal(f.calls.length,0);
+  if(mode==='new-owner'){assert.equal(f.driver.view().sessionId,f.input.id);assert.equal(f.driver.view().phase,'waiting_game');assert.equal(f.driver.view().watchDiagnostic,undefined);}
+ });
+});
+test('monitor F8: errores distintos de ENOENT y archivos no regulares no se reintentan',async t=>{
+ for(const mode of ['EACCES','ENOTDIR','malformed','directory','symlink'])await t.test(mode,async t=>{
+  const f=await fixture(t);await f.driver.start(f.input);const file=f.watchFile();let reads=0;
+  if(mode==='directory'||mode==='symlink'){
+   const original=fsp.lstat.bind(fsp);t.mock.method(fsp,'lstat',async(...args)=>{if(args[0]===file){reads++;return {isFile:()=>mode==='symlink',isSymbolicLink:()=>mode==='symlink',size:100};}return original(...args);});
+  }else{
+   const original=fsp.readFile.bind(fsp);t.mock.method(fsp,'readFile',async(...args)=>{if(args[0]===file){reads++;if(mode==='malformed')return '{';throw Object.assign(Error('fixture error'),{code:mode});}return original(...args);});
+  }
+  assert.equal(await f.driver.checkReady(f.input.id),false);assert.equal(reads,1);assert.equal(f.calls.length,0);assert.equal(f.driver.view().phase,'error');
+ });
 });
 test('entrada nativa: un desacuerdo de protocolo se informa al primer rechazo sin repetir entradas',async t=>{
  const f=await fixture(t);f.native(({result})=>({...result,success:false,status:'rejected',reason:'invalid_control'}));await f.driver.start(f.input);await f.step('main');assert.equal(f.driver.view().phase,'error');assert.match(f.driver.view().reason,/no reconoce este paso/);assert.equal(f.driver.view().lastAction.reason,'invalid_control');await f.step('main');assert.equal(f.actions().length,1);
@@ -181,7 +263,7 @@ test('entrada nativa: la cola inferior real conserva la conexión propia hasta e
 test('contrato entrada JS→C#: el validador productivo acepta cada JSON original generado durante el recorrido completo',async t=>{
  if(process.platform!=='win32'){t.skip('El contrato C# se compila en Windows.');return;}
  const f=await fixture(t),compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe'),probe=path.join(f.root,'bin','GameEntryContractProbe.exe');
- execFileSync(compiler,['/nologo','/nowarn:0649','/codepage:65001','/langversion:5','/platform:x64','/target:exe','/main:GameEntryContractProbe','/r:System.Drawing.dll','/r:System.Web.Extensions.dll','/out:'+probe,...['GameWindow.cs','EntryControlVisual.cs','InputIntegrity.cs','GameEntry.cs','GameEntryContractProbe.cs'].map(name=>path.resolve('native',name))],{windowsHide:true,timeout:30000});
+ execFileSync(compiler,['/nologo','/nowarn:0649','/codepage:65001','/langversion:5','/platform:x64','/target:exe','/main:GameEntryContractProbe','/r:System.Drawing.dll','/r:System.Web.Extensions.dll','/out:'+probe,...['GameWindow.cs','EntryControlVisual.cs','InputIntegrity.cs','MouseActivity.cs','GameEntry.cs','GameEntryContractProbe.cs'].map(name=>path.resolve('native',name))],{windowsHide:true,timeout:30000});
  await f.driver.start(f.input);for(const screen of ['splash','main','categories','browser','form','form','confirmation'])await f.step(screen);
  assert.equal(f.actions().length,7,'El productor debe recorrer inicio, menú, comunidad, entrada por ID, escritura, búsqueda y confirmación.');
  for(const action of f.actions()){

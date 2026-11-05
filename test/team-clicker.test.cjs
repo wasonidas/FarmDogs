@@ -21,6 +21,46 @@ function fixture(t,{reader,anyCapability=true}={}){
 }
 const config={enabled:true,team:'blue',intervalMs:20,hotkey:'F6'};
 
+test('vigilancia F8 entre partidas: prepara el helper sin permiso de clic ni OCR y expone su identidad reciente',async t=>{
+ let reads=0;const f=fixture(t,{reader:{stop(){},view(){return {};},get busy(){return false;},async refresh(){reads++;}}});
+ const result=await f.controller.prepareStopMonitor();assert.equal(f.launches,1);assert.equal(f.command().enabled,false);assert.equal(result.enabled,false);assert.equal(result.ownerId,null);assert.equal(f.controller.blocking(),false);
+ f.native({armed:false,running:false,operatorStoppedSessionId:result.sessionId});const fresh=f.controller.view();assert.equal(fresh.controllerFresh,true);assert.equal(fresh.controllerSessionId,result.sessionId);assert.equal(fresh.operatorStoppedSessionId,result.sessionId);f.controller.tick();assert.equal(reads,0);
+ f.advance(3500);const old=f.controller.view();assert.equal(old.controllerFresh,false);assert.equal(old.controllerSessionId,null);assert.equal(old.operatorStoppedSessionId,null);
+});
+
+test('vigilancia F8 fría: renueva sólo una orden desarmada propia y conserva F8 o cancelación durante el arranque',async t=>{
+ for(const action of ['refresh','F8','stop','close','denied']){
+  const f=fixture(t);let before,child;
+  f.spawnHook(value=>{child=value;before=f.command();});const pending=f.controller.prepareStopMonitor({canContinue:()=>action!=='denied'});
+  assert.equal(before.enabled,false);assert.equal(f.controller.blocking(),false);f.advance(16000);
+  if(action==='F8')f.native({armed:false,running:false,operatorStoppedSessionId:before.sessionId});
+  else if(action==='stop')f.controller.stop();else if(action==='close')f.controller.close();
+  child.emit('spawn');await pending;assert.equal(f.command().enabled,false);
+  if(action==='refresh'){assert.notEqual(f.command().sessionId,before.sessionId);assert.equal(Date.parse(f.command().issuedAt),f.utc);assert.equal(Date.parse(f.command().expiresAt),f.utc+3000);}
+  else assert.equal(f.command().sessionId,before.sessionId);
+ }
+});
+
+test('diagnóstico del controlador: identidad cacheada sólo durante ausencia de archivo y nunca convierte un reporte viejo en fresco',async t=>{
+ const f=fixture(t);await f.controller.prepareStopMonitor();const sid=f.controller.view().sessionId;f.native({armed:false,running:false,operatorStoppedSessionId:sid});
+ const fresh=f.controller.view();assert.equal(fresh.controllerPid,1234);assert.equal(fresh.controllerAlive,true);assert.equal(fresh.controllerReportRead,true);assert.equal(fresh.controllerReportStatus,'read');assert.equal(fresh.controllerFresh,true);
+ f.advance(4000);const stale=f.controller.view();assert.equal(stale.controllerFresh,false);assert.equal(stale.controllerReportAgeMs,4000);assert.equal(stale.operatorStoppedSessionId,null);assert.equal(stale.controllerOperatorStoppedSessionId,sid);assert.equal(stale.controllerSessionId,null);assert.equal(stale.controllerReportSessionId,sid);
+ fs.unlinkSync(path.join(f.dir,'team-clicker-state.json'));const missing=f.controller.view();assert.equal(missing.controllerFresh,false);assert.equal(missing.controllerReportRead,false);assert.equal(missing.controllerReportStatus,'unavailable');assert.equal(missing.controllerIdentitySource,'cached');assert.equal(missing.controllerPid,1234);assert.equal(missing.controllerAlive,true);assert.equal(missing.controllerReportSessionId,sid);
+ fs.writeFileSync(path.join(f.dir,'team-clicker-state.json'),JSON.stringify({format:'other',pid:1234,at:new Date(f.utc).toISOString(),sessionId:sid}));const malformed=f.controller.view();assert.equal(malformed.controllerReportStatus,'unexpected_format');assert.equal(malformed.controllerIdentitySource,'none');assert.equal(malformed.controllerFresh,false);assert.equal(malformed.controllerPid,null);
+});
+
+test('capacidad: las vistas reutilizan el hash sin ocultar cambios de archivo y el armado revalida los bytes',async t=>{
+ const f=fixture(t),bin=path.join(f.dir,'bin');fs.mkdirSync(bin);const binary=path.join(bin,'WardogsTeamClicker.exe'),bytes=Buffer.from('never executed');fs.writeFileSync(binary,bytes);
+ fs.writeFileSync(path.join(bin,'team-clicker-capabilities.json'),JSON.stringify({format:'wardogs-team-clicker-capabilities-v1',teamClicker:true,mousePause:true,automaticTeamRecognition:true,automaticTeamSelection:true,messageHotkeys:true,persistentTeamAttempt:true,positiveEntryConfirmation:true,sha256:require('node:crypto').createHash('sha256').update(bytes).digest('hex')}));
+ const read=fs.readFileSync;let binaryReads=0;fs.readFileSync=function(file,...args){if(file===binary)binaryReads++;return read.call(this,file,...args);};
+ const c=createTeamClicker({root:f.dir,dataDir:f.dir,platform:'win32',spawnProcess(){throw Error('No process is allowed in this test.');}});
+ try{
+  assert.equal(c.view().available,true);assert.equal(binaryReads,1);for(let n=0;n<100;n++)c.view();assert.equal(binaryReads,1);
+  await assert.rejects(c.configure({...config,startMode:'automatic'}),/process|No se pudo/i);assert.equal(binaryReads,2);
+  fs.appendFileSync(binary,' changed');assert.equal(c.view().available,false);assert.equal(binaryReads,3);await assert.rejects(c.configure(config),/controlador/);assert.equal(binaryReads,4);
+ }finally{fs.readFileSync=read;c.close();}
+});
+
 test('equipo automático: pausa de contexto conserva dueño/plazo; estado caducado o desactivado no anuncia reanudación',async t=>{
  const f=fixture(t),ownerId='11111111-1111-4111-8111-111111111111',endAt=new Date(f.utc+1800000).toISOString();
  await f.controller.prepareOwned({ownerId,team:'green',endAt,canArm:async()=>true});
@@ -44,7 +84,7 @@ test('contrato JS→C#: los JSON originales de preparación y grant arman una se
  f.spawnHook(child=>{commands.push(f.command());f.advance(16000);queueMicrotask(()=>child.emit('spawn'));});
  await f.controller.prepareOwned({ownerId:'11111111-1111-4111-8111-111111111111',team:'any',endAt:new Date(f.utc+60000).toISOString(),canArm:async()=>true});commands.push(f.command());
  const compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe'),probe=path.join(f.dir,'StartupContractProbe.exe'),sequence=path.join(f.dir,'startup-sequence.json');
- execFileSync(compiler,['/nologo','/langversion:5','/platform:x64','/target:exe','/main:TeamClickerStartupContractProbe','/r:System.Web.Extensions.dll','/out:'+probe,path.join(__dirname,'..','native','TeamClickerCore.cs'),path.join(__dirname,'..','native','TeamClickerStartupContractProbe.cs')],{encoding:'utf8',windowsHide:true,timeout:30000});
+ execFileSync(compiler,['/nologo','/langversion:5','/platform:x64','/target:exe','/main:TeamClickerStartupContractProbe','/r:System.Web.Extensions.dll','/out:'+probe,path.join(__dirname,'..','native','MouseActivity.cs'),path.join(__dirname,'..','native','TeamClickerCore.cs'),path.join(__dirname,'..','native','TeamClickerStartupContractProbe.cs')],{encoding:'utf8',windowsHide:true,timeout:30000});
  // Cold Windows executable startup can exceed 5s before this input-free probe
  // begins. Keep its test timeout separate from the production input leases.
  const validate=values=>{fs.writeFileSync(sequence,JSON.stringify(values));return JSON.parse(execFileSync(probe,[sequence],{encoding:'utf8',windowsHide:true,timeout:30000}));};
@@ -115,8 +155,8 @@ test('autoclic propietario: F8 y DESPLEGANDO conservan el propietario pero nunca
 
 test('autoclic: valida color, intervalo y tecla sin aceptar coordenadas inventadas',()=>{
  for(const value of [{...config,team:'orange'},{...config,intervalMs:1},{...config,intervalMs:2001},{...config,intervalMs:20.5},{...config,hotkey:'F8'},{...config,enabled:'yes'},{...config,startMode:'invented'}])assert.throws(()=>validateClicker(value));
- assert.deepEqual(validateClicker({...config,x:42,y:12}),{team:'blue',intervalMs:20,startMode:'hotkey',hotkey:'F6'});
- assert.deepEqual(validateClicker({enabled:true,team:'red',intervalMs:20,startMode:'automatic'}),{team:'red',intervalMs:20,startMode:'automatic',hotkey:null});
+ assert.deepEqual(validateClicker({...config,x:42,y:12}),{team:'blue',intervalMs:20,startMode:'hotkey',hotkey:'F6',mousePause:{enabled:true,resumeAfterSeconds:3}});
+ assert.deepEqual(validateClicker({enabled:true,team:'red',intervalMs:20,startMode:'automatic'}),{team:'red',intervalMs:20,startMode:'automatic',hotkey:null,mousePause:{enabled:true,resumeAfterSeconds:3}});
 });
 
 test('autoclic aleatorio: solo la entrada propietaria y un helper capaz pueden prepararlo, sin cambiar la preferencia del clan',async t=>{
@@ -295,7 +335,7 @@ test('autoclic: cancelar antes de empezar la lectura no abre el capturador pendi
 test('autoclic: rechaza un helper sin persistencia y confirmación positiva aunque su hash coincida',async t=>{
  const f=fixture(t);f.controller.close();fs.mkdirSync(path.join(f.dir,'bin'));
  const bytes=Buffer.from('fake helper, never executed');fs.writeFileSync(path.join(f.dir,'bin','WardogsTeamClicker.exe'),bytes);
- const cap={format:'wardogs-team-clicker-capabilities-v1',teamClicker:true,automaticTeamRecognition:true,messageHotkeys:true,sha256:require('node:crypto').createHash('sha256').update(bytes).digest('hex')};
+ const cap={format:'wardogs-team-clicker-capabilities-v1',teamClicker:true,mousePause:true,automaticTeamRecognition:true,messageHotkeys:true,sha256:require('node:crypto').createHash('sha256').update(bytes).digest('hex')};
  const capFile=path.join(f.dir,'bin','team-clicker-capabilities.json');fs.writeFileSync(capFile,JSON.stringify(cap));
  const controller=createTeamClicker({root:f.dir,dataDir:f.dir,platform:'win32'});
  try{assert.equal(controller.view().available,false);await assert.rejects(controller.configure(config),/controlador/);fs.writeFileSync(capFile,JSON.stringify({...cap,persistentTeamAttempt:true,positiveEntryConfirmation:true}));assert.equal(controller.view().available,false);assert.equal(controller.view().automaticSelectionAvailable,false);fs.writeFileSync(capFile,JSON.stringify({...cap,persistentTeamAttempt:true,positiveEntryConfirmation:true,automaticTeamSelection:true}));assert.equal(controller.view().available,true);assert.equal(controller.view().automaticSelectionAvailable,true);assert.equal(controller.view().automaticAnyTeamAvailable,false);fs.writeFileSync(capFile,JSON.stringify({...cap,persistentTeamAttempt:true,positiveEntryConfirmation:true,automaticTeamSelection:true,automaticAnyTeam:true}));assert.equal(controller.view().automaticAnyTeamAvailable,true);fs.appendFileSync(path.join(f.dir,"bin","WardogsTeamClicker.exe"),"tampered");assert.equal(controller.view().automaticAnyTeamAvailable,false);}finally{controller.close();}

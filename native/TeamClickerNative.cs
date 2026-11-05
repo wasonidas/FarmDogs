@@ -6,7 +6,12 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
 namespace WardogsSeeding {
- public sealed class TeamClickerNative : ITeamClickerPlatform,ITeamClickerAnyPlatform,ITeamClickerButtonInput {
+ public sealed class TeamClickerNative : ITeamClickerPlatform,ITeamClickerAnyPlatform,ITeamClickerButtonInput,ITeamClickerMousePlatform,IDisposable {
+  readonly UserMouseActivity mouseActivity=new UserMouseActivity();
+  public void ConfigureMousePause(MousePauseSettings settings,bool enabled){mouseActivity.Configure(settings,enabled);}
+  public MousePauseSnapshot MousePause(DateTime now){return mouseActivity.View(now);}
+  public long MouseRevision{get{return mouseActivity.Revision;}}
+  public void Dispose(){mouseActivity.Dispose();}
   int integrityPid;string integrityStatus;
   void CheckIntegrity(TeamClickerFrame frame){if(frame==null||frame.Pid<=0)return;if(integrityPid!=frame.Pid){integrityStatus=InputIntegrity.Assess(frame.Pid).Status;integrityPid=frame.Pid;}if(integrityStatus=="requires_elevation")throw new InvalidOperationException("Wardogs esta abierto con permisos superiores. Cierra FarmDogs por completo y vuelve a abrirla como administrador, o abre ambos con permisos normales.");}
   TeamClickerAnySelector anySelector;
@@ -21,7 +26,8 @@ namespace WardogsSeeding {
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
   [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h,out RECT rect);
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h,ref POINT p);
-  [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+  [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+  [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT point);
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
   [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint n,INPUT[] inputs,int size);
@@ -90,15 +96,21 @@ namespace WardogsSeeding {
   }
   public bool PatchMatches(TeamClickerFrame frame,TeamClickerTarget target){return target.Valid()&&TeamClickerPatch.Matches(target.signature,Sample(frame,target));}
   static void Mouse(uint flags) {
-   INPUT input=new INPUT();input.type=0;input.data.mouse.flags=flags;
+   INPUT input=new INPUT();input.type=0;input.data.mouse.flags=flags;input.data.mouse.extra=FarmDogsInputMarker.Value;
    if(SendInput(1,new[]{input},Marshal.SizeOf(typeof(INPUT)))!=1)throw new InvalidOperationException("Windows no ha aceptado el clic ("+Marshal.GetLastWin32Error()+").");
   }
   public void Button(bool down){Mouse(down?0x0002u:0x0004u);}
   public void Click(TeamClickerFrame frame,TeamClickerTarget target) {
    CheckStop();CheckIntegrity(frame);
+   if(mouseActivity.Paused)throw new TeamClickerContextPauseException("Pausado mientras usas el raton.");
    POINT origin=Origin(frame),point=new POINT(origin.X+target.x,origin.Y+target.y);
    if(ModifiersDown()||!PointBelongs(frame,point))throw new TeamClickerContextPauseException("El juego no esta listo para recibir el clic.");
-   if(!SetCursorPos(point.X,point.Y))throw new InvalidOperationException("No se pudo situar el cursor sobre el equipo.");
+   int left=GetSystemMetrics(76),top=GetSystemMetrics(77),width=GetSystemMetrics(78),height=GetSystemMetrics(79);
+   if(width<=1||height<=1)throw new InvalidOperationException("El escritorio no tiene una geometria valida.");
+   INPUT movement=new INPUT();movement.type=0;movement.data.mouse.dx=(int)Math.Round((point.X-left)*65535d/(width-1));movement.data.mouse.dy=(int)Math.Round((point.Y-top)*65535d/(height-1));movement.data.mouse.flags=0x0001u|0x8000u|0x4000u;movement.data.mouse.extra=FarmDogsInputMarker.Value;
+   if(SendInput(1,new[]{movement},Marshal.SizeOf(typeof(INPUT)))!=1)throw new InvalidOperationException("No se pudo situar el cursor sobre el equipo.");
+   POINT actual;if(!GetCursorPos(out actual)||Math.Abs(actual.X-point.X)>1||Math.Abs(actual.Y-point.Y)>1)throw new TeamClickerContextPauseException("El cursor se ha movido antes del clic.");
+   if(mouseActivity.Paused)throw new TeamClickerContextPauseException("Pausado mientras usas el raton.");
    CheckStop();if(ModifiersDown()||!PointBelongs(frame,point))throw new TeamClickerContextPauseException("El juego ha perdido el foco antes del clic.");
    // Always attempt button-up, including a rejected/partial down or focus change.
    TeamClickerButton.Click(this,()=>{
@@ -106,6 +118,7 @@ namespace WardogsSeeding {
     // can be accepted by Windows without being observed by the game.
     System.Threading.Thread.Sleep(15);
     CheckStop();
+    if(mouseActivity.Paused)throw new TeamClickerContextPauseException("Pausado mientras usas el raton.");
     if(ModifiersDown()||!Same(frame)||!PointBelongs(frame,point))throw new TeamClickerContextPauseException("El juego ha perdido el foco durante el clic.");
     POINT after=Origin(frame);if(after.X!=origin.X||after.Y!=origin.Y)throw new TeamClickerContextPauseException("La ventana ha cambiado durante el clic.");
    });

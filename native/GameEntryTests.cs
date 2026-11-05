@@ -32,16 +32,17 @@ internal static class GameEntryTests
             graphics.Clear(Color.FromArgb(20,20,20));for(int x=42;x<198;x+=8)graphics.FillRectangle(Brushes.White,x,55,3,22);
         }return frame;
     }
-    private sealed class FakePlatform : IEntryPlatform
+    private sealed class FakePlatform : IEntryPlatform,IEntryMouseActivity
     {
         internal EntryWindow Window=new EntryWindow {Pid=123,Handle=456,Width=640,Height=480,OriginX=10,OriginY=20};
-        internal bool Focus=true,Stop,Modifiers,Obstructed,ChangedPatch,FailClick,FailSelect,FailType,FailStart,DeployReady=true;
+        internal bool Focus=true,Stop,Modifiers,Obstructed,ChangedPatch,FailClick,FailSelect,FailType,FailStart,DeployReady=true,MouseBusy;
         internal int Clicks,Selects,Releases,Moves,Starts,StopAfterCharacters=-1;
         internal string Characters="";internal Bitmap Frame;internal Action OnMove,OnClick,OnSelect,OnStart;internal DateTime NowValue=Now;internal long Elapsed;internal Point LastPoint;internal Rectangle LastCapture;internal Rectangle? ChangedRegion;
         public DateTime UtcNow {get{return NowValue;}}
         public long ElapsedMilliseconds {get{return Elapsed;}}
         public bool StopRequested(){return Stop||(StopAfterCharacters>=0&&Characters.Length>=StopAfterCharacters);}
         public bool ModifiersDown(){return Modifiers;}
+        public bool MousePaused(){return MouseBusy;}
         public EntryWindow ForegroundGame(){return Focus?new EntryWindow {Pid=Window.Pid,Handle=Window.Handle,Width=Window.Width,Height=Window.Height,OriginX=Window.OriginX,OriginY=Window.OriginY}:null;}
         public bool PointBelongs(EntryWindow window,Point point){return !Obstructed;}
         public Bitmap CapturePatch(EntryWindow window,Rectangle bounds){LastCapture=bounds;return ChangedPatch||ChangedRegion.HasValue&&ChangedRegion.Value==bounds?new Bitmap(bounds.Width,bounds.Height):Frame.Clone(bounds,PixelFormat.Format32bppArgb);}
@@ -141,7 +142,7 @@ internal static class GameEntryTests
             Check(fake.LastCapture==new Rectangle(40,50,160,32)&&fake.LastPoint==new Point(90,115)&&fake.Characters==Id,"Blank field did not use the distinct instruction anchor");
             command.bounds=command.anchorBounds;command.anchorBounds=null;
             Action<Action<FakePlatform>,string> blocked=(edit,reason)=>{var platform=new FakePlatform {Frame=image};edit(platform);Reject(()=>GameEntryRunner.Run(command,platform,image),reason);Check(platform.Clicks==0&&platform.Characters=="","Blocked action sent input");};
-            blocked(p=>p.Stop=true,"operator_stop");blocked(p=>{p.Stop=true;p.Focus=false;},"operator_stop");blocked(p=>p.Modifiers=true,"operator_input");blocked(p=>p.Focus=false,"game_not_foreground");blocked(p=>p.Window.Pid=999,"game_window_changed");blocked(p=>p.Window.Handle=999,"game_window_changed");blocked(p=>p.Window.Width=641,"game_window_changed");blocked(p=>p.Obstructed=true,"cursor_obstructed");blocked(p=>p.ChangedPatch=true,"stale_target");blocked(p=>p.Elapsed=3000,"expired_command");blocked(p=>p.NowValue=Now.AddSeconds(3),"expired_command");blocked(p=>p.OnMove=()=>p.Focus=false,"game_not_foreground");
+            blocked(p=>p.Stop=true,"operator_stop");blocked(p=>{p.Stop=true;p.Focus=false;},"operator_stop");blocked(p=>p.Modifiers=true,"operator_input");blocked(p=>p.MouseBusy=true,"user_mouse_active");blocked(p=>{p.Stop=true;p.MouseBusy=true;},"operator_stop");blocked(p=>p.OnMove=()=>p.MouseBusy=true,"user_mouse_active");blocked(p=>p.Focus=false,"game_not_foreground");blocked(p=>p.Window.Pid=999,"game_window_changed");blocked(p=>p.Window.Handle=999,"game_window_changed");blocked(p=>p.Window.Width=641,"game_window_changed");blocked(p=>p.Obstructed=true,"cursor_obstructed");blocked(p=>p.ChangedPatch=true,"stale_target");blocked(p=>p.Elapsed=3000,"expired_command");blocked(p=>p.NowValue=Now.AddSeconds(3),"expired_command");blocked(p=>p.OnMove=()=>p.Focus=false,"game_not_foreground");
             fake=new FakePlatform {Frame=image,StopAfterCharacters=10};Reject(()=>GameEntryRunner.Run(command,fake,image),"operator_stop");Check(fake.Characters.Length==10&&fake.Releases==1,"F8 failed to bound typing or release");
             fake=new FakePlatform {Frame=image};var modified=fake;fake.OnSelect=()=>modified.Modifiers=true;Reject(()=>GameEntryRunner.Run(command,fake,image),"operator_input");Check(fake.Characters==""&&fake.Releases==1,"Modifier during select did not stop");
             fake=new FakePlatform {Frame=image};var moved=fake;fake.OnClick=()=>moved.Window.OriginX++;Reject(()=>GameEntryRunner.Run(command,fake,image),"game_window_changed");Check(fake.Characters==""&&fake.Releases==1,"Moved window received text");

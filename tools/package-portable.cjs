@@ -4,19 +4,23 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..');
+const {verifyDesktopBuildProof,getDesktopBuildProofPath}=require('./desktop-build-proof.cjs');
 const fixed=['FarmDogs.exe','LICENSE','README.md','package.json','bin/FarmDogsApp.exe','bin/WardogsMovement.exe','bin/WardogsTeamClicker.exe','bin/team-clicker-capabilities.json','bin/WardogsEntry.exe','bin/entry-capabilities.json','bin/FarmDogsUpdater.exe','bin/WardogsImageText.exe','bin/Microsoft.Web.WebView2.Core.dll','bin/Microsoft.Web.WebView2.WinForms.dll','bin/WebView2Loader.dll','bin/movement-capabilities.json','bin/runtime/node.exe','bin/runtime/LICENSE','bin/runtime/runtime.json'];
 const files=[...fixed];
 const desktopStaged=process.argv.includes('--staging-desktop');
-const sourceFile=relative=>path.join(root,desktopStaged&&relative==='bin/FarmDogsApp.exe'?'bin/FarmDogsApp.next.exe':relative);
-for(const directory of ['src','public'])for(const entry of fs.readdirSync(path.join(root,directory),{withFileTypes:true}))if(entry.isFile()&&(/\.(?:cjs|js|html|css)$/.test(entry.name)||directory==='public'&&/\.(?:png|ttf|txt)$/.test(entry.name)))files.push(directory+'/'+entry.name);
+files.push('bin/desktop-build-proof.json');
+const desktopOutput=path.join(root,desktopStaged?'bin/FarmDogsApp.next.exe':'bin/FarmDogsApp.exe');
+const sourceFile=relative=>relative==='bin/desktop-build-proof.json'?getDesktopBuildProofPath(desktopOutput):relative==='bin/FarmDogsApp.exe'?desktopOutput:path.join(root,relative);
+verifyDesktopBuildProof({root,output:desktopOutput});
+for(const directory of ['src','public'])for(const entry of fs.readdirSync(path.join(root,directory),{withFileTypes:true}))if(entry.isFile()&&(/\.(?:cjs|js|html|css)$/.test(entry.name)||directory==='public'&&/\.(?:png|webp|svg|ttf|txt)$/.test(entry.name)))files.push(directory+'/'+entry.name);
 for(const relative of files)if(!fs.statSync(sourceFile(relative)).isFile())throw Error('Falta '+relative);
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const cap=JSON.parse(fs.readFileSync(path.join(root,'bin/movement-capabilities.json')));
-if(cap.sha256!==hash(path.join(root,'bin/WardogsMovement.exe')))throw Error('El controlador y sus capacidades no coinciden.');
+if(cap.automaticMovement!==true||cap.mousePause!==true||cap.sha256!==hash(path.join(root,'bin/WardogsMovement.exe')))throw Error('El controlador y sus capacidades no coinciden.');
 const clickCap=JSON.parse(fs.readFileSync(path.join(root,'bin/team-clicker-capabilities.json')));
-if(clickCap.format!=='wardogs-team-clicker-capabilities-v1'||clickCap.teamClicker!==true||clickCap.automaticTeamRecognition!==true||clickCap.automaticTeamSelection!==true||clickCap.automaticAnyTeam!==true||clickCap.messageHotkeys!==true||clickCap.persistentTeamAttempt!==true||clickCap.positiveEntryConfirmation!==true||clickCap.sha256!==hash(path.join(root,'bin/WardogsTeamClicker.exe')))throw Error('El autoclic y sus capacidades no coinciden.');
+if(clickCap.format!=='wardogs-team-clicker-capabilities-v1'||clickCap.mousePause!==true||clickCap.teamClicker!==true||clickCap.automaticTeamRecognition!==true||clickCap.automaticTeamSelection!==true||clickCap.automaticAnyTeam!==true||clickCap.messageHotkeys!==true||clickCap.persistentTeamAttempt!==true||clickCap.positiveEntryConfirmation!==true||clickCap.sha256!==hash(path.join(root,'bin/WardogsTeamClicker.exe')))throw Error('El autoclic y sus capacidades no coinciden.');
 const entryCap=JSON.parse(fs.readFileSync(path.join(root,'bin/entry-capabilities.json')));
-if(entryCap.automaticEntry!==true||entryCap.stopWatcher!==true||entryCap.mainDeployGate!==true||entryCap.splashKeyStart!==true||entryCap.absolutePointer!==true||entryCap.restartRecovery!==true||entryCap.sha256!==hash(path.join(root,'bin/WardogsEntry.exe')))throw Error('La entrada automática y sus capacidades no coinciden.');
+if(entryCap.automaticEntry!==true||entryCap.mousePause!==true||entryCap.stopWatcher!==true||entryCap.mainDeployGate!==true||entryCap.splashKeyStart!==true||entryCap.absolutePointer!==true||entryCap.restartRecovery!==true||entryCap.sha256!==hash(path.join(root,'bin/WardogsEntry.exe')))throw Error('La entrada automática y sus capacidades no coinciden.');
 const stamp=new Date().toISOString().replace(/[^0-9]/g,'');
 const build=path.join(root,'dist','portable-'+stamp),folder=path.join(build,'FarmDogs');
 fs.mkdirSync(folder,{recursive:true});
@@ -54,7 +58,8 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'Mantiene clics continuos al intervalo elegido. El color apagado o el equilibrio no pausan el bucle.',
  'Se detiene automáticamente al leer DESPLEGANDO. Esa lectura trabaja en paralelo con los clics.',
  'El modo automático pausa sin clicar al perder el foco o con modificadores; al volver exige reconocer de nuevo el selector de la misma ventana y tamaño.',
- 'Mover el ratón o un color apagado no cancelan. No bloquea el ratón: mientras clica vuelve a situarlo sobre el equipo. F8/Cancelar sí terminan.',
+ 'Mover el ratón pausa temporalmente los automatismos sin cancelar. Al soltarlo, espera el plazo configurado y reconoce de nuevo la pantalla antes de continuar.',
+ 'En Ajustes puedes cambiar esta pausa de 1 a 30 segundos o desactivarla. F8/Cancelar sí terminan y no reanudan por sí solos.',
  'La ventana del launcher es compacta y fija; se minimiza al ceder el foco inicial autorizado al juego. No recupera el foco indefinidamente.',
  'Si Wardogs tiene permisos superiores al controlador, informa para cerrar FarmDogs por completo y abrirla como administrador, o abrir ambos normalmente.',
  'Después de DESPLEGANDO, el autoclic se desactiva y puedes preparar seeding.',
@@ -93,6 +98,9 @@ fs.writeFileSync(path.join(folder,'LEEME.txt'),[
  'Reglas de premios: https://wardogsspain.com/vip',
  '',
  'Los datos que cree la app se guardan en data junto a ella. Este paquete no contiene data, cuentas, cookies, historial ni capturas.',
+ 'Perfiles guarda ajustes para cargarlos después; cargarlos no inicia ninguna tarea.',
+ 'Historial registra las sesiones desde esta versión. Comprobar Errores consulta el estado sin abrir el juego ni efectuar reparaciones.',
+ 'La barra inferior mantiene el estado de la tarea y su parada a la vista. Los sonidos de menú son originales y pueden desactivarse junto con las animaciones.',
  'Node incluye su LICENSE completo en bin/runtime. WebView2 incluye LICENSE y NOTICE en licenses.',
  'FarmDogs comprueba nuevas versiones públicas de wasonidas/FarmDogs en GitHub, verifica el ZIP y espera a estar inactiva para instalar.',
  'La actualización conserva data y el perfil Steam y vuelve a abrir FarmDogs sin reactivar una sesión anterior.',

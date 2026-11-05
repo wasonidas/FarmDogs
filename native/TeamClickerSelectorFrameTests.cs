@@ -3,18 +3,23 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.IO;
+using System.Reflection;
 using WardogsSeeding;
 
 public static class TeamClickerSelectorFrameTests {
  static int checks;
  static readonly DateTime Time=new DateTime(2026,10,31,10,0,0,DateTimeKind.Utc);
  static void Check(bool value,string message){checks++;if(!value)throw new Exception("Selector frame: "+message);}
- static Bitmap Selector(int width,int height,bool header=true,bool outer=true,bool third=true){
+ static Bitmap Selector(int width,int height,bool header=true,bool outer=true,bool third=true,bool tinted=false){
   var image=new Bitmap(width,height,PixelFormat.Format32bppArgb);float scale=height/1440f,left=width*.5f-306*scale,top=height*.5f-162*scale;
   using(var graphics=Graphics.FromImage(image))using(var border=new Pen(Color.FromArgb(145,145,145),Math.Max(1,scale)))using(var card=new Pen(Color.FromArgb(100,100,100),Math.Max(1,scale))){
    graphics.Clear(Color.FromArgb(25,25,25));
-   if(outer){graphics.FillRectangle(Brushes.Black,left,top,612*scale,324*scale);graphics.DrawRectangle(border,left,top,612*scale,324*scale);graphics.DrawLine(card,left,top+54*scale,left+612*scale,top+54*scale);}
-   for(int column=0;column<(third?3:2);column++)graphics.DrawRectangle(card,left+(16+200*column)*scale,top+72*scale,180*scale,236*scale);
+   if(outer){using(var panel=new SolidBrush(tinted?Color.FromArgb(31,31,31):Color.Black))graphics.FillRectangle(panel,left,top,612*scale,324*scale);graphics.DrawRectangle(border,left,top,612*scale,324*scale);graphics.DrawLine(card,left,top+54*scale,left+612*scale,top+54*scale);}
+   for(int column=0;column<(third?3:2);column++){
+    float x=left+(16+200*column)*scale,y=top+72*scale;
+    if(tinted){using(var fill=new SolidBrush(column==1?Color.FromArgb(21,9,7):Color.FromArgb(4,4,4)))using(var edge=new Pen(column==1?Color.FromArgb(36,23,22):Color.FromArgb(24,24,24),Math.Max(1,scale))){graphics.FillRectangle(fill,x,y,180*scale,236*scale);graphics.DrawRectangle(edge,x,y,180*scale,236*scale);}}
+    else graphics.DrawRectangle(card,x,y,180*scale,236*scale);
+   }
    if(header)using(var font=new Font("Arial",26*scale,FontStyle.Regular,GraphicsUnit.Pixel)){graphics.TextRenderingHint=TextRenderingHint.AntiAliasGridFit;graphics.DrawString("// SELECCIONAR FACCIÓN",font,Brushes.LightGray,left+12*scale,top+8*scale);}
   }
   return image;
@@ -51,6 +56,24 @@ public static class TeamClickerSelectorFrameTests {
    using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb)){var choices=proof.Available(region,Time);Check(choices.Count==1&&choices.ContainsKey("green"),"closed chosen color is removed while another remains");}
    using(var graphics=Graphics.FromImage(image))graphics.FillRectangle(Brushes.Black,snapshot.HeaderBounds);
    using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb))Check(proof.Available(region,Time).Count==0,"colored patch without current selector header cannot authorize HUD clicks");
+  }
+  // Pixel-only regression for the observed dim red/green selector. The gray
+  // panel is brighter perceptually than the red-tinted card even though their
+  // strongest channels differ by only ten. No coordinates or logo color may
+  // substitute for the three current card outlines and header.
+  foreach(var size in new[]{new Size(1280,720),new Size(1920,1080),new Size(2560,1440),new Size(3440,1440)})using(var image=Selector(size.Width,size.Height,true,true,true,true)){
+   TeamClickerSelectorSnapshot snapshot;Check(TeamClickerSelectorFrame.TryRecognizeAll(image,Time,out snapshot),"dim tinted cards retain current structural acquisition "+size);
+   var proof=new TeamClickerAnySelector(image,snapshot);
+   using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb))Check(proof.Available(region,Time).Count==0,"dim tinted cards do not imply availability");
+   PaintAvailable(image,snapshot.Targets["blue"],Brushes.DeepSkyBlue);
+   using(var region=image.Clone(proof.ReadBounds,PixelFormat.Format32bppArgb)){var available=proof.Available(region,Time);Check(available.Count==1&&available.ContainsKey("blue"),"only positively available blue survives tinted structural acquisition");}
+  }
+  foreach(var image in new[]{Selector(1920,1080,false,true,true,true),Selector(1920,1080,true,false,true,true),Selector(1920,1080,true,true,false,true)})using(image){TeamClickerSelectorSnapshot snapshot;Check(!TeamClickerSelectorFrame.TryRecognizeAll(image,Time,out snapshot),"dim tint still requires header, containing panel and all three cards");}
+  foreach(var tint in new[]{Color.FromArgb(100,30,30),Color.FromArgb(30,100,30),Color.FromArgb(30,30,100)})using(var image=new Bitmap(1280,720,PixelFormat.Format32bppArgb)){
+   using(var graphics=Graphics.FromImage(image))graphics.Clear(tint);
+   var pixels=typeof(TeamClickerSelectorFrame).GetMethod("Read",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{image});
+   var edge=pixels.GetType().GetMethod("Edge");
+   foreach(bool horizontal in new[]{false,true})Check(!(bool)edge.Invoke(pixels,new object[]{640,360,horizontal}),"flat tinted surface cannot provide a card edge "+tint+" "+horizontal);
   }
   return checks;
  }

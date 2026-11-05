@@ -4,6 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {spawn}=require('node:child_process');
 const {atomicJson,readJson}=require('./store.cjs');
+const {normalizeMousePause,mousePauseView}=require('./mouse-pause.cjs');
 const {createScreenReader}=require('./screen-reader.cjs');
 const {classifyTeamEntry,clickerAttempt,attemptKey,currentAttemptScreen,entryProof}=require('./team-clicker-entry.cjs');
 const TEAMS=['blue','red','green'];
@@ -17,14 +18,14 @@ function validateClicker(input,{allowAny=false}={}){
  if(!['automatic','hotkey'].includes(startMode))throw Error('Elige un modo de selección de equipo válido.');
  if(startMode==='hotkey'&&input.hotkey!==undefined&&input.hotkey!=='F6')throw Error('La tecla de autoclic es F6.');
  if(startMode==='automatic'&&input.hotkey!==undefined&&input.hotkey!==null&&input.hotkey!=='F6')throw Error('El modo automático no usa una tecla de inicio.');
- return {team:input.team,intervalMs:input.intervalMs,startMode,hotkey:startMode==='automatic'?null:'F6'};
+ return {team:input.team,intervalMs:input.intervalMs,startMode,hotkey:startMode==='automatic'?null:'F6',mousePause:normalizeMousePause(input.mousePause)};
 }
 function createTeamClicker({root,dataDir,now=Date.now,monoNow=()=>performance.now(),event=()=>{},platform=process.platform,spawnProcess=spawn,servicePid=process.pid,isProcessAlive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}},capabilityCheck,reader}={}){
  const binary=path.join(root,'bin','WardogsTeamClicker.exe');
  const commandFile=path.join(dataDir,'team-clicker-command.json'),stateFile=path.join(dataDir,'team-clicker-state.json'),settingsFile=path.join(dataDir,'team-clicker-settings.json');
- let settings={team:'blue',intervalMs:20,startMode:'automatic',hotkey:null};
+ let settings={team:'blue',intervalMs:20,startMode:'automatic',hotkey:null,mousePause:normalizeMousePause()};
  try{settings=validateClicker({...readJson(settingsFile),enabled:false});}catch{}
- let enabled=false,sessionId=null,lastUiMono=null,calibratingTeam=null,calibrationRequestedAt=null,previousCapture=null,closed=false,launching=null,preparation=null;
+ let enabled=false,sessionId=null,lastUiMono=null,calibratingTeam=null,calibrationRequestedAt=null,previousCapture=null,closed=false,launching=null,preparation=null,monitorPreparation=null;
  // The full-entry coordinator owns a bounded lease instead of borrowing a
  // browser heartbeat. Ownership remains visible through native stop/completion.
  let ownerId=null,ownerEndAt=null,ownerStartedMono=null,ownerAllowedMs=null;
@@ -32,23 +33,45 @@ function createTeamClicker({root,dataDir,now=Date.now,monoNow=()=>performance.no
  const entryReader=reader||createScreenReader({root,dataDir,now,directory:path.join(dataDir,'team-clicker-monitor'),classify:classifyTeamEntry});
  let entryIdentity=null,entryGeneration=0,entryReadJob=null,lastEntryRead=-Infinity,submittedEntry=null;
  let entryConfirmation={status:'idle',reason:'Sin intento pendiente.'};
- function available(){
+ let capabilities=null,capabilityStamp=null;
+ let lastControllerIdentity=null;
+ function available(force=false){
   if(capabilityCheck)return capabilityCheck();
   if(platform!=='win32')return false;
-  try{const cap=readJson(path.join(root,'bin','team-clicker-capabilities.json'));return cap?.format==='wardogs-team-clicker-capabilities-v1'&&cap.teamClicker===true&&cap.automaticTeamRecognition===true&&cap.automaticTeamSelection===true&&cap.messageHotkeys===true&&cap.persistentTeamAttempt===true&&cap.positiveEntryConfirmation===true&&cap.sha256===crypto.createHash('sha256').update(fs.readFileSync(binary)).digest('hex');}catch{return false;}
+  try{
+   const capFile=path.join(root,'bin','team-clicker-capabilities.json'),binStat=fs.statSync(binary),capStat=fs.statSync(capFile),stamp=[binStat.size,binStat.mtimeMs,binStat.ctimeMs,capStat.size,capStat.mtimeMs,capStat.ctimeMs].join(':');
+   if(!force&&stamp===capabilityStamp)return capabilities?.available===true;
+   const cap=readJson(capFile),valid=cap?.format==='wardogs-team-clicker-capabilities-v1'&&cap.teamClicker===true&&cap.automaticTeamRecognition===true&&cap.automaticTeamSelection===true&&cap.messageHotkeys===true&&cap.persistentTeamAttempt===true&&cap.positiveEntryConfirmation===true&&cap.sha256===crypto.createHash('sha256').update(fs.readFileSync(binary)).digest('hex');
+   capabilityStamp=stamp;capabilities={available:valid,any:valid&&cap.automaticAnyTeam===true,mousePause:valid&&cap.mousePause===true};return valid;
+  }catch{capabilityStamp=null;capabilities={available:false,any:false};return false;}
  }
  function native(){try{return readJson(stateFile);}catch{return null;}}
- function anyAvailable(){if(!available())return false;if(capabilityCheck)return capabilityCheck('automaticAnyTeam')===true;return readJson(path.join(root,'bin','team-clicker-capabilities.json'))?.automaticAnyTeam===true;}
+ function anyAvailable(knownAvailable){if((knownAvailable===undefined?available():knownAvailable)!==true)return false;if(capabilityCheck)return capabilityCheck('automaticAnyTeam')===true;return capabilities?.any===true;}
  function actualTeam(current,completed=false){const value=completed?current?.completedActualTeam:current?.actualTeam;return TEAMS.includes(value)?value:settings.team!=='any'?settings.team:null;}
- function fresh(value){const age=now()-Date.parse(value?.at);return value?.format==='wardogs-team-clicker-state-v1'&&Number.isInteger(value.pid)&&value.pid>0&&Number.isFinite(age)&&age>=-1000&&age<3500&&isProcessAlive(value.pid);}
+ function fresh(value,knownAlive){const age=now()-Date.parse(value?.at);return value?.format==='wardogs-team-clicker-state-v1'&&Number.isInteger(value.pid)&&value.pid>0&&Number.isFinite(age)&&age>=-1000&&age<3500&&(knownAlive===undefined?isProcessAlive(value.pid):knownAlive);}
+ function controllerObservation(){
+  let current=null,status='read';
+  const missing={};
+  try{current=readJson(stateFile,missing);if(current===missing){current=null;status='unavailable';}}
+  catch(error){status=error instanceof SyntaxError?'unexpected_format':'unavailable';}
+  const shaped=current?.format==='wardogs-team-clicker-state-v1'&&Number.isInteger(current.pid)&&current.pid>0&&typeof current.at==='string'&&Number.isFinite(Date.parse(current.at))&&(current.sessionId===null||UUID.test(current.sessionId||''));
+  if(status==='read'&&!shaped)status='unexpected_format';
+  const alive=pid=>{try{return Number.isInteger(pid)&&pid>0&&isProcessAlive(pid)===true;}catch{return false;}};
+  const reportAlive=shaped&&alive(current.pid),recent=status==='read'&&fresh(current,reportAlive);
+  // Cache identity only for a confirmed live report. It is diagnostic data,
+  // never returned as `current` or accepted as a fresh input permission.
+  if(recent&&UUID.test(current.sessionId||''))lastControllerIdentity={pid:current.pid,sessionId:current.sessionId,at:current.at,operatorStoppedSessionId:UUID.test(current.operatorStoppedSessionId||'')?current.operatorStoppedSessionId:null};
+  const identity=status==='unavailable'?lastControllerIdentity:shaped?current:null;
+  return {current,recent,metadata:{controllerPid:identity?.pid||null,controllerAlive:identity===current?reportAlive:!!identity&&alive(identity.pid),controllerReportAt:identity?.at||null,controllerReportAgeMs:identity?now()-Date.parse(identity.at):null,controllerReportSessionId:identity?.sessionId||null,controllerReportRead:status==='read',controllerReportStatus:status,controllerIdentitySource:status==='unavailable'&&identity?'cached':identity?'report':'none',controllerOperatorStoppedSessionId:identity&&UUID.test(identity.operatorStoppedSessionId||'')?identity.operatorStoppedSessionId:null}};
+ }
  function write(){
-  const at=now(),leaseEnd=enabled&&ownerId?Math.min(at+3000,Date.parse(ownerEndAt)):at+3000;atomicJson(commandFile,{format:'wardogs-team-clicker-command-v1',id:crypto.randomUUID(),sessionId,issuedAt:new Date(at).toISOString(),expiresAt:new Date(leaseEnd).toISOString(),enabled,selectedTeam:settings.team,intervalMs:settings.intervalMs,startMode:settings.startMode,toggleKey:'F6',captureKey:'F9',calibrateTeam:calibratingTeam,servicePid,entryAttemptId:submittedEntry?.attemptId||null,entryGamePid:submittedEntry?.gamePid||0,entryGameWindow:submittedEntry?.gameWindow||0,entryCapturedAt:submittedEntry?.capturedAt||null,entryActualTeam:submittedEntry?.actualTeam||null});
+  const at=now(),leaseEnd=enabled&&ownerId?Math.min(at+3000,Date.parse(ownerEndAt)):at+3000;atomicJson(commandFile,{format:'wardogs-team-clicker-command-v1',id:crypto.randomUUID(),sessionId,issuedAt:new Date(at).toISOString(),expiresAt:new Date(leaseEnd).toISOString(),enabled,mousePause:normalizeMousePause(settings.mousePause),selectedTeam:settings.team,intervalMs:settings.intervalMs,startMode:settings.startMode,toggleKey:'F6',captureKey:'F9',calibrateTeam:calibratingTeam,servicePid,entryAttemptId:submittedEntry?.attemptId||null,entryGamePid:submittedEntry?.gamePid||0,entryGameWindow:submittedEntry?.gameWindow||0,entryCapturedAt:submittedEntry?.capturedAt||null,entryActualTeam:submittedEntry?.actualTeam||null});
  }
  function resetEntry(){
   entryGeneration++;entryReader.stop();entryIdentity=null;entryReadJob=null;lastEntryRead=-Infinity;submittedEntry=null;entryConfirmation={status:'idle',reason:'Sin intento pendiente.'};
  }
  function stop(message='Autoclic apagado por el usuario.'){
-  preparation=null;enabled=false;calibratingTeam=null;lastUiMono=null;reason=message;resetEntry();write();event('team_clicker_stopped',{reason:message});
+  preparation=null;monitorPreparation=null;enabled=false;calibratingTeam=null;lastUiMono=null;reason=message;resetEntry();write();event('team_clicker_stopped',{reason:message});
  }
  async function ensureHelper(){
   if(launching)return launching;
@@ -63,8 +86,10 @@ function createTeamClicker({root,dataDir,now=Date.now,monoNow=()=>performance.no
   if(closed)throw Error('El servicio se está cerrando.');
   if(ownerId&&(!ownership||ownership.ownerId!==ownerId)&&blocking())throw Error('La entrada automática está usando la selección de equipo. Detén esa entrada primero.');
   const validated=validateClicker(input,{allowAny:!!ownership});
-  if(input.enabled&&!available())throw Error('Falta instalar el controlador de autoclic.');
+  if(input.enabled&&!available(true))throw Error('Falta instalar el controlador de autoclic.');
+  if(input.enabled&&validated.mousePause.enabled&&!capabilityCheck&&capabilities?.mousePause!==true)throw Error('Actualiza el controlador de equipo para usar la pausa por ratón.');
   if(input.enabled&&validated.team==='any'&&!anyAvailable())throw Error('Actualiza el controlador para entrar en el primer equipo disponible.');
+  monitorPreparation=null;
   if(ownership){
    const end=Date.parse(ownership.endAt);
    if(!UUID.test(ownership.ownerId||'')||!Number.isFinite(end)||end<=now()||end>now()+720*60000)throw Error('Concesión de selección automática no válida.');
@@ -106,11 +131,34 @@ function createTeamClicker({root,dataDir,now=Date.now,monoNow=()=>performance.no
   if(elapsed<0||elapsed>=8000){stop(settings.startMode==='automatic'?'La ventana dejó de responder. Activa de nuevo la selección automática.':'La ventana dejó de responder. Prepara F6 de nuevo.');throw Error(reason);}
   lastUiMono=monoNow();return view();
  }
- async function prepareOwned({ownerId:requestedOwner,team,endAt,intervalMs=settings.intervalMs,canArm}={}){
+ async function prepareOwned({ownerId:requestedOwner,team,endAt,intervalMs=settings.intervalMs,mousePause=settings.mousePause,canArm}={}){
   if(!UUID.test(requestedOwner||''))throw Error('Identificador de entrada no válido.');
   if(blocking())throw Error('Espera a que se detenga la selección anterior.');
   if(canArm!==undefined&&typeof canArm!=='function')throw Error('Comprobación de entrada no válida.');
-  return configure({enabled:true,team,intervalMs,startMode:'automatic'},{ownerId:requestedOwner,endAt,canArm});
+  return configure({enabled:true,team,intervalMs,startMode:'automatic',mousePause},{ownerId:requestedOwner,endAt,canArm});
+ }
+ async function prepareStopMonitor({canContinue}={}){
+  if(closed||blocking()||monitorPreparation)throw Error('Detén la selección anterior antes de preparar la vigilancia.');
+  if(canContinue!==undefined&&typeof canContinue!=='function')throw Error('Comprobación de vigilancia no válida.');
+  if(!available(true))throw Error('Falta instalar el controlador de autoclic.');
+  // This command has no input permission. Its fresh UUID only lets the native
+  // helper report F8 while the between-round coordinator is otherwise idle.
+  sessionId=crypto.randomUUID();enabled=false;ownerId=null;ownerEndAt=null;resetEntry();reason='Preparando la vigilancia de F8 sin permiso de clic.';
+  const requested={sessionId};monitorPreparation=requested;write();
+  const own=()=>!closed&&monitorPreparation===requested&&sessionId===requested.sessionId&&!enabled&&!ownerId&&!preparation;
+  try{
+   await ensureHelper();
+   if(!own())return view();
+   const stopped=native();
+   if(fresh(stopped)&&stopped.operatorStoppedSessionId===requested.sessionId){monitorPreparation=null;reason='Detenido con F8 durante la preparación de la vigilancia.';return view();}
+   if(canContinue&&await canContinue()!==true)return view();
+   if(!own())return view();
+   const latestStop=native();
+   if(fresh(latestStop)&&latestStop.operatorStoppedSessionId===requested.sessionId){monitorPreparation=null;reason='Detenido con F8 durante la preparación de la vigilancia.';return view();}
+   // Process creation can block longer than the short disabled lease. Renew
+   // it only after spawn, with no permission, never overwriting a new owner.
+   sessionId=crypto.randomUUID();monitorPreparation=null;reason='Vigilancia de parada preparada sin clics.';write();return view();
+  }finally{if(monitorPreparation===requested)monitorPreparation=null;}
  }
  function renewOwned(requestedOwner){
   if(closed||!enabled||ownerId!==requestedOwner)throw Error('La selección automática ya no pertenece a esta entrada.');
@@ -188,15 +236,15 @@ function createTeamClicker({root,dataDir,now=Date.now,monoNow=()=>performance.no
   write();
  }
  function view(){
-  const current=native(),recent=fresh(current),same=recent&&current.sessionId===sessionId;
+  const observation=controllerObservation(),current=observation.current,recent=observation.recent,same=recent&&current.sessionId===sessionId;
   const targets={};for(const team of TEAMS){const target=current?.targets?.[team];targets[team]=target?.configured===true?{configured:true,x:target.x,y:target.y,width:target.width,height:target.height,capturedAt:target.capturedAt}:{configured:false};}
   const waitingAutomatic=enabled&&settings.startMode==='automatic'&&(!same||(current.armed===true&&current.active!==true&&current.running!==true&&!current.error&&current.automaticStoppedSessionId!==sessionId)),isAvailable=available();
-  return {available:isAvailable,automaticSelectionAvailable:isAvailable,automaticAnyTeamAvailable:anyAvailable(),actualTeam:same?actualTeam(current)||entryConfirmation.actualTeam||null:null,enabled,preparing:!!preparation,sessionId,ownerId,ownerEndAt,...settings,captureKey:settings.startMode==='automatic'?null:'F9',calibratingTeam,waitingAutomatic,automaticWaiting:waitingAutomatic,armed:enabled&&same&&current.armed===true,hotkeysReady:enabled&&same&&settings.startMode==='hotkey'&&current.hotkeysReady===true,active:same&&current.active===true,waitingForSelector:same&&current.waitingForSelector===true,pausedForContext:enabled&&same&&current.armed===true&&current.pausedForContext===true,attemptId:same?current.attemptId||null:null,attemptStartedAt:same?current.attemptStartedAt||null:null,completedAttemptId:same?current.completedAttemptId||null:null,gamePid:same&&Number.isInteger(current.gamePid)?current.gamePid:0,gameWindow:same&&Number.isSafeInteger(current.gameWindow)?current.gameWindow:0,running:same&&current.running===true,stopping:!enabled&&recent&&(current.running===true||current.armed===true),reason:enabled&&same&&!calibratingTeam?current.reason||reason:reason,error:enabled&&same?current.error||null:null,count:same&&Number.isInteger(current.count)?current.count:0,entryConfirmation:{...entryConfirmation},targets};
+  return {available:isAvailable,mousePauseAvailable:isAvailable&&(!!capabilityCheck||capabilities?.mousePause===true),persistentSelectionAvailable:isAvailable,automaticSelectionAvailable:isAvailable,automaticAnyTeamAvailable:anyAvailable(isAvailable),controllerFresh:recent,...observation.metadata,controllerSessionId:recent?current.sessionId||null:null,operatorStoppedSessionId:recent&&UUID.test(current.operatorStoppedSessionId||'')?current.operatorStoppedSessionId:null,actualTeam:same?actualTeam(current)||entryConfirmation.actualTeam||null:null,enabled,preparing:!!preparation,sessionId,ownerId,ownerEndAt,...settings,captureKey:settings.startMode==='automatic'?null:'F9',calibratingTeam,waitingAutomatic,automaticWaiting:waitingAutomatic,armed:enabled&&same&&current.armed===true,hotkeysReady:enabled&&same&&settings.startMode==='hotkey'&&current.hotkeysReady===true,active:same&&current.active===true,waitingForSelector:same&&current.waitingForSelector===true,pausedForContext:enabled&&same&&current.armed===true&&current.pausedForContext===true,userPause:same?mousePauseView(current.userPause,now()):null,attemptId:same?current.attemptId||null:null,attemptStartedAt:same?current.attemptStartedAt||null:null,completedAttemptId:same?current.completedAttemptId||null:null,gamePid:same&&Number.isInteger(current.gamePid)?current.gamePid:0,gameWindow:same&&Number.isSafeInteger(current.gameWindow)?current.gameWindow:0,running:same&&current.running===true,stopping:!enabled&&recent&&(current.running===true||current.armed===true),reason:enabled&&same&&!calibratingTeam?current.reason||reason:reason,error:enabled&&same?current.error||null:null,count:same&&Number.isInteger(current.count)?current.count:0,entryConfirmation:{...entryConfirmation},targets};
  }
  function close(){if(closed)return;try{stop('La app se cerró.');}finally{closed=true;}}
  // Never restore an armed session after service restart, including stale disk commands.
  write();
  function blocking(){const current=native();return !!preparation||enabled||fresh(current)&&(current.running===true||current.armed===true);}
- return {configure,heartbeat,calibrate,tick,stop,view,close,blocking,prepareOwned,renewOwned,releaseOwned};
+ return {configure,heartbeat,calibrate,tick,stop,view,close,blocking,prepareOwned,renewOwned,releaseOwned,prepareStopMonitor};
 }
 module.exports={validateClicker,createTeamClicker};

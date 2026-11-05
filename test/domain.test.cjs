@@ -8,6 +8,17 @@ const profile=defaultProfiles().find(p=>p.server===2);
 const view=(players,extra={})=>serverView(normalizeServers(payload(players,extra),now)[0],profile,now);
 const watch=(p=profile)=>({status:'watching',profile:p,durationMinutes:120,elapsedMs:0,holdStartedElapsedMs:null,rewardVerified:false});
 
+test('marcadores públicos: conserva facciones y modo sin mezclar confianza de población con marcador',()=>{
+ const factions=[{name:'Lonestar',color:'#4cb1ef',score:0},{name:'Valkyra',color:'#fa503e',score:34},{name:'Manticore',color:'#1dd65c',score:99}],input=payload(19,{factions,experience:'Madrid_KOTH_01'}),result=normalizeServers(input,now)[0];
+ assert.equal(result.scoresTrusted,true);assert.equal(result.experience,'Madrid_KOTH_01');assert.deepEqual(result.factions.map(f=>f.score),[0,34,99]);assert.equal(result.factions[0].color,'#4CB1EF');result.factions[0].score=90;assert.equal(factions[0].score,0);
+ for(const invalid of [Infinity,NaN,true,'99',-1,1.5]){const corrupt=structuredClone(factions);corrupt[0].score=invalid;const bad=normalizeServers(payload(19,{factions:corrupt}),now)[0];assert.equal(bad.trusted,true);assert.equal(bad.scoresTrusted,false);assert.equal(bad.players,19);assert.deepEqual(bad.factions,[]);}
+});
+test('marcadores públicos: rechaza identidades de facción duplicadas y caduca con la fuente',()=>{
+ const factions=[{name:'Lonestar',color:'#4CB1EF',score:0},{name:'Valkyra',color:'#FA503E',score:34},{name:'Manticore',color:'#1DD65C',score:99}];
+ for(const invalid of [[factions[0],factions[0],factions[2]],factions.slice(0,2),[{...factions[0],color:'red'},...factions.slice(1)]])assert.equal(normalizeServers(payload(19,{factions:invalid}),now)[0].scoresTrusted,false);
+ const fresh=normalizeServers(payload(19,{factions}),now)[0];assert.equal(serverView(fresh,profile,now+90001).scoresTrusted,false);assert.equal(serverView(fresh,profile,now,'HTTP 429').scoresTrusted,false);
+});
+
 test('un perfil pasado de su revisión deja de recomendar, aunque la población sea reciente',()=>{
  const p={...profile,verifiedAt:new Date(now-24*3600000+1).toISOString(),reviewAfterHours:24};
  assert.equal(serverView(normalizeServers(payload(6),now)[0],p,now).entryCandidate,true);

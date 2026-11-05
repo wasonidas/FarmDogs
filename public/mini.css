@@ -202,6 +202,8 @@ summary{color:#c5cdcd;font-family:var(--display);font-size:17px;font-weight:700;
 .entry-progress[data-active=false] p{margin:8px 0 0;font-size:12px}
 .entry-progress[data-active=false] .entry-stages,.entry-progress[data-active=false] #entry-stop{display:none}
 .update-card{margin-top:24px}
+.persistent-team-options{padding:12px 0 4px;border-bottom:1px solid #343c3f;margin-bottom:12px}
+.persistent-team-options select{width:100%}
 .update-card .auto-actions{margin-top:13px}
 .update-card .check small{margin-top:5px}
 .update-card .badge:empty{display:none}

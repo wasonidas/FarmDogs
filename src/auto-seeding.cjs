@@ -1,4 +1,5 @@
 'use strict';
+const {normalizeMousePause,mousePauseView}=require('./mouse-pause.cjs');
 const {randomUUID}=require('node:crypto');
 const {rejectRecoveryInput}=require('./restart-recovery.cjs');
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -13,19 +14,19 @@ function isAdmittedSeedingContinuation(server,account){
  // La admisión pública puede cerrarse mientras una cuenta sigue en su ciclo.
  return server?.trusted===true&&Number.isInteger(server.number)&&server.number>=1&&server.number<=5&&Number.isInteger(server.players)&&server.players>=0&&server.players<=100&&server.seedingActive===false&&server.publicRule?.aguantando===true&&['lleno','no_puntua'].includes(server.publicRule.estado)&&data?.servidor===server.number&&data.estado==='aguantando'&&data.dentro===true;
 }
-function createAutoSeeding({purpose='seeding',server,durationMinutes,startPlayers=20,intervalSeconds=60,holdMs=500,presenceMode='account',confirmedServer,confirmedDeployed},now,{trustedEntry=null}={}){
+function createAutoSeeding({purpose='seeding',server,durationMinutes,startPlayers=20,intervalSeconds=60,holdMs=500,presenceMode='account',confirmedServer,confirmedDeployed,mousePause},now,{trustedEntry=null}={}){
  rejectRecoveryInput(arguments[0]);
  if(!['seeding','break'].includes(purpose))throw Error('Elige una sesión de seeding o de movimiento temporal.');
  if(!Number.isInteger(durationMinutes)||durationMinutes<1||durationMinutes>720)throw Error('Duración de 1 a 720 minutos.');
  if(!Number.isInteger(intervalSeconds)||intervalSeconds<5||intervalSeconds>300||!Number.isInteger(holdMs)||holdMs<100||holdMs>2000)throw Error('Ajustes de movimiento fuera de rango.');
- const createdAt=new Date(now).toISOString();
+ const createdAt=new Date(now).toISOString(),pauseSettings=normalizeMousePause(mousePause);
  if(purpose==='break'){
   if(presenceMode==='entry'){
    const entryProof=recentEntryProof(trustedEntry,server,now);
-   return {id:randomUUID(),purpose,server,durationMinutes,startPlayers:null,intervalSeconds,holdMs,presenceMode:'entry',entryId:entryProof.entryId,entryProof,confirmedServer:null,deploymentConfirmedAt:entryProof.confirmedAt,createdAt,endAt:new Date(now+durationMinutes*60000).toISOString(),status:'waiting',thresholdObservedAt:null,startedMovementAt:null,operatorStopped:false,reason:'Anti-AFK preparado tras la entrada verificada; esperando tu personaje y Wardogs en primer plano.'};
+   return {id:randomUUID(),purpose,server,durationMinutes,startPlayers:null,intervalSeconds,holdMs,presenceMode:'entry',entryId:entryProof.entryId,entryProof,confirmedServer:null,deploymentConfirmedAt:entryProof.confirmedAt,createdAt,mousePause:pauseSettings,endAt:new Date(now+durationMinutes*60000).toISOString(),status:'waiting',thresholdObservedAt:null,startedMovementAt:null,operatorStopped:false,reason:'Anti-AFK preparado tras la entrada verificada; esperando tu personaje y Wardogs en primer plano.'};
   }
   if(confirmedDeployed!==true)throw Error('Confirma que ya estás desplegado en la partida para activar el movimiento.');
-  return {id:randomUUID(),purpose,server:null,durationMinutes,startPlayers:null,intervalSeconds,holdMs,presenceMode:'manual',confirmedServer:null,confirmedDeployed:true,deploymentConfirmedAt:createdAt,createdAt,endAt:new Date(now+durationMinutes*60000).toISOString(),status:'waiting',thresholdObservedAt:null,startedMovementAt:null,operatorStopped:false,reason:'Movimiento temporal preparado; esperando tu personaje desplegado y Wardogs en primer plano.'};
+  return {id:randomUUID(),purpose,server:null,durationMinutes,startPlayers:null,intervalSeconds,holdMs,presenceMode:'manual',confirmedServer:null,confirmedDeployed:true,deploymentConfirmedAt:createdAt,createdAt,mousePause:pauseSettings,endAt:new Date(now+durationMinutes*60000).toISOString(),status:'waiting',thresholdObservedAt:null,startedMovementAt:null,operatorStopped:false,reason:'Movimiento temporal preparado; esperando tu personaje desplegado y Wardogs en primer plano.'};
  }
  if(!Number.isInteger(server)||server<1||server>5)throw Error('Elige un servidor del 1 al 5.');
  if(!Number.isInteger(startPlayers)||startPlayers<1||startPlayers>100)throw Error('Umbral de inicio de 1 a 100 jugadores.');
@@ -34,13 +35,13 @@ function createAutoSeeding({purpose='seeding',server,durationMinutes,startPlayer
  if(presenceMode==='entry')entryProof=recentEntryProof(trustedEntry,server,now);
  const manual=presenceMode==='manual';
  if(manual&&(!Number.isInteger(confirmedServer)||confirmedServer!==server))throw Error('Confirma que estás desplegado en el mismo servidor seleccionado.');
- return {id:randomUUID(),purpose,server,durationMinutes,startPlayers,intervalSeconds,holdMs,presenceMode,confirmedServer:manual?confirmedServer:null,manualConfirmedAt:manual?createdAt:null,...(entryProof?{entryId:entryProof.entryId,entryProof}:{}),createdAt,endAt:new Date(now+durationMinutes*60000).toISOString(),status:'waiting',thresholdObservedAt:null,startedMovementAt:null,operatorStopped:false,reason:manual?`Prueba sin lectura Steam: presencia confirmada por el usuario en el #${server}; esperando población y pantalla de juego.`:entryProof?`Entrada automática verificada en el #${server}; esperando población y HUD reciente.`:'Esperando población, presencia y pantalla de juego.'};
+ return {id:randomUUID(),purpose,server,durationMinutes,startPlayers,intervalSeconds,holdMs,presenceMode,confirmedServer:manual?confirmedServer:null,manualConfirmedAt:manual?createdAt:null,...(entryProof?{entryId:entryProof.entryId,entryProof}:{}),createdAt,mousePause:pauseSettings,endAt:new Date(now+durationMinutes*60000).toISOString(),status:'waiting',thresholdObservedAt:null,startedMovementAt:null,operatorStopped:false,reason:manual?`Prueba sin lectura Steam: presencia confirmada por el usuario en el #${server}; esperando población y pantalla de juego.`:entryProof?`Entrada automática verificada en el #${server}; esperando población y HUD reciente.`:'Esperando población, presencia y pantalla de juego.'};
 }
 function advanceAutoSeeding(session,{server,account,screen,movement},now){
  const purpose=session.purpose===undefined?'seeding':session.purpose,temporary=purpose==='break';
  const mode=session.presenceMode===undefined?'account':session.presenceMode,manual=!temporary&&mode==='manual',entry=mode==='entry',prefix='Prueba sin lectura Steam: ';
  const describe=reason=>manual&&!String(reason).startsWith(prefix)?prefix+reason:reason;
- let next={...session};const decide=(status,reason,command=null)=>({session:{...next,status,reason:describe(reason)},command});
+ let next={...session,userPause:movement?.available===true&&movement.autoSessionId===session.id&&session.mousePause?.enabled!==false?mousePauseView(movement.userPause,now):null};const decide=(status,reason,command=null)=>({session:{...next,status,reason:describe(reason)},command});
  if(['cancelled','expired','error','interrupted'].includes(session.status)||session.operatorStopped)return decide(session.status,session.reason);
  if(now>=Date.parse(session.endAt))return decide('expired',temporary?'Fin del movimiento temporal.':manual?'Fin de la sesión de prueba.':'Fin de la sesión de seeding.','stop');
  if(movement?.autoOperatorStopped===session.id){next.operatorStopped=true;return decide('cancelled','Movimiento detenido por el usuario.','stop');}
@@ -69,6 +70,11 @@ function advanceAutoSeeding(session,{server,account,screen,movement},now){
  const moving=movement?.available===true&&movement.armed===true;
  if(movement?.available!==true)return decide('waiting_controller','Esperando un estado reciente del controlador.','stop');
  if(movement?.available===true&&movement.status==='error')return decide('error','Revisa el controlador antes de continuar.','stop');
+ if(Number.isSafeInteger(next.userPause?.revision)){
+  const revision=next.userPause.revision,prior=Number.isSafeInteger(session.mouseActivityRevision)?session.mouseActivityRevision:0;
+  if(revision<prior)return decide('error','La observación del ratón se reinició. Inicia una sesión nueva.','stop');
+  if(revision>prior){const reportAt=Date.parse(movement.at);if(!Number.isFinite(reportAt)||reportAt>now||now-reportAt>5000)return decide('waiting_controller','Esperando la fecha reciente de la actividad del ratón.','stop');next.mouseActivityRevision=revision;next.mouseBarrierAt=new Date(reportAt).toISOString();}
+ }
  if(!temporary&&(!server?.trusted||server.number!==session.server||!Number.isInteger(server.players)||server.players<0||server.players>100||(!manual&&!entry&&server.seedingActive!==true&&!isAdmittedSeedingContinuation(server,account))))return decide('waiting_source',manual||entry?'Esperando datos recientes del servidor confirmado.':'Esperando datos recientes y seeding activo en el servidor.',moving?'stop':null);
  if(!temporary&&!manual&&!entry){
   const data=account?.seedingFresh===true?account.seeding:null;
@@ -84,6 +90,8 @@ function advanceAutoSeeding(session,{server,account,screen,movement},now){
  if(!temporary&&!next.thresholdObservedAt)next.thresholdObservedAt=new Date(now).toISOString();
  if(!gameplay)return decide('waiting_game','Esperando el juego desplegado en primer plano.',moving?'stop':null);
  if(moving&&movement.autoSessionId!==session.id)return decide('error','Hay otra sesión de movimiento; detenla antes de iniciar.','stop');
+ if(next.mouseBarrierAt&&Date.parse(screen.capturedAt)<=Date.parse(next.mouseBarrierAt))return decide('waiting_game','Esperando una pantalla nueva posterior al uso del ratón.',moving?'stop':null);
+ if(next.userPause?.active===true&&movement?.autoSessionId===session.id)return decide('paused_mouse','Pausado mientras usas el ratón. Se reanudará tras el tiempo elegido sin tocarlo.','start');
  if(moving&&!next.startedMovementAt)next.startedMovementAt=new Date(now).toISOString();
  return decide(moving?'moving':'starting_movement',moving?temporary?'Movimiento temporal en marcha.':'Automatismo en marcha.':'Solicitando movimiento automático.',moving?null:'start');
 }

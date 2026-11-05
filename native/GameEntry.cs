@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
+using WardogsSeeding;
 
 // Bounded, one-shot product helper. Never activates a window or uses the clipboard.
 internal sealed class EntryBounds { public double x,y,width,height; }
@@ -19,6 +20,7 @@ internal sealed class EntryAction
     public string format,id,sessionId,issuedAt,expiresAt,endAt,frameId,framePath,frameSha256,frameCapturedAt,kind,joinId,control,recoveryId;
     public double gamePid,width,height;
     public object gameWindow;
+    public MousePauseSettings mousePause;public int servicePid;public long mouseRevision;
     public EntryBounds bounds,anchorBounds,restartHeaderBounds,restartMessageBounds;
 }
 internal sealed class EntryWindow
@@ -91,6 +93,7 @@ internal static class GameEntryPolicy
     internal static void Validate(EntryAction command,string commandFile,DateTime now,string expectedRoot=null)
     {
         Reject(command==null||command.format!="farmdogs-entry-action-v1","invalid_format");
+        MousePauseSettings.Normalize(command.mousePause);
         Reject(command.id==null||!Uuid.IsMatch(command.id)||command.sessionId==null||!Uuid.IsMatch(command.sessionId)||command.frameId==null||!Uuid.IsMatch(command.frameId),"invalid_identity");
         Reject(!Integer(command.gamePid,1,Int32.MaxValue)||!Integer(command.width,320,2600)||!Integer(command.height,200,2600),"invalid_geometry");
         WindowHandle(command.gameWindow);Target(command);
@@ -213,6 +216,7 @@ internal interface IEntryInputPermission
 {
     void VerifyInputPermission(EntryWindow window);
 }
+internal interface IEntryMouseActivity {bool MousePaused();}
 // A rejected SendInput call still counts as an attempt: its accepted count does
 // not prove that no button or key reached the game. Pointer motion alone does not.
 internal sealed class EntryInputAttempt
@@ -231,6 +235,7 @@ internal static class GameEntryRunner
         GameEntryPolicy.Reject(platform.ElapsedMilliseconds>=3000||platform.UtcNow>=GameEntryPolicy.Time(command.expiresAt)||platform.UtcNow>=GameEntryPolicy.Time(command.endAt),"expired_command");
         if(command.frameCapturedAt!=null)GameEntryPolicy.Reject(platform.UtcNow<GameEntryPolicy.Time(command.frameCapturedAt)||(platform.UtcNow-GameEntryPolicy.Time(command.frameCapturedAt)).TotalMilliseconds>5000,"stale_frame");
         GameEntryPolicy.Reject(platform.ModifiersDown(),"operator_input");
+        var mouse=platform as IEntryMouseActivity;if(mouse!=null)GameEntryPolicy.Reject(mouse.MousePaused(),"user_mouse_active");
         var current=platform.ForegroundGame();GameEntryPolicy.Reject(current==null,"game_not_foreground");
         GameEntryPolicy.Reject(!GameEntryPolicy.Same(acquired,current),"game_window_changed");
         Point[] points={new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2),new Point(bounds.Left,bounds.Top),new Point(bounds.Right-1,bounds.Top),new Point(bounds.Left,bounds.Bottom-1),new Point(bounds.Right-1,bounds.Bottom-1)};
@@ -290,7 +295,7 @@ internal static class EntryPointerGeometry
         return new Point(Math.Max(0,Math.Min(65535,x)),Math.Max(0,Math.Min(65535,y)));
     }
 }
-internal sealed class GameEntryNative : IEntryPlatform,IEntryInputPermission
+internal sealed class GameEntryNative : IEntryPlatform,IEntryInputPermission,IEntryMouseActivity,IDisposable
 {
     [StructLayout(LayoutKind.Sequential)] private struct RECT {public int Left,Top,Right,Bottom;}
     [StructLayout(LayoutKind.Sequential)] private struct POINT {public int X,Y;public POINT(int x,int y){X=x;Y=y;}}
@@ -311,6 +316,16 @@ internal sealed class GameEntryNative : IEntryPlatform,IEntryInputPermission
     [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
     private readonly Stopwatch clock;
     private readonly EntryInputAttempt inputAttempt=new EntryInputAttempt();
+    private readonly UserMouseActivity mouseActivity=new UserMouseActivity();
+    private string mouseWatchFile,mouseOwner;private int mouseServicePid;private long expectedMouseRevision;private bool mousePauseEnabled;
+    public void ConfigureMousePause(EntryAction command,string commandFile){var settings=MousePauseSettings.Normalize(command.mousePause);mousePauseEnabled=settings.enabled;if(!settings.enabled)return;if(command.servicePid<=0||command.mouseRevision<0)throw new EntryFailure("error","mouse_pause_unavailable");mouseOwner=command.sessionId;mouseServicePid=command.servicePid;expectedMouseRevision=command.mouseRevision;mouseWatchFile=Path.Combine(Path.GetDirectoryName(commandFile),"entry-watch-"+command.sessionId+".json");mouseActivity.Configure(settings,true);}
+    public bool MousePaused(){
+        if(!mousePauseEnabled)return false;if(mouseActivity.Paused)return true;
+        try{string text;using(var stream=new FileStream(mouseWatchFile,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)){if(stream.Length>16384)throw new IOException();using(var reader=new StreamReader(stream))text=reader.ReadToEnd();}var report=new JavaScriptSerializer().Deserialize<MouseWatchReport>(text);DateTime at=GameEntryPolicy.Time(report.at);if(report.format!="farmdogs-entry-watch-v1"||report.sessionId!=mouseOwner||report.servicePid!=mouseServicePid||at>DateTime.UtcNow||(DateTime.UtcNow-at).TotalMilliseconds>3000)throw new IOException();if(report.status=="cancelled"&&report.reason=="operator_stop")throw new EntryFailure("cancelled","operator_stop");if(report.status!="watching"||report.userPause==null||report.userPause.kind!="mouse"||report.userPause.remainingMs<0||report.userPause.remainingMs>30000||!report.mouseRevision.HasValue||report.mouseRevision.Value<0)throw new IOException();if(report.mouseRevision.Value!=expectedMouseRevision)return true;if(!report.userPause.active)return false;if(report.userPause.buttonsDown)return true;return GameEntryPolicy.Time(report.userPause.resumeAt)>DateTime.UtcNow;}
+        catch(EntryFailure){throw;}catch{throw new EntryFailure("error","mouse_pause_unavailable");}
+    }
+    private sealed class MouseWatchReport{public string format,sessionId,status,reason,at;public int servicePid;public long? mouseRevision;public MousePauseSnapshot userPause;}
+    public void Dispose(){mouseActivity.Dispose();}
     private bool pendingMouse,pendingChord,pendingStart;private char? pendingCharacter;
     internal bool InputAttempted {get{return inputAttempt.Attempted;}}
     internal GameEntryNative(Stopwatch actionClock){clock=actionClock;if(!SetProcessDPIAware())throw new EntryFailure("rejected","dpi_unavailable");}
@@ -364,9 +379,9 @@ internal sealed class GameEntryNative : IEntryPlatform,IEntryInputPermission
         Rectangle bounds=EntryControlVisual.MainDeployBounds(window.Width,window.Height);
         using(var patch=CapturePatch(window,bounds))return EntryControlVisual.MainDeployPanel(patch,bounds).enabled;
     }
-    private static INPUT Mouse(bool up){var input=new INPUT();input.data.mouse.flags=up?0x0004u:0x0002u;return input;}
+    private static INPUT Mouse(bool up){var input=new INPUT();input.data.mouse.flags=up?0x0004u:0x0002u;input.data.mouse.extra=FarmDogsInputMarker.Value;return input;}
     private static INPUT Key(ushort key,bool up,bool unicode){var input=new INPUT();input.type=1;input.data.keyboard.vk=unicode?(ushort)0:key;input.data.keyboard.scan=unicode?key:(ushort)0;input.data.keyboard.flags=(unicode?0x0004u:0u)|(up?0x0002u:0u);return input;}
-    private void Send(INPUT[] inputs){foreach(var input in inputs)inputAttempt.BeforeSend(input.type,input.data.mouse.flags);if(SendInput((uint)inputs.Length,inputs,Marshal.SizeOf(typeof(INPUT)))!=inputs.Length)throw new EntryFailure("error","input_rejected");}
+    private void Send(INPUT[] inputs){for(int i=0;i<inputs.Length;i++){if(inputs[i].type==0)inputs[i].data.mouse.extra=FarmDogsInputMarker.Value;else inputs[i].data.keyboard.extra=FarmDogsInputMarker.Value;inputAttempt.BeforeSend(inputs[i].type,inputs[i].data.mouse.flags);}if(SendInput((uint)inputs.Length,inputs,Marshal.SizeOf(typeof(INPUT)))!=inputs.Length)throw new EntryFailure("error","input_rejected");}
     public void Click(){pendingMouse=true;try{Send(new[]{Mouse(false)});Thread.Sleep(35);Send(new[]{Mouse(true)});pendingMouse=false;}finally{try{Send(new[]{Mouse(true)});pendingMouse=false;}catch{}}}
     public void PressStart(){pendingStart=true;try{Send(new[]{Key(0x20,false,false)});Thread.Sleep(35);Send(new[]{Key(0x20,true,false)});pendingStart=false;}finally{try{Send(new[]{Key(0x20,true,false)});pendingStart=false;}catch{}}}
     public void SelectAll(){pendingChord=true;try{Send(new[]{Key(0x11,false,false),Key(0x41,false,false),Key(0x41,true,false),Key(0x11,true,false)});pendingChord=false;}finally{try{Send(new[]{Key(0x41,true,false),Key(0x11,true,false)});pendingChord=false;}catch{}}}
@@ -445,20 +460,25 @@ internal static class GameEntryWatch
             GameEntryPolicy.Reject(!Directory.Exists(Path.GetDirectoryName(file))||(File.GetAttributes(Path.GetDirectoryName(file))&FileAttributes.ReparsePoint)!=0||File.Exists(file),"invalid_watch_path");
             DateTime processStarted=DateTime.MinValue;
             try{using(var process=Process.GetProcessById(servicePid))processStarted=process.StartTime.ToUniversalTime();}catch{}
-            var clock=Stopwatch.StartNew();long budget=(long)(end-started).TotalMilliseconds,lastWrite=0;uint? inputAtStart=GameEntryInputBaseline.Read();
-            Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status="watching",reason=(string)null,at=started.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o"),inputAtStart},true);
+            var settings=new MousePauseSettings();if(args.Length==6){bool enabled=false;int seconds=0;GameEntryPolicy.Reject(!Boolean.TryParse(args[4],out enabled)||!Int32.TryParse(args[5],out seconds),"invalid_mouse_pause");settings.enabled=enabled;settings.resumeAfterSeconds=seconds;}settings.Validate();
+            using(var mouse=new UserMouseActivity()){
+            mouse.Configure(settings,true);
+            var initialMouse=mouse.View(DateTime.UtcNow);var clock=Stopwatch.StartNew();long budget=(long)(end-started).TotalMilliseconds,lastWrite=0,lastMouse=initialMouse.revision;uint? inputAtStart=GameEntryInputBaseline.Read();
+            Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status="watching",reason=(string)null,at=started.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o"),inputAtStart,userPause=initialMouse,mouseRevision=initialMouse.revision},true);
             while(true)
             {
                 DateTime now=DateTime.UtcNow;bool stop=(GetAsyncKeyState(0x77)&0x8001)!=0;
                 EntryWatchDecision decision=GameEntryWatchPolicy.Decide(stop,File.Exists(file+".stop"),Alive(servicePid,processStarted),now,end,clock.ElapsedMilliseconds,budget);
-                if(decision.Status!="watching"||clock.ElapsedMilliseconds-lastWrite>=1000)
+                var userPause=decision.Status=="watching"?mouse.View(now):new MousePauseSnapshot{revision=lastMouse};
+                if(decision.Status!="watching"||clock.ElapsedMilliseconds-lastWrite>=1000||userPause.revision!=lastMouse&&clock.ElapsedMilliseconds-lastWrite>=100)
                 {
                     GameEntryPolicy.Reject(!File.Exists(file)||(File.GetAttributes(file)&FileAttributes.ReparsePoint)!=0,"invalid_watch_path");
-                    Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status=decision.Status,reason=decision.Reason,at=now.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o"),inputAtStart},false);
-                    lastWrite=clock.ElapsedMilliseconds;
+                    Write(file,new {format="farmdogs-entry-watch-v1",sessionId=session,servicePid,status=decision.Status,reason=decision.Reason,at=now.ToString("o"),startedAt=started.ToString("o"),endAt=end.ToString("o"),inputAtStart,userPause,mouseRevision=userPause.revision},false);
+                    lastWrite=clock.ElapsedMilliseconds;lastMouse=userPause.revision;
                 }
                 if(decision.Status!="watching")return 0;
                 Thread.Sleep(25);
+            }
             }
         }
         catch(EntryFailure failure){Console.Error.WriteLine(failure.Reason);return 1;}
@@ -615,9 +635,9 @@ internal static class GameEntryProgram
     public static int Main(string[] args)
     {
         var actionClock=Stopwatch.StartNew();
-        if(args.Length==1&&args[0]=="--probe"){Console.WriteLine(Json.Serialize(new {format="farmdogs-entry-capabilities-v1",automaticEntry=true,oneShot=true,stopKey="F8",stopWatcher=true,initialFocus=true,mainDeployGate=true,splashKeyStart=true,absolutePointer=true,restartRecovery=true,maxActionMilliseconds=3000}));return 0;}
+        if(args.Length==1&&args[0]=="--probe"){Console.WriteLine(Json.Serialize(new {format="farmdogs-entry-capabilities-v1",automaticEntry=true,oneShot=true,stopKey="F8",stopWatcher=true,initialFocus=true,mainDeployGate=true,splashKeyStart=true,absolutePointer=true,restartRecovery=true,mousePause=true,maxActionMilliseconds=3000}));return 0;}
         if(args.Length==4&&args[0]=="--focus-game")return GameEntryFocus.Run(args);
-        if(args.Length==4&&args[0]=="--watch")return GameEntryWatch.Run(args);
+        if((args.Length==4||args.Length==6)&&args[0]=="--watch")return GameEntryWatch.Run(args);
         if(args.Length!=3||args[0]!="--execute"){Console.Error.WriteLine("Usage: WardogsEntry.exe --execute command.json result.json");return 1;}
         EntryAction command=null;GameEntryNative platform=null;string status="rejected",reason="invalid_command";bool success=false;
         try
@@ -638,7 +658,7 @@ internal static class GameEntryProgram
                         try{using(var used=new FileStream(commandPath+".claimed",FileMode.CreateNew,FileAccess.Write,FileShare.None)){byte[] marker=Encoding.ASCII.GetBytes(DateTime.UtcNow.ToString("o"));used.Write(marker,0,marker.Length);}}
                         catch(IOException){throw new EntryFailure("rejected","replayed_command");}
                         var recovery=command.control=="restart_continue"?GameEntryRecovery.Load(command,commandPath,DateTime.UtcNow):null;
-                        platform=new GameEntryNative(actionClock);GameEntryRunner.Run(command,platform,frame,recovery);
+                        platform=new GameEntryNative(actionClock);platform.ConfigureMousePause(command,commandPath);GameEntryRunner.Run(command,platform,frame,recovery);
                     }
                     success=true;status="completed";reason=null;
                 }
@@ -647,6 +667,7 @@ internal static class GameEntryProgram
         }
         catch(EntryFailure failure){status=failure.Status;reason=failure.Reason;}
         catch(Exception){status="error";reason="entry_execution_failed";}
+        finally{if(platform!=null)platform.Dispose();}
         if(command==null||!OutputAllowed(args[1],args[2],command.id)){Console.Error.WriteLine(reason);return 1;}
         try{File.WriteAllText(Path.GetFullPath(args[2]),Json.Serialize(new {format="farmdogs-entry-result-v1",id=command.id,sessionId=command.sessionId,success,status,reason,inputAttempted=platform!=null&&platform.InputAttempted,at=DateTime.UtcNow.ToString("o")}),new UTF8Encoding(false));return 0;}
         catch{Console.Error.WriteLine("result_write_failed");return 1;}

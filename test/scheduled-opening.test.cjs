@@ -36,7 +36,7 @@ test('apertura: un guardado fallido o una fecha inválida no deja una orden ocul
 test('programación: conserva los ajustes de seeding y valida antes de guardar',()=>{
  const f=fixture(),s=f.build();assert.throws(()=>s.schedule({...input,seeding:{durationMinutes:0}}));assert.equal(s.view(),null);
  const settings={durationMinutes:75,startPlayers:20,intervalSeconds:45,holdMs:600,server:5};s.schedule({...input,seeding:settings});settings.durationMinutes=1;
- assert.equal(s.view().server,2);assert.deepEqual(s.view().seeding,{durationMinutes:75,startPlayers:20,intervalSeconds:45,holdMs:600});
+ assert.equal(s.view().server,2);assert.deepEqual(s.view().seeding,{durationMinutes:75,startPlayers:20,intervalSeconds:45,holdMs:600,mousePause:{enabled:true,resumeAfterSeconds:3}});
 });
 
 test('programación: conserva aleatorio o color fijo para la futura entrada',()=>{

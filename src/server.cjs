@@ -16,6 +16,15 @@ const {isAdmittedSeedingContinuation}=require('./auto-seeding.cjs');
 const {createActivityMode}=require('./activity-mode.cjs');
 const {createRewardProtection}=require('./reward-protection.cjs');
 const {createTeamClicker}=require('./team-clicker.cjs');
+const {createPersistentTeam}=require('./persistent-team.cjs');
+const {createMatchSource}=require('./match-source.cjs');
+const {createIntegrationService}=require('./integration-service.cjs');
+const {buildSessionReport}=require('./session-report.cjs');
+const {createUserPresets}=require('./user-presets.cjs');
+const {createSessionHistory}=require('./session-history.cjs');
+const {createErrorChecks}=require('./error-checks.cjs');
+const {buildSessionSummary}=require('./session-summary.cjs');
+const {normalizeMousePause}=require('./mouse-pause.cjs');
 const {createEntryFlow}=require('./entry-flow.cjs');
 const {createAppUpdate}=require('./app-update.cjs');
 const {currentClanAssociation}=require('./clan-association.cjs');
@@ -30,19 +39,28 @@ const utcNow=options.utcNow||Date.now;
 const monoNow=options.monoNow||(()=>performance.now());
 const isoNow=()=>new Date(utcNow()).toISOString();
 const launcher=options.launcher||createLocalLauncher({root:ROOT});
-let lastLaunch=null,entryOrigin=null,activityMovementId=null,updateShutdownRequested=false,updateShutdownId=null,updateShutdownRequestedAt=null,updateShutdownTimer=null;
+let lastLaunch=null,entryOrigin=null,activityMovementId=null,activityOwnership=null,updateShutdownRequested=false,updateShutdownId=null,updateShutdownRequestedAt=null,updateShutdownTimer=null;
 const PUBLIC_URL='https://api.wardogsspain.com/api/portal/public/wardogs-servers';
 const token=randomBytes(24).toString('hex');
 const configFile=path.join(DATA,'settings.json'),runtimeFile=path.join(DATA,'runtime.json');
 let config=readJson(configFile,{profiles:defaultProfiles(),selectedServer:2,durationMinutes:120});
 config.profiles=config.profiles.map(validateProfile);
+function preferences(input={},base={}){
+ if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['mousePause','menuSound','menuVolume','motion'].includes(key)))throw Error('Ajustes de aplicación no válidos.');
+ const result={mousePause:normalizeMousePause(input.mousePause??base.mousePause),menuSound:input.menuSound??base.menuSound??true,menuVolume:input.menuVolume??base.menuVolume??20,motion:input.motion??base.motion??true};
+ if(typeof result.menuSound!=='boolean'||typeof result.motion!=='boolean'||!Number.isInteger(result.menuVolume)||result.menuVolume<0||result.menuVolume>100)throw Error('Revisa sonido, volumen y animaciones.');return result;
+}
+config.preferences=preferences(config.preferences);
+const userPresets=createUserPresets({load:()=>readJson(path.join(DATA,'user-presets.json')),save:value=>atomicJson(path.join(DATA,'user-presets.json'),value),now:utcNow});
+const sessionHistory=createSessionHistory({load:()=>readJson(path.join(DATA,'session-history.json')),save:value=>atomicJson(path.join(DATA,'session-history.json'),value),now:utcNow});
 let runtime=readJson(runtimeFile,{watch:null,lastResult:null});
 if(runtime.watch){
  runtime.lastResult=['scheduled','watching','threshold_candidate','target_candidate','unknown_source','requires_review','rule_unknown','time_candidate'].includes(runtime.watch.status)?{...runtime.watch,status:'interrupted',reason:'El observador se reinició. Inicia una nueva observación.'}:runtime.watch;runtime.watch=null;
 }
 let servers=[],lastSuccessAt=null,lastAttemptAt=null,sourceError=null,fetchInFlight=false,nextFetchAt=0,failures=0,watchMonoStart=null,lastPersistElapsed=0,closePromise=null;
+let independentUiAttached=false,lastUiSeenAt=-Infinity;
 const events=[];
-function event(kind,detail={}){const item={at:isoNow(),kind,...detail};events.unshift(item);events.splice(100);appendEvent(path.join(DATA,'events.jsonl'),item);}
+function event(kind,detail={}){const item={at:isoNow(),kind,...detail};events.unshift(item);events.splice(100);appendEvent(path.join(DATA,'events.jsonl'),item);sessionHistory.record(item);}
 function persist(){atomicJson(runtimeFile,runtime);}
 const clanPresence=createClanPresence({now:utcNow,fetchImpl:fetcher,event,getAssociation:()=>accountView().clanAssociation||{status:'disconnected'},getServers:publicViews});
 const rewardProtection=createRewardProtection({load:()=>readJson(path.join(DATA,'reward-protection.json')),save:value=>atomicJson(path.join(DATA,'reward-protection.json'),value),now:utcNow,monoNow,event});
@@ -60,7 +78,7 @@ const opening=createScheduledOpening({load:()=>readJson(path.join(DATA,'opening-
  openGame:async(target,job,isCurrent)=>{
   if(entryAvailable()){
    if(job.seeding&&publicViews().find(s=>s.number===target.server)?.seedingActive!==true)throw Error('El servidor indica seeding desactivado.');
-   await beginEntry(target,{...(job.seeding||{durationMinutes:Math.min(config.durationMinutes,720)}),team:job.team,initialFocus:job.initialFocus},!!job.seeding,null,isCurrent,{kind:'scheduled',ownerId:job.id});return;
+   await beginEntry(target,{...(job.seeding||{durationMinutes:Math.min(config.durationMinutes,720)}),team:job.team,initialFocus:job.initialFocus,mousePause:job.mousePause??job.seeding?.mousePause},!!job.seeding,null,isCurrent,{kind:'scheduled',ownerId:job.id});return;
   }
   teamClicker.stop('La programación ha preparado una sesión de seeding.');
   let preparedId=null;
@@ -82,7 +100,7 @@ async function beginEntry(target,settings={},seeding=true,endAt=null,isCurrent=(
  if(!isCurrent())return null;
  const choice=teamClicker.view(),defaultTeam=seeding&&choice.automaticAnyTeamAvailable===true?'any':choice.team;
  const previousEntryId=entry.view()?.id;
- const pending=entry.start({server:target.server,joinId:target.joinId,team:settings.team||defaultTeam,seeding,...(Object.hasOwn(settings,'antiAfk')?{antiAfk:settings.antiAfk}:{}),...(Object.hasOwn(settings,'antiAfkSettings')?{antiAfkSettings:settings.antiAfkSettings}:{}),durationMinutes:settings.durationMinutes??config.durationMinutes,startPlayers:settings.startPlayers??20,intervalSeconds:settings.intervalSeconds??60,holdMs:settings.holdMs??500,initialFocus:settings.initialFocus??'driver'},{endAt});
+ const pending=entry.start({server:target.server,joinId:target.joinId,team:settings.team||defaultTeam,seeding,...(Object.hasOwn(settings,'antiAfk')?{antiAfk:settings.antiAfk}:{}),...(Object.hasOwn(settings,'antiAfkSettings')?{antiAfkSettings:settings.antiAfkSettings}:{}),durationMinutes:settings.durationMinutes??config.durationMinutes,startPlayers:settings.startPlayers??20,intervalSeconds:settings.intervalSeconds??60,holdMs:settings.holdMs??500,initialFocus:settings.initialFocus??'driver',mousePause:normalizeMousePause(settings.mousePause??config.preferences.mousePause)},{endAt});
  const pendingEntryId=entry.view()?.id;if(pendingEntryId&&pendingEntryId!==previousEntryId)entryOrigin={kind:origin.kind,ownerId:origin.ownerId||null,entryId:pendingEntryId};
  const prepared=await pending;
  if(!isCurrent()){if(entry.view()?.id===prepared.id)entry.stop('La programación se canceló antes de completar la entrada.');return prepared;}
@@ -102,7 +120,7 @@ const activity=createActivityMode({load:()=>readJson(path.join(DATA,'activity-mo
    await beginEntry(fresh,{durationMinutes:budget.remainingMinutes,...budget.settings,initialFocus:budget.initialFocus},true,budget.sessionEndAt,isCurrent,{kind:'activity',ownerId:activity.view()?.id});return;
   }
   const prepared=await automatic.start({server:fresh.server,durationMinutes:budget.remainingMinutes,...budget.settings,purpose:'seeding'},{endAt:budget.sessionEndAt});
-  activityMovementId=prepared.id;
+  activityMovementId=prepared.id;activityOwnership={jobId:activity.view()?.id,movementSessionId:prepared.id};
   if(!isCurrent()){if(automatic.view()?.id===prepared.id)automatic.stop('Vigilancia detenida antes de abrir el juego.');return;}
   const motion=movement();
   if(automatic.view()?.id!==prepared.id||!automatic.active()||[prepared.id,activity.view()?.id].includes(motion.autoOperatorStopped)){
@@ -114,11 +132,47 @@ const activity=createActivityMode({load:()=>readJson(path.join(DATA,'activity-mo
   catch(error){if(automatic.view()?.id===prepared.id)automatic.stop('No se pudo abrir Wardogs por actividad.','error');throw error;}
  }
 });
+function persistentTeamConflict(){
+ if(entry.active()||entry.view()?.cleanupPending)return 'Detén la entrada automática antes de repetir equipo entre partidas.';
+ if(automatic.active()||movement().armed===true||movement().busy===true)return 'Detén el movimiento o seeding antes de repetir equipo entre partidas.';
+ if(activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))return 'Detén las programaciones y seguimientos antes de repetir equipo entre partidas.';
+ const choice=teamClicker.view(),own=persistentTeam?.view()?.ownerId;
+ if(teamClicker.blocking()&&(!own||choice.ownerId!==own))return 'Detén la otra selección de equipo antes de repetir entre partidas.';
+ return null;
+}
+const persistentTeam=options.persistentTeam||createPersistentTeam({now:utcNow,monoNow,teamClicker,event,getInputs:number=>({server:publicViews().find(row=>row.number===number),matchRound:matchSource.view(),conflictReason:persistentTeamConflict()})});
+const matchSource=options.matchSource||createMatchSource({now:utcNow,monoNow,fetchImpl:fetcher,event,getTarget:()=>{const preference=persistentTeam.view();if(preference.enabled!==true)return null;return {id:preference.id,enabled:true,server:publicViews().find(row=>row.number===preference.server)};}});
+const persistentBlockedRoutes=new Set(['/api/entry/start','/api/team-clicker/config','/api/activity/start','/api/movement/start','/api/seeding/start','/api/opening/schedule','/api/open/game','/api/open/movement','/api/config','/api/watch/start']);
+const integrationFile=path.join(DATA,'integration-connection.json');
+const integration=createIntegrationService({now:utcNow,monoNow,getState:state,event,getReport:sessionId=>buildSessionReport({at:isoNow(),state:state(),events,sessionId}),
+ startSession:async(settings,ownership)=>{
+  if(updateShutdownRequested||updater.view().status==='installing')throw Error('Espera a que termine la actualización.');
+  if(persistentTeam.blocking()||entry.active()||entry.view()?.cleanupPending||automatic.active()||movement().armed===true||movement().busy===true||teamClicker.blocking()||activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))throw Error('Detén la sesión o programación anterior antes de empezar desde OpenBoost.');
+  let result;
+  if(settings.mode==='break')result=await automatic.start({purpose:'break',durationMinutes:settings.durationMinutes,intervalSeconds:settings.intervalSeconds,holdMs:settings.holdMs,confirmedDeployed:true});
+  else{
+   const target=connectionTarget(publicViews(),settings.server,settings.expectedJoinId);
+   if(settings.mode==='persistent-team')result=await persistentTeam.configure({enabled:true,server:target.server,expectedJoinId:target.joinId,team:settings.team,startNow:settings.startNow,intervalMs:20,attemptMinutes:Math.min(5,settings.durationMinutes),selectionTimeoutMinutes:settings.durationMinutes});
+   else result=await beginEntry(target,settings,settings.mode==='seeding',null,()=>true,{kind:'integration',ownerId:ownership.ownerId});
+   config={...config,selectedServer:target.server};atomicJson(configFile,config);
+  }
+  return result;
+ },
+ stopSession:async(owned,cause)=>{
+  const reason=cause==='integration_link_lost'?'El enlace de OpenBoost dejó de responder.':'Sesión propia detenida desde OpenBoost.';
+  if(owned.mode==='persistent-team'){if(persistentTeam.view()?.id!==owned.id)throw Error('La repetición cambió de propietario.');persistentTeam.stop(reason);}
+  else if(owned.mode==='break'){if(automatic.view()?.id!==owned.id)throw Error('El movimiento cambió de propietario.');automatic.stop(reason);}
+  else{const activeEntry=entry.view(),recovered=activeEntry?.rootEntryId===owned.id&&entryOrigin?.kind==='integration'&&entryOrigin.ownerId===owned.ownerId;if(activeEntry?.id!==owned.id&&!recovered)throw Error('La entrada cambió de propietario.');entry.stop(reason);}
+  const until=monoNow()+2500;
+  while(monoNow()<until){const pending=owned.mode==='persistent-team'?persistentTeam.view()?.cleanupPending:owned.mode==='break'?movement().busy:entry.view()?.cleanupPending;if(!pending)return {cleanupPending:false};await new Promise(resolve=>setTimeout(resolve,50));}
+  return {cleanupPending:true};
+ }
+});
 function updateBusy(){
  const manifest=readJson(path.join(ROOT,'manifest.json'));
  if(manifest?.application!=='FarmDogs'||manifest?.format!=='wardogs-portable-v1'||fs.existsSync(path.join(ROOT,'.git')))return {busy:true,reason:'Esta es la copia de desarrollo. Las actualizaciones se instalan en el portable.'};
  const motion=movement(),reward=rewardProtection.view();
- if(entry.active()||entry.view()?.cleanupPending||teamClicker.blocking()||automatic.active()||motion.armed===true||motion.busy===true||activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))return {busy:true,reason:'La actualización esperará a que terminen los automatismos y programaciones.'};
+ if(persistentTeam.blocking()||entry.active()||entry.view()?.cleanupPending||teamClicker.blocking()||automatic.active()||motion.armed===true||motion.busy===true||activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))return {busy:true,reason:'La actualización esperará a que terminen los automatismos y programaciones.'};
  if(reward.attempts?.some(attempt=>attempt.status==='reserved'))return {busy:true,reason:'La protección de premios está terminando una operación.'};
  return {busy:false,reason:'FarmDogs está inactivo.'};
 }
@@ -196,12 +250,29 @@ function tickWatch(){
 }
 function movement(){try{return movementView(readJson(path.join(DATA,'movement-state.json')),utcNow());}catch{return {available:false,status:'unknown',armed:null,reason:'Registro del controlador no legible.'};}}
 function state(){
- const account=accountView(),motion=movement(),views=publicViews(),autoSeeding=automatic.view();
+ const account=accountView(),motion=movement(),views=publicViews(),autoSeeding=automatic.view(),clickerState=teamClicker.view();
  const seedingContinuity=Object.fromEntries(views.map(server=>[server.number,isAdmittedSeedingContinuation(server,account)]));
  const diagnostics=Object.fromEntries([1,2,3,4,5].map(selectedServer=>[selectedServer,sessionDiagnostics({config:{selectedServer},account,movement:motion,screen:autoSeeding?.screen},{now:utcNow()})]));
  const occupancy=updateBusy(),update={...updater.view(),installBlocked:occupancy.busy,installBlockedReason:occupancy.reason,shutdownRequested:updateShutdownRequested,shutdownId:updateShutdownId,shutdownRequestedAt:updateShutdownRequestedAt};
  const localTools=launcher.availability(),automaticEntry=entryAvailable();
- return {appId:'wardogs-seeding-local-v1',installationRoot:ROOT,version:require('../package.json').version,capabilities:{standaloneMovement:true,automaticEntry,entryAntiAfk:automaticEntry&&localTools.automaticMovement===true,maximumSeeding:automaticEntry&&localTools.automaticMovement===true,deferredEntryFocus:true,appUpdates:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,clanPresence:clanPresence.view(),recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools,lastLaunch,opening:opening.view(),autoSeeding,entry:entry.view(),entryOrigin:entryOrigin&&entryOrigin.entryId===entry.view()?.id?{...entryOrigin}:null,activity:activity.view(),rewards:rewardProtection.view(),teamClicker:teamClicker.view(),diagnostics,update};
+ const snapshot={appId:'wardogs-seeding-local-v1',installationRoot:ROOT,version:require('../package.json').version,capabilities:{standaloneMovement:true,automaticEntry,entryAntiAfk:automaticEntry&&localTools.automaticMovement===true,maximumSeeding:automaticEntry&&localTools.automaticMovement===true,persistentTeam:clickerState.persistentSelectionAvailable===true,deferredEntryFocus:true,appUpdates:true},now:isoNow(),timeZone:'Europe/Madrid',token,config,source:{lastSuccessAt,lastAttemptAt,nextFetchAt:new Date(nextFetchAt||utcNow()).toISOString(),error:sourceError,refreshSeconds:30},servers:views,clanPresence:clanPresence.view(),recommendation:recommend(views),seedingContinuity,watch:runtime.watch,lastResult:runtime.lastResult,events,account,movement:motion,localTools,lastLaunch,opening:opening.view(),autoSeeding,entry:entry.view(),entryOrigin:entryOrigin&&entryOrigin.entryId===entry.view()?.id?{...entryOrigin}:null,activity:activity.view(),rewards:rewardProtection.view(),teamClicker:clickerState,persistentTeam:persistentTeam.view(),matchSource:matchSource.view(),diagnostics,update,preferences:structuredClone(config.preferences),presetsRevision:userPresets.view().revision,activityOwnership:activityOwnership&&activityOwnership.jobId===activity.view()?.id&&activityOwnership.movementSessionId===autoSeeding?.id?{...activityOwnership}:null};
+ snapshot.summary=buildSessionSummary(snapshot,{now:utcNow()});return snapshot;
+}
+const errorChecks=createErrorChecks({now:utcNow,monoNow,getInputs:()=>{
+ const current=state(),storage={};for(const [key,mode]of [['readable',fs.constants.R_OK],['writable',fs.constants.W_OK]]){try{fs.accessSync(DATA,mode);storage[key]=true;}catch{storage[key]=false;}}
+ return {...current,platform:process.platform,nodeVersion:process.versions.node,serviceHealthy:true,storage,busy:current.summary.stop!==null||['working','waiting','scheduled','paused','stopping'].includes(current.summary.status),package:{development:fs.existsSync(path.join(ROOT,'.git'))}};
+}});
+function stopScoped(input){
+ if(!input||typeof input!=='object'||Object.keys(input).some(key=>!['kind','id'].includes(key))||typeof input.id!=='string'||!(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i).test(input.id))throw Error('La sesión a detener no es válida.');
+ const equal=value=>typeof value==='string'&&value.toLowerCase()===input.id.toLowerCase();
+ if(input.kind==='entry'){if(!equal(entry.view()?.id))throw Error('La entrada cambió; actualiza su estado.');entry.stop('Entrada detenida por el usuario.');}
+ else if(input.kind==='auto'){if(!equal(automatic.view()?.id))throw Error('El movimiento cambió; actualiza su estado.');automatic.stop('Movimiento detenido por el usuario.');}
+ else if(input.kind==='persistent-team'){if(!equal(persistentTeam.view()?.id))throw Error('La repetición cambió; actualiza su estado.');persistentTeam.stop('Repetición detenida por el usuario.');}
+ else if(input.kind==='team'){const current=teamClicker.view();if(!equal(current.sessionId)||current.ownerId)throw Error('El selector cambió o pertenece a otra tarea.');teamClicker.stop();}
+ else if(input.kind==='activity'){const current=activity.view();if(!equal(current?.id))throw Error('La búsqueda cambió; actualiza su estado.');const owned=entryOrigin?.kind==='activity'&&entryOrigin.ownerId===current.id&&entryOrigin.entryId===entry.view()?.id,ownedMovement=activityOwnership?.jobId===current.id&&activityOwnership.movementSessionId===automatic.view()?.id;stopActivity();if(owned)entry.stop('Búsqueda detenida por el usuario.');if(ownedMovement)automatic.stop('Búsqueda detenida por el usuario.');}
+ else if(input.kind==='opening'){const current=opening.view();if(!equal(current?.id))throw Error('La programación cambió; actualiza su estado.');const owned=entryOrigin?.kind==='scheduled'&&entryOrigin.ownerId===current.id&&entryOrigin.entryId===entry.view()?.id;opening.cancel({expectedJobId:current.id});if(owned)entry.stop('Programación detenida por el usuario.');}
+ else if(input.kind==='watch'){if(!equal(runtime.watch?.id))throw Error('El seguimiento cambió; actualiza su estado.');finishWatch('cancelled','Detenido por el usuario');}
+ else throw Error('Tipo de sesión no admitido.');
 }
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 async function body(req){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>65536)throw Error('Solicitud demasiado grande.');}return JSON.parse(text||'{}');}
@@ -217,11 +288,42 @@ const server=http.createServer(async(req,res)=>{
   res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
   const route=new URL(req.url,'http://127.0.0.1').pathname;
-  if(req.method==='GET'&&route==='/api/state'){send(res,200,state());return;}
+  if(req.method==='GET'&&route==='/api/integration/status'){send(res,200,integration.status(integration.authorize(req.headers.authorization)));return;}
+  if(route==='/api/integration/commands'&&req.method==='POST'){
+   if(req.headers.origin!==`http://127.0.0.1:${PORT}`){send(res,403,{code:'ORIGIN_REJECTED',error:'Origen de integración no admitido.'});return;}
+   if(!integration.authorize(req.headers.authorization)){send(res,403,{code:'PAIRING_REQUIRED',error:'Conecta de nuevo FarmDogs desde OpenBoost.'});return;}
+   try{send(res,200,await integration.command(await body(req)));}catch(error){send(res,400,{code:error.code||'INTEGRATION_REJECTED',error:error.message});}return;
+  }
+  if(req.method==='GET'&&route==='/api/integration/report'){
+   if(!integration.authorize(req.headers.authorization)){send(res,403,{code:'PAIRING_REQUIRED',error:'Conecta de nuevo FarmDogs desde OpenBoost.'});return;}
+   send(res,200,integration.report(req.headers['x-integration-owner'],new URL(req.url,'http://127.0.0.1').searchParams.get('sessionId')));return;
+  }
+  if(req.method==='GET'&&route==='/api/integration/game'){
+   if(!integration.authorize(req.headers.authorization)){send(res,403,{code:'PAIRING_REQUIRED',error:'Conecta de nuevo FarmDogs desde OpenBoost.'});return;}
+   send(res,200,integration.game(req.headers['x-integration-owner'],new URL(req.url,'http://127.0.0.1').searchParams.get('sessionId')));return;
+  }
+  if(req.method==='GET'&&route==='/api/session-report'){
+   if(req.headers['x-session-token']!==token){send(res,403,{error:'Recarga la app antes de exportar el diagnóstico.'});return;}
+   const sessionId=new URL(req.url,'http://127.0.0.1').searchParams.get('sessionId');send(res,200,buildSessionReport({at:isoNow(),state:state(),events,sessionId}));return;
+  }
+  if(req.method==='GET'&&['/api/presets','/api/history'].includes(route)){
+   if(req.headers['x-session-token']!==token){send(res,403,{error:'Recarga FarmDogs antes de consultar tus ajustes o historial.'});return;}
+   if(route==='/api/presets'){send(res,200,userPresets.view());return;}
+   const query=new URL(req.url,'http://127.0.0.1').searchParams,filter={};for(const key of ['since','until','sessionId'])if(query.has(key))filter[key]=query.get(key);if(query.has('limit'))filter.limit=Number(query.get('limit'));send(res,200,sessionHistory.view(filter));return;
+  }
+  if(req.method==='GET'&&route==='/api/state'){lastUiSeenAt=utcNow();if(req.headers['sec-fetch-site']==='same-origin')independentUiAttached=true;send(res,200,state());return;}
   if(req.method==='POST'){
    if(req.headers['x-session-token']!==token){send(res,403,{error:'Recarga la página antes de cambiar el seguimiento.'});return;}
    const input=await body(req);
+   if(['/api/entry/start','/api/seeding/start','/api/movement/start','/api/persistent-team/start','/api/team-clicker/config','/api/opening/schedule'].includes(route)&&input.enabled!==false)input.mousePause=normalizeMousePause(input.mousePause??config.preferences.mousePause);
+   if(['/api/activity/start','/api/opening/schedule'].includes(route)&&input.seeding&&typeof input.seeding==='object')input.seeding={...input.seeding,mousePause:normalizeMousePause(input.seeding.mousePause??input.mousePause??config.preferences.mousePause)};
    if(updater.view().status==='installing'&&!route.endsWith('/stop')&&!['/api/opening/cancel','/api/account/disconnect','/api/rewards/disconnect','/api/rewards/result'].includes(route))throw Error('FarmDogs está instalando una actualización. Espera a que vuelva a abrirse.');
+   if(persistentTeam.blocking()&&persistentBlockedRoutes.has(route))throw Error('Desactiva Repetir equipo entre partidas antes de iniciar otra función o cambiar de servidor.');
+   if(route==='/api/preferences'){config={...config,preferences:preferences(input,config.preferences)};atomicJson(configFile,config);event('preferences_saved');send(res,200,state());return;}
+   if(route==='/api/presets/save'){userPresets.save(input);send(res,200,userPresets.view());return;}
+   if(route==='/api/presets/delete'){userPresets.remove(input);send(res,200,userPresets.view());return;}
+   if(route==='/api/checks'){send(res,200,await errorChecks.run());return;}
+   if(route==='/api/session/stop'){stopScoped(input);send(res,200,state());return;}
    if(route==='/api/update/config'){updater.setEnabled(input.enabled);send(res,200,state());return;}
    if(route==='/api/update/check'){await updater.check();send(res,200,state());return;}
    if(route==='/api/update/install'){const occupancy=updateBusy();if(occupancy.busy)throw Error(occupancy.reason);await updater.install();send(res,200,state());return;}
@@ -241,6 +343,18 @@ const server=http.createServer(async(req,res)=>{
     if(input.expectedSessionId!==undefined&&input.expectedSessionId!==entry.view()?.id)throw Error('La entrada cambió; no se detuvo otra sesión.');
     entry.stop('Entrada detenida por el usuario.');send(res,200,state());return;
    }
+   if(route==='/api/persistent-team/start'){
+    if(teamClicker.view().persistentSelectionAvailable!==true)throw Error('Actualiza el controlador para repetir equipo entre partidas.');
+    if(persistentTeam.blocking())throw Error('Desactiva la repetición anterior antes de cambiar sus ajustes.');
+    const conflict=persistentTeamConflict();if(conflict)throw Error(conflict);
+    const target=connectionTarget(publicViews(),input.server,input.expectedJoinId);
+    await persistentTeam.configure({...input,enabled:true,server:target.server,expectedJoinId:target.joinId});
+    config={...config,selectedServer:target.server};atomicJson(configFile,config);send(res,200,state());return;
+   }
+   if(route==='/api/persistent-team/stop'){
+    if(input.expectedSessionId!==undefined&&input.expectedSessionId!==persistentTeam.view()?.id)throw Error('La repetición cambió; no se detuvo otra sesión.');
+    persistentTeam.stop('Repetición de equipo desactivada por el usuario.');send(res,200,state());return;
+   }
    if(route==='/api/team-clicker/config'){
     if(entry.active())throw Error('Detén la entrada automática antes de cambiar la selección de equipo.');
     if(input.enabled&&(automatic.active()||movement().armed===true||movement().busy===true||activity.active()||['scheduled','launching'].includes(opening.view()?.status)))throw Error('Detén el seeding y sus programaciones antes de preparar el autoclic. Después de elegir equipo podrás iniciar seeding.');
@@ -250,6 +364,7 @@ const server=http.createServer(async(req,res)=>{
    if(route==='/api/team-clicker/calibrate'){teamClicker.calibrate(input);send(res,200,state());return;}
    if(route==='/api/team-clicker/stop'){
     if(input.expectedSessionId!==undefined&&input.expectedSessionId!==teamClicker.view().sessionId)throw Error('La sesión de autoclic cambió; no se detuvo la nueva sesión.');
+    if(persistentTeam.blocking())persistentTeam.stop('Selección detenida por el usuario.');
     if(entry.active())entry.stop('Selección detenida por el usuario.');else teamClicker.stop();send(res,200,state());return;
    }
    if(route==='/api/rewards/config'){rewardProtection.configure(input);send(res,200,state());return;}
@@ -282,7 +397,7 @@ const server=http.createServer(async(req,res)=>{
     if(teamClicker.blocking())throw Error('Cancela la selección de equipo y espera a que se detenga antes de activar movimiento.');
     if(automatic.active()||movement().armed===true||movement().busy===true)throw Error('Detén el movimiento o seeding anterior antes de iniciar otra sesión.');
     if(activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status))throw Error('Detén las programaciones y seguimientos antes de activar movimiento temporal.');
-    await automatic.start({purpose:'break',durationMinutes:input.durationMinutes,intervalSeconds:input.intervalSeconds,holdMs:input.holdMs,confirmedDeployed:input.confirmedDeployed});
+    await automatic.start({purpose:'break',durationMinutes:input.durationMinutes,intervalSeconds:input.intervalSeconds,holdMs:input.holdMs,confirmedDeployed:input.confirmedDeployed,mousePause:input.mousePause});
     send(res,200,state());return;
    }
    if(route==='/api/movement/stop'){
@@ -311,7 +426,7 @@ const server=http.createServer(async(req,res)=>{
     config={...config,selectedServer:target.server};atomicJson(configFile,config);
     if(!manualPresence&&!continuing)lastLaunch={...target,kind:'game',requestedAt:isoNow(),status:'launch_requested'};send(res,200,state());return;
    }
-   if(route==='/api/seeding/stop'){entry.stop('Sesión detenida por el usuario.');teamClicker.stop();stopActivity();if(opening.view()?.status==='scheduled')opening.cancel();else if(opening.view()?.status==='launching')opening.interrupt();automatic.stop();send(res,200,state());return;}
+   if(route==='/api/seeding/stop'){persistentTeam.stop('Sesión detenida por el usuario.');entry.stop('Sesión detenida por el usuario.');teamClicker.stop();stopActivity();if(opening.view()?.status==='scheduled')opening.cancel();else if(opening.view()?.status==='launching')opening.interrupt();automatic.stop();send(res,200,state());return;}
    if(route==='/api/opening/schedule'){
     requireSeedingPurpose(input);requireSeedingPurpose(input.seeding);
     if(entry.active())throw Error('Detén la entrada automática antes de programar otra sesión.');
@@ -378,7 +493,7 @@ const server=http.createServer(async(req,res)=>{
     if(!Number.isInteger(input.durationMinutes)||input.durationMinutes<1||input.durationMinutes>1440)throw Error('La duración debe ser de 1 a 1440 minutos.');
     if(!Array.isArray(input.profiles)||input.profiles.length!==5)throw Error('Faltan perfiles de servidores.');
     const profiles=input.profiles.map(validateProfile);if(new Set(profiles.map(p=>p.server)).size!==5)throw Error('Hay perfiles duplicados.');
-    config={selectedServer:input.selectedServer,durationMinutes:input.durationMinutes,profiles};atomicJson(configFile,config);event('config_saved');send(res,200,state());return;
+    config={...config,selectedServer:input.selectedServer,durationMinutes:input.durationMinutes,profiles};atomicJson(configFile,config);event('config_saved');send(res,200,state());return;
    }
    if(route==='/api/watch/start'){
     if(entry.active())throw Error('Detén la entrada automática antes de iniciar un seguimiento.');
@@ -394,9 +509,9 @@ const server=http.createServer(async(req,res)=>{
    if(route==='/api/service/stop'){send(res,200,state());setImmediate(()=>close().catch(error=>console.error(error.message)));return;}
    send(res,404,{error:'Ruta desconocida'});return;
   }
-  const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/mini':'mini.html','/mini.js':'mini.js','/mini.css':'mini.css','/attention.js':'attention.js','/attention.css':'attention.css','/account-import':'account-import.html','/account-import.js':'account-import.js','/farmdogs-ai-mark.png':'farmdogs-ai-mark.png','/rajdhani-bold.ttf':'rajdhani-bold.ttf','/OFL-Rajdhani.txt':'OFL-Rajdhani.txt'};
+  const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/mini':'mini.html','/mini.js':'mini.js','/mini.css':'mini.css','/attention.js':'attention.js','/attention.css':'attention.css','/account-import':'account-import.html','/account-import.js':'account-import.js','/farmdogs-ai-mark.png':'farmdogs-ai-mark.png','/rajdhani-bold.ttf':'rajdhani-bold.ttf','/rajdhani-medium.ttf':'rajdhani-medium.ttf','/OFL-Rajdhani.txt':'OFL-Rajdhani.txt','/command.css':'command.css','/workspace.js':'workspace.js','/tactical-surface.png':'tactical-surface.png','/industrial-tower.png':'industrial-tower.png','/deploy-button.png':'deploy-button.png','/LICENSE-Tabler.txt':'LICENSE-Tabler.txt',...Object.fromEntries(['lonestar','valkyra','manticore'].map(name=>['/faction-'+name+'.webp','faction-'+name+'.webp'])),...Object.fromEntries(['settings','history','alert','stop','profiles','pause'].map(name=>['/ui-'+name+'.svg','ui-'+name+'.svg']))};
   if(req.method!=='GET'||!files[route]){send(res,404,{error:'No encontrado'});return;}
-  const file=files[route],extension=path.extname(file),types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.ttf':'font/ttf','.txt':'text/plain; charset=utf-8'};res.writeHead(200,{'Content-Type':types[extension],'Cache-Control':'no-store'});fs.createReadStream(path.join(ROOT,'public',file)).pipe(res);
+  const file=files[route],extension=path.extname(file),types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.ttf':'font/ttf','.txt':'text/plain; charset=utf-8','.svg':'image/svg+xml','.webp':'image/webp'};res.writeHead(200,{'Content-Type':types[extension],'Cache-Control':'no-store'});fs.createReadStream(path.join(ROOT,'public',file)).pipe(res);
  }catch(error){send(res,400,{error:error.message});}
 });
 let resolveReady,rejectReady;
@@ -404,17 +519,25 @@ const ready=new Promise((resolve,reject)=>{resolveReady=resolve;rejectReady=reje
 server.on('error',error=>{clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);rejectReady(error);});
 function tickClicker(){try{teamClicker.tick();}catch(error){try{teamClicker.stop('Error del controlador de autoclic.');}catch{}event('team_clicker_error',{message:error.message});}}
 async function tickEntry(){try{await entry.tick();}catch(error){try{entry.stop('Error local de la entrada automática.','error');}catch{}event('entry_error',{message:error.message});}}
+ async function tickPersistentTeam(){if(!persistentTeam.blocking())return;try{await persistentTeam.tick();}catch(error){try{persistentTeam.stop('Error de la repetición de equipo.');}catch{}event('persistent_team_error',{message:error.message});}}
 const clickerTimer=setInterval(tickClicker,100);
-const refreshTimer=setInterval(refreshServers,1000),watchTimer=setInterval(()=>{tickWatch();void tickEntry();automatic.tick();void clanPresence.tick().catch(error=>event('clan_presence_error',{message:error.message}));tickActivity().catch(error=>event('activity_error',{message:error.message}));opening.tick().catch(error=>event('opening_error',{message:error.message}));if(options.autoUpdate!==false)void updater.tick();},1000);
-server.listen(PORT,'127.0.0.1',async()=>{PORT=server.address().port;atomicJson(configFile,config);persist();atomicJson(path.join(DATA,'service.json'),{pid:process.pid,port:PORT,url:`http://127.0.0.1:${PORT}`,startedAt:isoNow()});await refreshServers();resolveReady(`http://127.0.0.1:${PORT}`);});
+ const refreshTimer=setInterval(refreshServers,1000),watchTimer=setInterval(()=>{tickWatch();void tickEntry();void integration.tick().catch(error=>event('integration_error',{message:error.message}));void matchSource.tick().catch(error=>event('match_source_error',{message:error.message}));void tickPersistentTeam();automatic.tick();void clanPresence.tick().catch(error=>event('clan_presence_error',{message:error.message}));tickActivity().catch(error=>event('activity_error',{message:error.message}));opening.tick().catch(error=>event('opening_error',{message:error.message}));if(options.autoUpdate!==false)void updater.tick();},1000);
+server.listen(PORT,'127.0.0.1',async()=>{PORT=server.address().port;atomicJson(configFile,config);persist();atomicJson(path.join(DATA,'service.json'),{pid:process.pid,port:PORT,url:`http://127.0.0.1:${PORT}`,startedAt:isoNow()});atomicJson(integrationFile,integration.descriptor({root:ROOT,pid:process.pid,baseUrl:`http://127.0.0.1:${PORT}`}));await refreshServers();resolveReady(`http://127.0.0.1:${PORT}`);});
 function close(){if(closePromise)return closePromise;
  // A stop command releases keys but leaves the hidden native message loop alive.
  // Use the same short, installation/PID-bound cooperative exit as the updater,
  // including when no movement session is active. Never let a marker I/O failure
  // prevent the remaining controllers from being disarmed and the service closed.
  try{requestAppShutdown(updateShutdownId||randomUUID());}catch(error){console.error('No se pudo solicitar el cierre del controlador: '+error.message);}
- clanPresence.close();updater.close();entry.close();teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);clearTimeout(updateShutdownTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
-return {ready,close,tick:async()=>{tickClicker();tickWatch();await tickEntry();automatic.tick();await clanPresence.tick();await tickActivity();await opening.tick();if(options.autoUpdate!==false)await updater.tick();},refresh:refreshServers,state};
+  integration.close();try{if(readJson(integrationFile)?.instanceId===integration.instanceId)fs.unlinkSync(integrationFile);}catch{}clanPresence.close();updater.close();persistentTeam.close();matchSource.close();entry.close();teamClicker.close();stopActivity('El servicio se cerró.');activity.close();automatic.close();opening.interrupt();if(runtime.watch&&(activeStates.has(runtime.watch.status)||runtime.watch.status==='scheduled'))finishWatch('interrupted','El observador se ha cerrado.');clearInterval(refreshTimer);clearInterval(watchTimer);clearInterval(clickerTimer);clearTimeout(updateShutdownTimer);closePromise=new Promise(resolve=>server.close(resolve));return closePromise;}
+ async function parentDisconnected(){
+  const stopped=await integration.hostDisconnected().catch(()=>({stopped:false}));
+  const e=entry.view(),a=automatic.view(),p=persistentTeam.view(),t=teamClicker.view(),m=movement();
+  const privateWork=entry.active()&&entryOrigin?.kind!=='integration'||automatic.active()||persistentTeam.blocking()||teamClicker.blocking()||m.armed===true||m.busy===true||activity.active()||['scheduled','launching'].includes(opening.view()?.status)||runtime.watch&&['scheduled',...activeStates].includes(runtime.watch.status);
+  if(!stopped.stopped||independentUiAttached||utcNow()-lastUiSeenAt<15000||privateWork)return {closed:false,preserved:true};
+  await close();return {closed:true,preserved:false};
+ }
+ return {ready,close,parentDisconnected,tick:async()=>{tickClicker();tickWatch();await tickEntry();await integration.tick();await matchSource.tick();await tickPersistentTeam();automatic.tick();await clanPresence.tick();await tickActivity();await opening.tick();if(options.autoUpdate!==false)await updater.tick();},refresh:refreshServers,state};
 }
 module.exports={createObserver};
-if(require.main===module){const service=createObserver();service.ready.then(url=>console.log(`Observador disponible en ${url}`)).catch(error=>{console.error(error.message);process.exitCode=1;});for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>service.close().then(()=>process.exit(0)));}
+if(require.main===module){const service=createObserver();service.ready.then(url=>console.log(`Observador disponible en ${url}`)).catch(error=>{console.error(error.message);process.exitCode=1;});for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>service.close().then(()=>process.exit(0)));if(typeof process.send==='function'&&Number(process.env.WARDOGS_PARENT_PID)===process.ppid)process.once('disconnect',()=>{void service.parentDisconnected().then(result=>{if(result.closed)process.exit(0);}).catch(()=>{});});}

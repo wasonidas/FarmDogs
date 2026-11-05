@@ -60,7 +60,8 @@ internal sealed class DesktopWindow : Form
     // and coalesces activation/sign-in requests without a browser timer.
     private readonly System.Windows.Forms.Timer poll=new System.Windows.Forms.Timer {Interval=5000};
     private readonly AccountRefreshPolicy accountReads=new AccountRefreshPolicy();
-    private System.Windows.Forms.Timer showTimer;
+    private readonly DesktopVisibilityPolicy hostVisibility=new DesktopVisibilityPolicy();
+    private DesktopWakeSignal showWake;
     private System.Windows.Forms.Timer updateCloseTimer;
     private EventWaitHandle showRequest;
     private Form authForm;
@@ -103,7 +104,7 @@ internal sealed class DesktopWindow : Form
             if(!view.IsDisposed&&view.CoreWebView2!=null&&DesktopProtocol.IsLocal(view.CoreWebView2.Source))view.CoreWebView2.PostWebMessageAsJson(DesktopProtocol.Json.Serialize(message));
         });
         if(!selfTest)entryFocus=new DesktopEntryFocus(this,root,()=>!exiting&&view.CoreWebView2!=null&&DesktopProtocol.IsLocal(view.CoreWebView2.Source),message=>{if(!view.IsDisposed&&view.CoreWebView2!=null&&DesktopProtocol.IsLocal(view.CoreWebView2.Source))view.CoreWebView2.PostWebMessageAsJson(DesktopProtocol.Json.Serialize(message));});
-        if(!selfTest){showRequest=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\WardogsDesktopAppOpen");showTimer=new System.Windows.Forms.Timer {Interval=400};showTimer.Tick+=(s,e)=>{if(showRequest.WaitOne(0)){Show();WindowState=FormWindowState.Normal;Activate();}};showTimer.Start();}
+        if(!selfTest){showRequest=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\WardogsDesktopAppOpen");var ownerHandle=Handle;showWake=new DesktopWakeSignal(showRequest,action=>BeginInvoke(action),()=>{if(exiting||IsDisposed)return;Show();WindowState=FormWindowState.Normal;Activate();});}
         if(!selfTest){updateCloseTimer=new System.Windows.Forms.Timer{Interval=200};updateCloseTimer.Tick+=(s,e)=>{if(!exiting&&AppShutdown.Requested(root,Path.Combine(root,"data"),DateTime.UtcNow))Close();};updateCloseTimer.Start();}
         if(!selfTest)Shown+=async(s,e)=>{try{await InitializeView();}catch(Exception error){SetStatus("error",error.Message);}};
         FormClosing+=async(s,e)=>{
@@ -111,7 +112,7 @@ internal sealed class DesktopWindow : Form
             await Task.Yield(); // Return the initial cancelled FormClosing before any final Close/Dispose.
             reading=false;accountEpoch++;accountOpenIntent++;accountReads.Stop();poll.Stop();pendingId=null;vipPart=null;seedPart=null;identityPart=null;view.Enabled=false;
             if(updateCloseTimer!=null){updateCloseTimer.Stop();updateCloseTimer.Dispose();updateCloseTimer=null;}
-            if(showTimer!=null)showTimer.Stop();
+            if(showWake!=null){showWake.Dispose();showWake=null;}
             if(foregroundAlerts!=null){foregroundAlerts.Dispose();foregroundAlerts=null;}
             if(entryFocus!=null){entryFocus.Dispose();entryFocus=null;}
             string rewardCommand=rewards.BeginClose();
@@ -131,6 +132,22 @@ internal sealed class DesktopWindow : Form
         };
     }
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);DesktopAppearance.DarkTitleBar(Handle);}
+    protected override void OnResize(EventArgs e){base.OnResize(e);PublishVisibility(false);}
+    protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);PublishVisibility(false);}
+    private void PublishVisibility(bool force)
+    {
+        if(exiting||view==null||view.IsDisposed||view.CoreWebView2==null||!DesktopProtocol.IsLocal(view.CoreWebView2.Source))return;
+        bool visible;if(!hostVisibility.Change(Visible,WindowState==FormWindowState.Minimized,force,out visible))return;
+        SetMainMemoryTarget(visible);
+        view.CoreWebView2.PostWebMessageAsJson(DesktopProtocol.Json.Serialize(new {kind="host_window_visibility",visible=visible}));
+    }
+    private bool SetMainMemoryTarget(bool visible)
+    {
+        try{view.CoreWebView2.MemoryUsageTargetLevel=visible?CoreWebView2MemoryUsageTargetLevel.Normal:CoreWebView2MemoryUsageTargetLevel.Low;return true;}
+        catch(NotImplementedException){return false;}
+        catch(System.Runtime.InteropServices.COMException){return false;}
+        catch(InvalidOperationException){return false;}
+    }
     public async Task InitializeView()
     {
         var profile=Path.Combine(root,"data",selfTest?"webview-selftest":"webview-profile");
@@ -145,7 +162,7 @@ internal sealed class DesktopWindow : Form
         view.CoreWebView2.WebMessageReceived+=async(s,e)=>{
             if(!DesktopProtocol.IsLocal(e.Source)||!DesktopProtocol.IsLocal(view.CoreWebView2.Source)||e.WebMessageAsJson.Length>2048)return;
             var msg=DesktopProtocol.Object(DesktopProtocol.Json.DeserializeObject(e.WebMessageAsJson));var kind=DesktopProtocol.Text(msg,"kind");
-            if(kind=="host_ready"){handshakes++;Publish();if(foregroundAlerts!=null)foregroundAlerts.Ready();if(entryFocus!=null)entryFocus.Ready();if(!selfTest)await RequestAccountRefresh(false);}
+            if(kind=="host_ready"){handshakes++;Publish();PublishVisibility(true);if(foregroundAlerts!=null)foregroundAlerts.Ready();if(entryFocus!=null)entryFocus.Ready();if(!selfTest)await RequestAccountRefresh(false);}
             else if(kind=="host_entry_focus_arm"&&!selfTest&&entryFocus!=null){object raw;int server=msg.TryGetValue("server",out raw)&&raw is int?(int)raw:0;entryFocus.Arm(DesktopProtocol.Text(msg,"id"),server,DesktopProtocol.Text(msg,"joinId"));}
             else if(kind=="host_entry_focus_bind"&&!selfTest&&entryFocus!=null)await entryFocus.Bind(DesktopProtocol.Text(msg,"id"),DesktopProtocol.Text(msg,"sessionId"));
             else if(kind=="host_entry_focus_stop"&&!selfTest&&entryFocus!=null)await entryFocus.StopFromKey(DesktopProtocol.Text(msg,"id"));
@@ -318,7 +335,7 @@ internal sealed class DesktopWindow : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if(disposing){if(entryFocus!=null)entryFocus.Dispose();if(foregroundAlerts!=null)foregroundAlerts.Dispose();if(showTimer!=null)showTimer.Dispose();if(showRequest!=null)showRequest.Dispose();poll.Dispose();http.Dispose();if(authForm!=null)authForm.Dispose();view.Dispose();}base.Dispose(disposing);
+        if(disposing){if(entryFocus!=null)entryFocus.Dispose();if(foregroundAlerts!=null)foregroundAlerts.Dispose();if(showWake!=null)showWake.Dispose();if(showRequest!=null)showRequest.Dispose();poll.Dispose();http.Dispose();if(authForm!=null)authForm.Dispose();view.Dispose();}base.Dispose(disposing);
     }
     protected override bool ProcessCmdKey(ref Message message,Keys keyData)
     {

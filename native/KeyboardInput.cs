@@ -20,6 +20,10 @@ namespace WardogsSeeding {
   [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr handle, int id);
   static int held;
   static readonly object gate = new object();
+  static readonly UserMouseActivity mouseActivity=new UserMouseActivity();
+  public static void ConfigureMousePause(MousePauseSettings settings,bool enabled){mouseActivity.Configure(settings,enabled);}
+  public static MousePauseSnapshot MousePause(DateTime now){return mouseActivity.View(now);}
+  public static long MouseRevision{get{return mouseActivity.Revision;}}
 
   public static int InputSize { get { return Marshal.SizeOf(typeof(INPUT)); } }
   public static int ForegroundPid() {
@@ -41,6 +45,7 @@ namespace WardogsSeeding {
    INPUT input = new INPUT(); input.type = 1;
    input.data.keyboard.scan = (ushort)MapVirtualKey((uint)vk, 0);
    input.data.keyboard.flags = 0x0008u | (up ? 0x0002u : 0u);
+   input.data.keyboard.extra=FarmDogsInputMarker.Value;
    if (SendInput(1, new INPUT[] { input }, Marshal.SizeOf(typeof(INPUT))) != 1) throw new InvalidOperationException("Windows no acepto la entrada (error " + Marshal.GetLastWin32Error() + ").");
   }
   public static void Release() {
@@ -50,12 +55,14 @@ namespace WardogsSeeding {
    if (vk != 0x41 && vk != 0x44 && vk != 0x57 && vk != 0x53) throw new ArgumentException("Solo A/D/W/S.");
    if (milliseconds < 100 || milliseconds > 2000) throw new ArgumentException("Duracion de tecla fuera de rango.");
    if (!ForegroundIs(pid) || ModifiersDown()) throw new InvalidOperationException("Juego sin foco o modificador pulsado.");
+   if(mouseActivity.Paused)throw new UserMousePauseException();
    Stopwatch clock = Stopwatch.StartNew();
    try {
     cancel.ThrowIfCancellationRequested();
     lock (gate) { if (held != 0) throw new InvalidOperationException("Ya hay una tecla pulsada."); held = vk; Send(vk, false); }
     while (true) {
      cancel.ThrowIfCancellationRequested();
+     if(mouseActivity.Paused)throw new UserMousePauseException();
      if (!ForegroundIs(pid) || ModifiersDown()) throw new InvalidOperationException("Interrumpido por cambio de foco o teclado.");
      int delay = PulseTiming.NextDelay(milliseconds, clock.ElapsedMilliseconds);
      if (delay == 0) break;

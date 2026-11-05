@@ -12,12 +12,16 @@ namespace WardogsSeeding {
  public static class KeyboardInput {
   public static readonly System.Collections.Generic.List<int> Keys=new System.Collections.Generic.List<int>();
   public static int Held,MaxHeld,Holds;public static int InputSize {get{return 40;}}
-  public static bool HotkeysAvailable=true;
+  public static bool HotkeysAvailable=true,PauseDuringHold,ListenerEnabled,GameAlive=true;
+  public static long MouseRevision{get{return InjectedPause.revision;}}
+  public static MousePauseSnapshot InjectedPause=new MousePauseSnapshot();
   public static bool RegisterHotKey(IntPtr h,int id,uint m,uint k){return HotkeysAvailable;}
   public static bool UnregisterHotKey(IntPtr h,int id){return true;}
-  public static int FindGame(){return 1234;}public static bool ForegroundIs(int p){return p==1234;}public static bool IsGame(int p){return p==1234;}public static bool ModifiersDown(){return false;}
+  public static int FindGame(){return 1234;}public static bool ForegroundIs(int p){return p==1234;}public static bool IsGame(int p){return GameAlive&&p==1234;}public static bool ModifiersDown(){return false;}
   public static void Release(){}
-  public static async Task Hold(int pid,int vk,int milliseconds,CancellationToken token){Keys.Add(vk);Holds++;Held++;MaxHeld=Math.Max(MaxHeld,Held);try{await Task.Delay(milliseconds,token);}finally{Held--;}}
+  public static void ConfigureMousePause(MousePauseSettings settings,bool enabled){ListenerEnabled=enabled&&MousePauseSettings.Normalize(settings).enabled;}
+  public static MousePauseSnapshot MousePause(DateTime now){return InjectedPause;}
+  public static async Task Hold(int pid,int vk,int milliseconds,CancellationToken token){Keys.Add(vk);Holds++;Held++;MaxHeld=Math.Max(MaxHeld,Held);try{if(PauseDuringHold){await Task.Delay(20,token);throw new UserMousePauseException();}await Task.Delay(milliseconds,token);}finally{Held--;}}
  }
  public static class ControllerAutomationTests {
   static int cancellationChecks;
@@ -31,7 +35,7 @@ namespace WardogsSeeding {
    try{form=new ControllerForm(root,DateTime.UtcNow.AddSeconds(30),signal);var handle=form.Handle;test(form,Path.Combine(root,"data","movement-command.json"),new JavaScriptSerializer());}
    finally{if(form!=null){Invoke(form,"Stop","Fin del caso de cancelacion");var timer=(System.Windows.Forms.Timer)form.GetType().GetField("timer",Private).GetValue(form);timer.Stop();timer.Dispose();form.Dispose();}signal.Dispose();var parent=Path.GetDirectoryName(Path.GetFullPath(root));if(parent!=Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)||!Path.GetFileName(root).StartsWith("wardogs-controller-cancel-"))throw new Exception("Ruta temporal no valida");Directory.Delete(root,true);}
   }
-  static void Submit(string file,JavaScriptSerializer json,string id,string kind,int age=0){var now=DateTime.UtcNow.AddMilliseconds(-age);File.WriteAllText(file,json.Serialize(new AutomaticCommand {format="wardogs-automatic-movement-v1",id=Guid.NewGuid().ToString("D"),sessionId=id,kind=kind,issuedAt=now.ToString("o"),expiresAt=now.AddSeconds(3).ToString("o"),endAt=DateTime.UtcNow.AddSeconds(20).ToString("o"),capturedAt=DateTime.UtcNow.ToString("o"),frameId=Guid.NewGuid().ToString("D"),scene="gameplay_hud",gamePid=1234,holdMs=2000,intervalSeconds=5,directions="AD"}));}
+  static void Submit(string file,JavaScriptSerializer json,string id,string kind,int age=0,int mouseRevision=0){var now=DateTime.UtcNow.AddMilliseconds(-age);File.WriteAllText(file,json.Serialize(new AutomaticCommand {format="wardogs-automatic-movement-v1",id=Guid.NewGuid().ToString("D"),sessionId=id,kind=kind,issuedAt=now.ToString("o"),expiresAt=now.AddSeconds(3).ToString("o"),endAt=DateTime.UtcNow.AddSeconds(20).ToString("o"),capturedAt=DateTime.UtcNow.ToString("o"),frameId=Guid.NewGuid().ToString("D"),scene="gameplay_hud",gamePid=1234,holdMs=2000,intervalSeconds=5,directions="AD",mouseRevision=mouseRevision}));}
   static void PreflightCancellation(){
    CancellationCase((form,file,json)=>{var pending=Guid.NewGuid().ToString("D");Submit(file,json,pending,"watch");Invoke(form,"OperatorStop","F8 antes del primer comando");CheckCancellation(form.GetType().GetField("autoSessionId",Private).GetValue(form)==null,"La prueba ya habia adoptado el UUID pendiente");CheckCancellation((string)form.GetType().GetField("autoOperatorStopped",Private).GetValue(form)==pending,"F8 temprano no publico el UUID pendiente");Submit(file,json,pending,"start");Invoke(form,"ReadAutomaticCommand");CheckCancellation(!Armed(form),"F8 temprano permitio armar el primer start");Submit(file,json,pending,"watch");Invoke(form,"ReadAutomaticCommand");CheckCancellation(!Armed(form),"Un watch renovo la sesion cancelada");Submit(file,json,Guid.NewGuid().ToString("D"),"start");Invoke(form,"ReadAutomaticCommand");CheckCancellation(Armed(form),"Una nueva activacion explicita no pudo armar");});
    CancellationCase((form,file,json)=>{string old=Guid.NewGuid().ToString("D"),pending=Guid.NewGuid().ToString("D");Submit(file,json,old,"start");Invoke(form,"ReadAutomaticCommand");CheckCancellation(Armed(form),"No se preparo la sesion anterior");Submit(file,json,pending,"watch");Invoke(form,"OperatorStop","F8 entre dos sesiones");CheckCancellation(!Armed(form),"La parada no desarmo la sesion actual");CheckCancellation((string)form.GetType().GetField("autoOperatorStopped",Private).GetValue(form)==pending,"La app no puede observar la cancelacion pendiente");foreach(var id in new[]{old,pending}){Submit(file,json,id,"start");Invoke(form,"ReadAutomaticCommand");CheckCancellation(!Armed(form),"Se perdio una de las dos cancelaciones");}});
@@ -45,8 +49,22 @@ namespace WardogsSeeding {
    CheckCancellation(KeyboardInput.Holds==0,"Las pruebas de cancelacion ejecutaron una pulsacion");
    Console.WriteLine(cancellationChecks+" comprobaciones de F8 temprano/cancelacion pendiente, sin entradas nativas ni ventanas visibles.");
   }
+  static void MousePauseCases(){
+   int before=cancellationChecks;
+   CancellationCase((form,file,json)=>{
+    var id=Guid.NewGuid().ToString("D");Submit(file,json,id,"start");Invoke(form,"ReadAutomaticCommand");KeyboardInput.InjectedPause=new MousePauseSnapshot{active=true,buttonsDown=true,remainingMs=3000};Invoke(form,"OnTick",null,EventArgs.Empty);CheckCancellation(Armed(form)&&KeyboardInput.Holds==0,"Mouse pause sent a hold or discarded its armed owner");
+    KeyboardInput.InjectedPause=new MousePauseSnapshot();KeyboardInput.PauseDuringHold=true;Invoke(form,"OnTick",null,EventArgs.Empty);var wait=Stopwatch.StartNew();while(KeyboardInput.Held!=0&&wait.ElapsedMilliseconds<1000){Application.DoEvents();Thread.Sleep(5);}CheckCancellation(KeyboardInput.Held==0&&KeyboardInput.Holds==1&&Armed(form),"Mid-hold mouse pause failed to release or canceled its resumable session");
+    var cadence=(AutomaticCadence)form.GetType().GetField("automaticCadence",Private).GetValue(form);CheckCancellation(cadence.CompletedCount==0&&cadence.AttemptCount==1,"A partial mouse-paused hold was counted as complete");
+    KeyboardInput.PauseDuringHold=false;Invoke(form,"OnTick",null,EventArgs.Empty);CheckCancellation(KeyboardInput.Holds==1,"Mouse resume burst ignored its existing cadence");Invoke(form,"OperatorStop","F8 during mouse pause");CheckCancellation(!Armed(form),"F8 failed to cancel a mouse-paused session");
+   });
+   CancellationCase((form,file,json)=>{KeyboardInput.InjectedPause=new MousePauseSnapshot();var id=Guid.NewGuid().ToString("D");Submit(file,json,id,"start");Invoke(form,"ReadAutomaticCommand");int holds=KeyboardInput.Holds;KeyboardInput.InjectedPause=new MousePauseSnapshot{revision=1};Invoke(form,"OnTick",null,EventArgs.Empty);CheckCancellation(Armed(form)&&KeyboardInput.Holds==holds,"Quiet mouse activity reused an older native screen permit");Submit(file,json,id,"start",0,1);Invoke(form,"ReadAutomaticCommand");CheckCancellation(Convert.ToInt64(form.GetType().GetField("permittedMouseRevision",Private).GetValue(form))==1,"Fresh screen revision did not renew the native permit");KeyboardInput.InjectedPause=new MousePauseSnapshot();});
+   foreach(bool gameExit in new[]{false,true})CancellationCase((form,file,json)=>{Submit(file,json,Guid.NewGuid().ToString("D"),"start");Invoke(form,"ReadAutomaticCommand");CheckCancellation(KeyboardInput.ListenerEnabled,"The fake observer did not start with its owned command");if(gameExit)KeyboardInput.GameAlive=false;else{var plan=(MovementPolicy)form.GetType().GetField("plan",Private).GetValue(form);typeof(MovementPolicy).GetProperty("EndUtc").SetValue(plan,DateTime.UtcNow.AddSeconds(-1),null);}Invoke(form,"OnTick",null,EventArgs.Empty);CheckCancellation(!Armed(form)&&!KeyboardInput.ListenerEnabled,"Game exit or deadline left its mouse observer active");KeyboardInput.GameAlive=true;});
+   CancellationCase((form,file,json)=>{KeyboardInput.PauseDuringHold=false;KeyboardInput.InjectedPause=new MousePauseSnapshot();((CheckBox)form.GetType().GetField("deployed",Private).GetValue(form)).Checked=true;Invoke(form,"Arm",true);CheckCancellation(Armed(form)&&KeyboardInput.ListenerEnabled,"Single-step did not start its fake observer");Invoke(form,"OnTick",null,EventArgs.Empty);var wait=Stopwatch.StartNew();while(Armed(form)&&wait.ElapsedMilliseconds<3000){Application.DoEvents();Thread.Sleep(5);}CheckCancellation(!Armed(form)&&!KeyboardInput.ListenerEnabled,"Completed single-step retained its mouse observer");});
+   KeyboardInput.InjectedPause=new MousePauseSnapshot();KeyboardInput.PauseDuringHold=false;KeyboardInput.Keys.Clear();KeyboardInput.Held=KeyboardInput.MaxHeld=KeyboardInput.Holds=0;
+   Console.WriteLine((cancellationChecks-before)+" mouse pause, release, cadence and observer teardown checks; fake input only.");
+  }
   [STAThread] public static int Main(){
-   try{PreflightCancellation();}catch(Exception error){Console.Error.WriteLine(error.InnerException==null?error.Message:error.InnerException.Message);return 1;}
+   try{PreflightCancellation();MousePauseCases();}catch(Exception error){Console.Error.WriteLine(error.InnerException==null?error.Message:error.InnerException.Message);return 1;}
    var root=Path.Combine(Path.GetTempPath(),"wardogs-controller-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(Path.Combine(root,"data"));
    string id=Guid.NewGuid().ToString("D"),report=null;int stage=0;Exception failure=null;var json=new JavaScriptSerializer();
    var context=new ApplicationContext();var signal=new EventWaitHandle(false,EventResetMode.AutoReset);

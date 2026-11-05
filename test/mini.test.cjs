@@ -27,18 +27,63 @@ async function app({initial=sample(),clipboardFails=false,onPost,host=false}={})
  const radios=['blue','red','green'].map(team=>Object.assign(new Element(),{value:team,checked:team==='blue'}));
  for(const radio of radios){radio._checked=radio.checked;Object.defineProperty(radio,'checked',{get(){return this._checked;},set(value){if(value)for(const peer of radios)peer._checked=false;this._checked=!!value;}});}
  const node=id=>{assert.ok(elements.has(id),`ID real del HTML: ${id}`);return elements.get(id);};
- const document={getElementById:node,querySelectorAll(selector){if(selector==='input[name="clicker-team"]')return radios;if(selector==='input[name="clicker-team"],#clicker-interval')return [...radios,node('clicker-interval')];if(selector==='[data-seed-mode]')return [...elements.values()].filter(node=>node.dataset.seedMode);assert.equal(selector,'[data-go-tab]');return [];},querySelector(selector){if(selector==='input[name="clicker-team"]:checked')return radios.find(r=>r.checked);const team=selector.match(/\[value="(blue|red|green)"\]/)?.[1];assert.ok(team);return radios.find(r=>r.value===team);}};
+ const documentListeners=new Map(),timers=new Map();let timerId=0;
+ const document={hidden:false,addEventListener:(name,handler)=>documentListeners.set(name,handler),getElementById:node,querySelectorAll(selector){if(selector==='input[name="clicker-team"]')return radios;if(selector==='input[name="clicker-team"],#clicker-interval')return [...radios,node('clicker-interval')];if(selector==='[data-seed-mode]')return [...elements.values()].filter(node=>node.dataset.seedMode);assert.equal(selector,'[data-go-tab]');return [];},querySelector(selector){if(selector==='input[name="clicker-team"]:checked')return radios.find(r=>r.checked);const team=selector.match(/\[value="(blue|red|green)"\]/)?.[1];assert.ok(team);return radios.find(r=>r.value===team);}};
  let current=initial,copies=0;const requests=[],hostMessages=[],hostListeners=[],hostWindowListeners=new Map();
  const mockWindow=host?{addEventListener:(name,handler)=>hostWindowListeners.set(name,handler),crypto:{randomUUID:()=> '44444444-4444-4444-8444-444444444444'},chrome:{webview:{postMessage:msg=>hostMessages.push(msg),addEventListener:(kind,handler)=>hostListeners.push(handler)}}}:{};
- const context=vm.createContext({document,window:mockWindow,navigator:{clipboard:{writeText:async()=>{copies++;if(clipboardFails)throw Error('Portapapeles remoto ocupado');}}},console,Intl,Date,Number,Object,Set,fetch:async(route,options={})=>{const request={route,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,headers:options.headers};requests.push(request);if(request.method==='POST'&&onPost)current=await onPost(route,request.body,current)||current;return {ok:true,json:async()=>current};},setInterval:()=>0});
+ const context=vm.createContext({document,window:mockWindow,navigator:{clipboard:{writeText:async()=>{copies++;if(clipboardFails)throw Error('Portapapeles remoto ocupado');}}},console,Intl,Date,Number,Object,Set,fetch:async(route,options={})=>{const request={route,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,headers:options.headers};requests.push(request);if(request.method==='POST'&&onPost)current=await onPost(route,request.body,current)||current;return {ok:true,json:async()=>current};},setInterval:()=>0,setTimeout:(callback,delay)=>{const id=++timerId;timers.set(id,{callback,delay});return id;},clearTimeout:id=>timers.delete(id)});
  vm.runInContext(script,context,{filename:'public/mini.js'});await new Promise(setImmediate);
  if(host)for(const handler of hostListeners)handler({data:{kind:'host_entry_focus_support',supported:true}});
- return {node,requests,hostMessages,hostEvent:message=>{for(const handler of hostListeners)handler({data:message});},hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},async submit(id,event={}){assert.equal(node('schedule').disabled,false);for(const handler of node(id).listeners.get('submit')||[])await handler({preventDefault(){},...event});},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},async disconnect(){current=null;await vm.runInContext('poll()',context);},posts:()=>requests.filter(request=>request.method==='POST')};
+ return {node,requests,hostMessages,hostEvent:message=>{for(const handler of hostListeners)handler({data:message});},hostKey:key=>hostWindowListeners.get("keydown")?.({key}),get copies(){return copies;},get current(){return current;},pollDelay:()=>[...timers.values()].at(-1)?.delay,async tickPoll(){const first=timers.entries().next().value;assert.ok(first);timers.delete(first[0]);await first[1].callback();},async hidden(value){document.hidden=value;documentListeners.get('visibilitychange')?.();await new Promise(setImmediate);},selectedTeam:()=>radios.find(radio=>radio.checked)?.value,async selectTeam(team){const radio=radios.find(r=>r.value===team);assert.ok(radio);assert.equal(radio.disabled,false);radio.checked=true;for(const handler of radio.listeners.get('change')||[])await handler();},async change(id,value){assert.equal(node(id).disabled,false);node(id).checked=value;for(const handler of node(id).listeners.get('change')||[])await handler();},async click(id,event){assert.equal(node(id).disabled,false,`${id} habilitado`);for(const handler of node(id).listeners.get('click')||[])await handler(event);},async submit(id,event={}){assert.equal(node('schedule').disabled,false);for(const handler of node(id).listeners.get('submit')||[])await handler({preventDefault(){},...event});},update(value){current=value;context.nextState=value;vm.runInContext('render(nextState)',context);},async disconnect(){current=null;await vm.runInContext('poll()',context);},posts:()=>requests.filter(request=>request.method==='POST')};
 }
 
 const focusJobId='55555555-5555-4555-8555-555555555555';
+const repeatId='77777777-7777-4777-8777-777777777777';
+function repeatSample(){const s=sample();s.capabilities.persistentTeam=true;s.teamClicker.persistentSelectionAvailable=true;s.persistentTeam={enabled:false,status:'disabled',cleanupPending:false,reason:'Desactivado.'};return s;}
 function deferredHost(a){a.hostEvent({kind:'host_entry_focus_support',supported:true,deferred:true});}
 function automaticSample(){const s=sample();s.capabilities.automaticEntry=true;s.capabilities.deferredEntryFocus=true;return s;}
+
+test('equipo persistente: esperar siguiente partida usa la API y sigue preparado después de DESPLEGANDO',async()=>{
+ const a=await app({initial:repeatSample(),onPost:(route,body,current)=>{
+  if(route==='/api/persistent-team/start')return {...current,persistentTeam:{...body,id:repeatId,enabled:true,status:'watching',reason:'Sin capturas durante la partida.',cleanupPending:false}};
+  assert.equal(route,'/api/persistent-team/stop');assert.equal(body.expectedSessionId,repeatId);return {...current,persistentTeam:{...current.persistentTeam,enabled:false,status:'disabled',reason:'Modo desactivado.',cleanupPending:false}};
+ }});
+ assert.equal(a.node('clicker-repeat').checked,false);assert.equal(a.node('clicker-next').hidden,true);
+ await a.change('clicker-repeat',true);await a.selectTeam('green');assert.equal(a.node('clicker-next').hidden,false);assert.equal(a.node('clicker-server').value,'1');
+ await a.click('clicker-next');assert.deepEqual(a.posts().map(row=>[row.route,row.body]),[['/api/persistent-team/start',{server:1,expectedJoinId:joinId,team:'green',intervalMs:20,startNow:false}]]);
+ assert.equal(a.node('clicker-state').textContent,'Preparado entre partidas');assert.match(a.node('clicker-detail').textContent,/#1.*verde.*Sin capturas/);assert.equal(a.node('clicker-repeat').checked,true);assert.equal(a.node('clicker-stop').disabled,false);
+ a.update({...a.current,persistentTeam:{...a.current.persistentTeam,status:'watching',reason:'Equipo seleccionado; sigue preparado.'},teamClicker:{...a.current.teamClicker,entryConfirmation:{status:'confirmed',actualTeam:'green'}}});
+ assert.equal(a.node('clicker-state').textContent,'Preparado entre partidas');assert.match(a.node('clicker-detail').textContent,/sigue preparado/);assert.equal(a.node('clicker-repeat').checked,true);
+ await a.tickPoll();assert.equal(a.posts().length,1,'La preferencia no depende de heartbeat HTML.');
+ await a.click('clicker-stop');assert.equal(a.node('clicker-state').textContent,'Desactivado');assert.equal(a.node('clicker-save').disabled,false);assert.equal(a.node('clicker-repeat').checked,true);assert.equal(a.posts().length,2);
+});
+
+test('equipo persistente: elegir ahora mantiene un dueño de intento y bloquea otros automatismos',async()=>{
+ const a=await app({initial:repeatSample(),onPost:(route,body,current)=>{
+  assert.equal(route,'/api/persistent-team/start');return {...current,persistentTeam:{...body,id:repeatId,enabled:true,status:'waiting_selector',reason:'Esperando el selector.',cleanupPending:false},teamClicker:{...current.teamClicker,enabled:true,ownerId:focusJobId,sessionId:focusJobId}};
+ }});
+ await a.change('clicker-repeat',true);await a.selectTeam('green');await a.click('clicker-save');assert.equal(a.posts()[0].body.startNow,true);assert.equal(a.node('clicker-state').textContent,'Esperando selector');
+ for(const id of ['play','adjust','auto-start','activity-start','schedule','break-start','clicker-save','clicker-next','clicker-repeat','clicker-server','server-2'])assert.equal(a.node(id).disabled,true,id);
+ await a.tickPoll();assert.equal(a.posts().length,1,'No se envía heartbeat de otro propietario.');assert.equal(a.node('clicker-stop').disabled,false);
+});
+
+test('equipo persistente: un servicio antiguo o un servidor no fiable no permiten prepararlo',async()=>{
+ const old=await app({initial:sample()});assert.equal(old.node('clicker-repeat').disabled,true);assert.equal(old.node('clicker-next').hidden,true);assert.equal(old.node('clicker-save').disabled,false);
+ const initial=repeatSample();initial.servers=initial.servers.map(row=>({...row,trusted:false}));const missing=await app({initial});await missing.change('clicker-repeat',true);assert.equal(missing.node('clicker-save').disabled,true);assert.equal(missing.node('clicker-next').disabled,true);assert.match(missing.node('clicker-repeat-help').textContent,/datos recientes/);
+});
+
+test('consumo UI: minimizada consulta cada 10 s; al volver o conectar cuenta refresca inmediatamente',async()=>{
+ const a=await app({initial:repeatSample(),host:true});assert.equal(a.pollDelay(),2000);const first=a.requests.length;
+ a.hostEvent({kind:'host_window_visibility',visible:false});await new Promise(setImmediate);assert.equal(a.pollDelay(),10000);assert.equal(a.requests.length,first);
+ a.hostEvent({kind:'host_account_status',state:'connected',reading:true,detail:'Cuenta actualizada.'});await new Promise(setImmediate);assert.equal(a.requests.length,first+1);assert.equal(a.pollDelay(),10000);
+ a.hostEvent({kind:'host_window_visibility',visible:true});await new Promise(setImmediate);assert.equal(a.requests.length,first+2);assert.equal(a.pollDelay(),2000);
+ await a.hidden(true);assert.equal(a.pollDelay(),10000);await a.hidden(false);assert.equal(a.pollDelay(),2000);
+});
+
+test('consumo UI: el selector legacy conserva renovación de 2 s incluso oculto y el dueño persistente no la necesita',async()=>{
+ const legacy=sample();legacy.teamClicker={...legacy.teamClicker,enabled:true,sessionId:focusJobId};const a=await app({initial:legacy});await a.hidden(true);assert.equal(a.pollDelay(),2000);const initialPosts=a.posts().length;await a.tickPoll();assert.equal(a.posts().length,initialPosts+1);assert.equal(a.posts().at(-1).route,'/api/team-clicker/heartbeat');
+ const owned=repeatSample();owned.persistentTeam={id:repeatId,enabled:true,status:'selecting',server:1,team:'green',intervalMs:20,reason:'Entrando.',cleanupPending:false};owned.teamClicker={...owned.teamClicker,enabled:true,ownerId:repeatId,sessionId:focusJobId};const b=await app({initial:owned});await b.hidden(true);assert.equal(b.pollDelay(),10000);await b.tickPoll();assert.equal(b.posts().length,0);
+});
 
 test('cuenta Steam: una importación confirmada por el host renueva los datos API sin volver a abrir el login',async()=>{
  const initial=sample(),a=await app({initial,host:true});const before=a.requests.filter(row=>row.method==='GET').length;
@@ -317,7 +362,7 @@ test('interfaz entrada: elige servidor y equipo sin portapapeles, muestra progre
   if(route==='/api/entry/start')return {...s,entry:{id,server:body.server,team:body.team,durationMinutes:body.durationMinutes,status:'waiting_game',reason:'Esperando Wardogs.',endAt:'2026-10-31T12:00:00Z'}};
   assert.equal(route,'/api/entry/stop');assert.equal(body.expectedSessionId,id);return {...s,entry:{...s.entry,status:'cancelled',reason:'Entrada detenida.'}};
  }});
- assert.equal(a.node('play').textContent,'Entrar automáticamente');assert.equal(a.node('entry-team').value,'red');a.node('entry-team').value='green';await a.change('entry-team',true);await a.click('play');
+ assert.equal(a.node('play').textContent,'DESPLEGAR EN SERVIDOR');assert.equal(a.node('entry-team').value,'red');a.node('entry-team').value='green';await a.change('entry-team',true);await a.click('play');
  assert.equal(a.copies,0);assert.deepEqual(a.posts().map(p=>[p.route,p.body]),[['/api/entry/start',{server:1,expectedJoinId:joinId,team:'green',seeding:false,durationMinutes:120}]]);
  assert.equal(a.node('entry-progress').hidden,false);assert.equal(a.node('entry-progress-state').textContent,'Esperando Wardogs');assert.equal(a.node('entry-stage-game').dataset.state,'current');
  assert.equal(a.node('entry-guidance').hidden,false);

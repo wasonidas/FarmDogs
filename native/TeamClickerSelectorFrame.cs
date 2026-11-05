@@ -19,7 +19,10 @@ namespace WardogsSeeding {
    public int Left,Top,Width,Height,Distance;public int[] Data;
    public int Get(int x,int y){return Data[(y-Top)*Width+x-Left];}
    public bool Contains(int x,int y){return x>=Left&&y>=Top&&x<Left+Width&&y<Top+Height;}
-   static int Light(int rgb){return Math.Max((rgb>>16)&255,Math.Max((rgb>>8)&255,rgb&255));}
+   // Auto-balance tints disabled cards. The strongest RGB channel can hide
+   // their edge against the gray panel; compare perceptual brightness while
+   // retaining the same contrast threshold and full three-card structure.
+   static int Light(int rgb){return (((rgb>>16)&255)*3+((rgb>>8)&255)*6+(rgb&255))/10;}
    public bool Edge(int x,int y,bool horizontal){
     int dx=horizontal?0:Distance,dy=horizontal?Distance:0;
     if(!Contains(x-dx,y-dy)||!Contains(x+dx,y+dy))return false;
@@ -29,7 +32,7 @@ namespace WardogsSeeding {
     int before=Light(Get(x-dx,y-dy)),after=Light(Get(x+dx,y+dy));
     // Enabled cards have a bright thin outline. Disabled cards can instead
     // be a black fill with a dark edge against the lighter modal background.
-    return high>=50&&low>=28&&high-Math.Max(before,after)>=10||Math.Abs(before-after)>=18;
+    return high>=50&&low>=28&&Light(rgb)-Math.Max(before,after)>=10||Math.Abs(before-after)>=18;
    }
   }
   static Pixels Read(Bitmap image){

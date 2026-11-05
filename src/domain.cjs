@@ -32,6 +32,17 @@ function profileValidity(profile,now){
 function defaultProfiles(){
  return [1,2,3,4,5].map(server=>validateProfile({server,entryBelow:20,mode:server===2?'population':'unknown',target:server===2?50:null,holdMinutes:null,source:server===2?'Mi cuenta: sesión #2 observada el 29/10/2026; volver a contrastar al entrar.':'API pública: umbral 20; modalidad final sin verificar.',verifiedAt:server===2?'2026-10-29T06:50:53Z':null}));
 }
+function normalizeFactions(value){
+ if(!Array.isArray(value)||value.length!==3)return null;
+ const names=new Set(),colors=new Set(),result=[];
+ for(const item of value){
+  if(!item||typeof item.name!=='string'||!item.name.trim()||item.name.length>80||typeof item.color!=='string'||!/^#[0-9a-f]{6}$/i.test(item.color)||!Number.isSafeInteger(item.score)||item.score<0||item.score>1000000)return null;
+  const name=item.name.trim(),color=item.color.toUpperCase();
+  if(names.has(name.toLowerCase())||colors.has(color))return null;
+  names.add(name.toLowerCase());colors.add(color);result.push({name,color,score:item.score});
+ }
+ return result;
+}
 function normalizeServers(payload,now=Date.now()){
  if(!payload||!Array.isArray(payload.servers)||!Number.isFinite(payload.fetchedAt))throw Error('Respuesta de servidores incompleta.');
  const age=now-payload.fetchedAt;
@@ -42,7 +53,8 @@ function normalizeServers(payload,now=Date.now()){
   const trusted=payload.configured===true&&row.configured===true&&row.online===true&&row.stale!==true&&validPopulation&&age>=-60000&&age<=90000;
   let reason=null;
   if(!validPopulation)reason='Población inválida';else if(row.stale===true)reason='Datos marcados como desactualizados';else if(age>90000||age< -60000)reason='Fecha de la fuente no fiable';else if(row.online!==true)reason='Servidor sin confirmar en línea';else if(!trusted)reason='Fuente sin configurar';
-  return {number:row.num,apiId:row.id,name:String(row.name||`Servidor #${row.num}`),joinId:typeof row.joinId==='string'?row.joinId:null,map:typeof row.map==='string'?row.map:null,players:validPopulation?row.players:null,capacity:validPopulation?row.maxPlayers:null,online:row.online===true,stale:row.stale===true,trusted,reason,sourceAt:new Date(payload.fetchedAt).toISOString(),observedAt:new Date(now).toISOString(),publicRule:row.sedeo||null,seedingActive:row.sedeoActivo===true};
+  const factions=normalizeFactions(row.factions);
+  return {number:row.num,apiId:row.id,name:String(row.name||`Servidor #${row.num}`),joinId:typeof row.joinId==='string'?row.joinId:null,map:typeof row.map==='string'?row.map:null,experience:typeof row.experience==='string'?row.experience:null,factions:factions||[],scoresTrusted:trusted&&factions!==null,players:validPopulation?row.players:null,capacity:validPopulation?row.maxPlayers:null,online:row.online===true,stale:row.stale===true,trusted,reason,sourceAt:new Date(payload.fetchedAt).toISOString(),observedAt:new Date(now).toISOString(),publicRule:row.sedeo||null,seedingActive:row.sedeoActivo===true};
  }).sort((a,b)=>a.number-b.number);
 }
 function serverView(server,profile,now=Date.now(),sourceError=null){
@@ -57,7 +69,7 @@ function serverView(server,profile,now=Date.now(),sourceError=null){
   else if(entryCandidate){status='entry_candidate';message='Candidato para entrar por debajo del umbral';}
   else{status='above_entry_threshold';message='Ya no está por debajo del umbral de entrada';}
  }else if(!message)message='Lectura antigua o no confirmada';
- return {...server,trusted,viewedAt:new Date(now).toISOString(),ruleValidity,sourceAgeSeconds:Number.isFinite(age)?Math.max(0,Math.round(age/1000)):null,entryCandidate,status,message,profile};
+ return {...server,trusted,scoresTrusted:trusted&&server.scoresTrusted===true,viewedAt:new Date(now).toISOString(),ruleValidity,sourceAgeSeconds:Number.isFinite(age)?Math.max(0,Math.round(age/1000)):null,entryCandidate,status,message,profile};
 }
 function recommend(views){return views.filter(s=>s.entryCandidate).sort((a,b)=>b.players-a.players||a.number-b.number)[0]?.number??null;}
 function advanceObservation(watch,server,elapsedMs){

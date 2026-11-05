@@ -22,7 +22,7 @@ test('actividad: exige dos muestras distintas y congela el destino antes de prep
  const f=fixture();f.mode.start(input);await f.mode.tick();assert.equal(f.prepares.length,0);assert.equal(f.mode.view().samples[0].consecutiveSamples,1);
  f.advance(30000);f.sample();await Promise.all([f.mode.tick(),f.mode.tick(),f.mode.tick()]);
  assert.equal(f.prepares.length,1);assert.equal(f.prepares[0].diskAtCall.status,'launching');assert.equal(f.mode.view().status,'prepared');assert.equal(f.mode.view().selectedServer,2);
- assert.equal(f.prepares[0].session.sessionEndAt,'2026-10-30T11:00:00.000Z');assert.equal(f.prepares[0].session.remainingMinutes,60);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:20,intervalSeconds:60,holdMs:500});
+ assert.equal(f.prepares[0].session.sessionEndAt,'2026-10-30T11:00:00.000Z');assert.equal(f.prepares[0].session.remainingMinutes,60);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:20,intervalSeconds:60,holdMs:500,mousePause:{enabled:true,resumeAfterSeconds:3}});
  f.rows([row(1,18,initial+30000)]);await f.mode.tick();assert.equal(f.prepares.length,1);
 });
 
@@ -34,7 +34,7 @@ test('actividad: entrega el equipo aleatorio o fijo elegido a la entrada sin ree
 test('actividad: valida, persiste y propaga el foco inicial junto al presupuesto sin modificar ajustes ni destino',async()=>{
  for(const focus of [undefined,'driver','desktop']){
   const f=fixture();const started=f.mode.start({...input,...(focus===undefined?{}:{initialFocus:focus})});assert.equal(started.initialFocus,focus||'driver');assert.equal(f.disk.initialFocus,focus||'driver');
-  await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].session.initialFocus,focus||'driver');assert.equal(f.prepares[0].session.sessionEndAt,started.endAt);assert.equal(f.prepares[0].target.server,2);assert.equal(f.prepares[0].target.joinId,id);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:20,intervalSeconds:60,holdMs:500});assert.equal(f.build().view().initialFocus,focus||'driver');
+  await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].session.initialFocus,focus||'driver');assert.equal(f.prepares[0].session.sessionEndAt,started.endAt);assert.equal(f.prepares[0].target.server,2);assert.equal(f.prepares[0].target.joinId,id);assert.deepEqual(f.prepares[0].session.settings,{startPlayers:20,intervalSeconds:60,holdMs:500,mousePause:{enabled:true,resumeAfterSeconds:3}});assert.equal(f.build().view().initialFocus,focus||'driver');
  }
  for(const invalid of [null,'','Desktop','other',true,0,{}]){const f=fixture();assert.throws(()=>f.mode.start({...input,initialFocus:invalid}),/foco inicial/);assert.equal(f.mode.view(),null);assert.equal(f.disk,null);assert.equal(f.prepares.length,0);}
 });
@@ -136,8 +136,8 @@ test('sedeo máximo: acepta un servidor vacío sólo tras dos lecturas frescas y
 test('sedeo máximo: ignora el mínimo de entrada anterior de 16 pero conserva el umbral de partida y los ajustes',async()=>{
  for(const startPlayers of [20,30]){
   const f=fixture();f.rows([row(4,1)]);const started=f.mode.start({durationMinutes:720,strategy:'maximum',minPlayers:16,maxEntryPlayers:19,seeding:{startPlayers,intervalSeconds:45,holdMs:750}});
-  assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.endAt,'2026-10-30T22:00:00.000Z');assert.deepEqual(started.seeding,{startPlayers,intervalSeconds:45,holdMs:750});
-  await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].target.server,4);assert.deepEqual(f.prepares[0].session.settings,{startPlayers,intervalSeconds:45,holdMs:750});
+  assert.equal(started.minPlayers,0);assert.equal(started.maxEntryPlayers,99);assert.equal(started.endAt,'2026-10-30T22:00:00.000Z');assert.deepEqual(started.seeding,{startPlayers,intervalSeconds:45,holdMs:750,mousePause:{enabled:true,resumeAfterSeconds:3}});
+  await f.mode.tick();f.advance(30000);f.sample();await f.mode.tick();assert.equal(f.prepares[0].target.server,4);assert.deepEqual(f.prepares[0].session.settings,{startPlayers,intervalSeconds:45,holdMs:750,mousePause:{enabled:true,resumeAfterSeconds:3}});
  }
 });
 

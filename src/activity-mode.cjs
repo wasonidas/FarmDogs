@@ -30,11 +30,11 @@ function createActivityMode({load,save,now,monoNow,getServers,prepare,event=()=>
   if(!Array.isArray(serverNumbers)||!serverNumbers.length||serverNumbers.length>5||new Set(serverNumbers).size!==serverNumbers.length||serverNumbers.some(number=>!Number.isInteger(number)||number<1||number>5))throw Error('Elige servidores distintos del 1 al 5.');
   if(input.seeding!==undefined&&(!input.seeding||typeof input.seeding!=='object'||Array.isArray(input.seeding)))throw Error('Ajustes de movimiento no válidos.');
   if(input.team!==undefined&&!['any','blue','red','green'].includes(input.team))throw Error('Elige equipo aleatorio, azul, rojo o verde.');
-  const at=now(),mono=monoNow(),raw=createAutoSeeding({...input.seeding,server:1,durationMinutes},at);
+  const at=now(),mono=monoNow(),raw=createAutoSeeding({...input.seeding,mousePause:input.mousePause??input.seeding?.mousePause,server:1,durationMinutes},at);
   if(maximum&&raw.startPlayers<20)throw Error('En Sedeo máximo el movimiento espera al menos 20 jugadores para el inicio de partida.');
   const endAt=limitEndAt(raw.endAt),end=Date.parse(endAt);
   if(!Number.isFinite(at)||!Number.isFinite(mono)||!Number.isFinite(end)||end<=at||end>Date.parse(raw.endAt))throw Error('El límite de la vigilancia no es válido o ya ha pasado.');
-  const seeding=Object.fromEntries(['startPlayers','intervalSeconds','holdMs'].map(key=>[key,raw[key]]));
+  const seeding=Object.fromEntries(['startPlayers','intervalSeconds','holdMs','mousePause'].map(key=>[key,raw[key]]));
   const candidate={id:randomUUID(),strategy,status:'watching',reason:maximum?'Sedeo máximo: buscando un servidor que admita sedeo, también vacío; se necesitan dos lecturas recientes.':'Vigilando actividad pública; se necesitan dos lecturas recientes del mismo servidor.',createdAt:new Date(at).toISOString(),endAt:new Date(end).toISOString(),durationMinutes,minPlayers,maxEntryPlayers,serverNumbers:[...serverNumbers].sort((a,b)=>a-b),seeding,...(input.team?{team:input.team}:{}),initialFocus,automaticEntry:automaticEntry()===true,selectedServer:null,selectedJoinId:null,samples:[],finishedAt:null};
   update(candidate);startedMono=mono;budgetMs=end-at;observations.clear();emit('activity_started',{id:job.id});return view();
  }

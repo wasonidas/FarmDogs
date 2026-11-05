@@ -37,7 +37,7 @@ namespace WardogsSeeding {
     var saved=new Dictionary<string,TeamClickerTarget>();
     try{if(File.Exists(targetPath)){var payload=json.Deserialize<TargetFile>(Read(targetPath));if(payload!=null&&payload.format=="wardogs-team-clicker-targets-v1"&&payload.targets!=null)saved=payload.targets;}}catch{}
     var platform=new TeamClickerNative();var engine=new TeamClickerEngine(platform,saved);var clock=Stopwatch.StartNew();
-    var stopKeys=new TeamClickerKeyEdges(false,false,TeamClickerNative.KeyDown(0x77));
+    var stopGate=new TeamClickerStopGate();
     var hotkeys=new TeamClickerHotkeyGate(new TeamClickerHotkeyMessages());
     var waiter=new TeamClickerWaiter();
     double nextRead=0,nextWrite=0,lastLoop=0;string lastId=null,lastReason=null,sessionId=null,lastHotkey=null,lastHotkeyAt=null;int servicePid=0,hotkeyMessages=0;bool exit=false;
@@ -48,12 +48,12 @@ namespace WardogsSeeding {
       if(mono-lastLoop>1000)hotkeys.Update(null,false,false,false);
       lastLoop=mono;
       if(mono>=nextRead) {
-       nextRead=mono+50;
        try {
         var command=json.Deserialize<TeamClickerCommand>(Read(commandPath));
         if(command==null)throw new InvalidOperationException("Falta la orden del autoclic.");
         if(command.id!=lastId){engine.Apply(command,now,mono);lastId=command.id;servicePid=command.servicePid;sessionId=command.sessionId;}
        }catch(Exception error){engine.Fail(error.Message);}
+       nextRead=mono+TeamClickerLoopPolicy.ReadMilliseconds(engine.Armed);
        if(servicePid>0&&!platform.ServiceAlive(servicePid)){engine.Fail("La app se ha cerrado.");exit=true;}
        if(servicePid==0&&mono>10000)exit=true;
       }
@@ -61,7 +61,7 @@ namespace WardogsSeeding {
       hotkeys.Update(sessionId,!exit&&engine.RequiresHotkeys&&engine.Armed&&!stopHeld&&platform.ForegroundGame()!=null,engine.RequiresHotkeys&&TeamClickerNative.KeyDown(0x75),engine.RequiresHotkeys&&TeamClickerNative.KeyDown(0x78),engine.CaptureRequested);
       if(hotkeys.Error!=null)engine.Fail(hotkeys.Error);
       // F8 remains observed, not registered or swallowed, so movement also sees it.
-      if(stopKeys.Read(false,false,stopHeld)==8||(stopHeld&&engine.Armed)){engine.EmergencyStop();hotkeys.Update(sessionId,false,false,false);}
+      if(stopGate.ShouldStop(stopHeld,sessionId)){engine.EmergencyStop();hotkeys.Update(sessionId,false,false,false);}
       int messageId;uint virtualKey;
       for(int pending=0;pending<32&&TeamClickerHotkeyMessages.TryRead(out messageId,out virtualKey);pending++) {
        // Revalidate immediately before dispatch: stale focus/session messages are inert.
@@ -75,11 +75,11 @@ namespace WardogsSeeding {
       }
       if(engine.TargetsChanged){try{Write(targetPath,new TargetFile{format="wardogs-team-clicker-targets-v1",targets=engine.Targets});engine.TargetsSaved();}catch(Exception error){engine.Fail("No se pudo guardar el equipo reconocido: "+error.Message);}}
       engine.Tick(now,clock.Elapsed.TotalMilliseconds);
-      if(mono>=nextWrite||lastReason!=engine.Reason){Write(statePath,State(engine,hotkeys,waiter,DateTime.UtcNow,hotkeyMessages,lastHotkey,lastHotkeyAt));nextWrite=mono+250;lastReason=engine.Reason;}
-      if(!exit)waiter.Delay(2);
+      if(mono>=nextWrite||lastReason!=engine.Reason){Write(statePath,State(engine,hotkeys,waiter,DateTime.UtcNow,hotkeyMessages,lastHotkey,lastHotkeyAt));nextWrite=mono+TeamClickerLoopPolicy.WriteMilliseconds(engine.Armed);lastReason=engine.Reason;}
+      if(!exit)waiter.Delay(TeamClickerLoopPolicy.WaitMilliseconds(engine.Armed));
      }
     }catch(Exception error){engine.Fail(error.Message);}
-    finally {try{hotkeys.Dispose();}finally{waiter.Dispose();}engine.Fail("Controlador de autoclic cerrado.");try{Write(statePath,State(engine,hotkeys,waiter,DateTime.UtcNow,hotkeyMessages,lastHotkey,lastHotkeyAt));}catch{}}
+    finally {try{hotkeys.Dispose();}finally{waiter.Dispose();platform.Dispose();}engine.Fail("Controlador de autoclic cerrado.");try{Write(statePath,State(engine,hotkeys,waiter,DateTime.UtcNow,hotkeyMessages,lastHotkey,lastHotkeyAt));}catch{}}
     return 0;
    }
   }

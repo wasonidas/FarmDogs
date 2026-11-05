@@ -30,12 +30,12 @@ function createLocalLauncher({root,platform=process.platform,run=promisify(execF
   let hash;try{hash=crypto.createHash('sha256').update(readFile(binary)).digest('hex');}catch{return unavailable('binary_unreadable',`No se puede leer el ${label} para comprobarlo. Revisa los archivos del portable.`);}
   if(cap.sha256!==hash)return unavailable('hash_mismatch',`El ${label} no coincide con su archivo de verificación. Vuelve a extraer el portable completo.`);
   if(!exists(path.join(root,'bin','WardogsImageText.exe')))return unavailable('reader_missing','Falta el lector de pantalla de Wardogs. Vuelve a extraer el portable completo.');
-  return {available:true,diagnostic:{code:'ready',reason:`El ${label} está verificado.`}};
+  return {available:true,mousePause:cap.mousePause===true,diagnostic:{code:'ready',reason:`El ${label} está verificado.`}};
  }
  function availability(){
   if(platform!=='win32'){const unavailable={code:'unsupported_platform',reason:'Esta función necesita Windows.'};return {game:false,movement:false,automaticMovement:false,automaticEntry:false,diagnostics:{game:{...unavailable},movement:{...unavailable},automaticMovement:{...unavailable},automaticEntry:{...unavailable}}};}
   const movement=exists(controller),automaticMovement=automaticDiagnostic(controller,'movement-capabilities.json',['automaticMovement'],'controlador de movimiento'),automaticEntry=automaticDiagnostic(path.join(root,'bin','WardogsEntry.exe'),'entry-capabilities.json',['automaticEntry','stopWatcher'],'controlador de entrada automática');
-  return {game:true,movement,automaticMovement:automaticMovement.available,automaticEntry:automaticEntry.available,diagnostics:{game:{code:'ready',reason:'Windows permite solicitar la apertura de Steam.'},movement:movement?{code:'ready',reason:'El archivo del controlador de movimiento está presente.'}:{code:'binary_missing',reason:'Falta el controlador de movimiento. Vuelve a extraer el portable completo.'},automaticMovement:automaticMovement.diagnostic,automaticEntry:automaticEntry.diagnostic}};
+  return {game:true,movement,automaticMovement:automaticMovement.available,automaticEntry:automaticEntry.available,mousePauseMovement:automaticMovement.mousePause===true,mousePauseEntry:automaticEntry.mousePause===true,diagnostics:{game:{code:'ready',reason:'Windows permite solicitar la apertura de Steam.'},movement:movement?{code:'ready',reason:'El archivo del controlador de movimiento está presente.'}:{code:'binary_missing',reason:'Falta el controlador de movimiento. Vuelve a extraer el portable completo.'},automaticMovement:automaticMovement.diagnostic,automaticEntry:automaticEntry.diagnostic}};
  }
  async function openGame(){
   if(platform!=='win32')throw Error('La apertura del juego requiere Windows.');
