@@ -8,6 +8,8 @@ FarmDogs Launcher reúne los cinco servidores de Wardogs Spain, entrada automát
 
 [Descargar el ZIP para Windows](https://github.com/wasonidas/FarmDogs/releases/latest/download/FarmDogs-portable.zip) · [Ver las versiones](https://github.com/wasonidas/FarmDogs/releases) · [Licencia MIT](LICENSE)
 
+**0.6.1 — corrección de clics:** evita que un pequeño arrastre al pulsar las tarjetas de equipo o las casillas se confunda con seleccionar texto o mover un emblema. Puedes cambiar de color pulsando el nombre, el logo o la tarjeta. Se conservan el teclado y los campos que necesitas copiar. Esta corrección de interfaz no cambia los automatismos del juego.
+
 **FarmDogs Launcher 0.6.0** añade una interfaz compacta, perfiles, historial, diagnóstico y pausa por uso del ratón, además de repetir el equipo entre partidas. Conserva **Sedeo máximo** de 0.5.6: puede entrar en servidores vacíos para acumular tiempo de sedeo, con 12 horas iniciales ajustables, y espera el umbral de movimiento —20 jugadores por defecto— y un HUD reciente. El ciclo nocturno por actividad con premio nuevo sigue pendiente de prueba real; no garantiza premios.
 
 En **JUGAR**, marca **Activar anti-AFK al desplegar** si quieres que el movimiento quede preparado al entrar. Usa los ajustes de Anti-AFK y su duración empieza al desplegar, sin consumir la espera en cola. La casilla es opcional, no necesita conectar Steam a FarmDogs ni esperar población y solo actúa tras verificar la entrada y el personaje con manos vacías.
